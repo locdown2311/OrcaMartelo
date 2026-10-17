@@ -54,6 +54,10 @@ concurrency:
   # saves caches every pull request can restore.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   # build_win.bat ships a test suite. Run it before the Windows builds.
   check_build_script:
