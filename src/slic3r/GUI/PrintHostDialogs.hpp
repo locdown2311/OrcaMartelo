@@ -301,13 +301,14 @@ public:
     void init() override;
     void EndModal(int ret) override;
     std::map<std::string, std::string> extendedInfo() const override;
+    const Slic3r::AnycubicLink* host() const { return m_host; }
 
 private:
     void auto_assign_mappings();
     bool validate_before_close();
     bool slot_matches_tool(const Slic3r::AnycubicMaterialSlot& slot, const Slic3r::AnycubicToolFilament& tool) const;
 
-    const Slic3r::AnycubicLink* m_host {nullptr};
+    [[maybe_unused]] const Slic3r::AnycubicLink* m_host {nullptr};
     std::vector<Slic3r::AnycubicMaterialSlot> m_slots;
     std::vector<Slic3r::AnycubicToolFilament> m_project_filaments;
     std::vector<BitmapComboBox*> m_slot_combos;
@@ -330,7 +331,9 @@ private:
     CheckBox* m_cb_timelapse {nullptr};
     CheckBox* m_cb_pre_engage {nullptr};
     CheckBox* m_cb_skip_toolchange {nullptr};
+#ifdef ORCACUBIC_DEV_BUILD
     CheckBox* m_cb_save_dev_copy {nullptr};
+#endif
 
     const char* CONFIG_KEY_LEVELING  = "anycubic_auto_leveling";
     const char* CONFIG_KEY_RESONANCE = "anycubic_resonance_compensation";
@@ -339,7 +342,9 @@ private:
     const char* CONFIG_KEY_PRE_ENGAGE = "anycubic_pre_engage_filament";
     const char* CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE = "anycubic_skip_first_toolchange";
     const char* CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE_SCRIPT = "anycubic_skip_first_toolchange_script";
+#ifdef ORCACUBIC_DEV_BUILD
     const char* CONFIG_KEY_SAVE_DEV_COPY = "anycubic_save_dev_copy";
+#endif
 };
 
 wxDECLARE_EVENT(EVT_PRINTHOST_PROGRESS, PrintHostQueueDialog::Event);

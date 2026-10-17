@@ -12,6 +12,7 @@
 #include <boost/algorithm/string.hpp>
 #include <nlohmann/json.hpp>
 
+#include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "I18N.hpp"
 #include "BitmapComboBox.hpp"
@@ -149,7 +150,7 @@ void AnycubicPrintHostSendDialog::init()
         checkbox->SetValue(value_ptr ? *value_ptr : false);
         checkbox->SetToolTip(tooltip);
 
-        auto apply_toggle = [this, checkbox, config_key, value_ptr, on_change](bool checked) {
+        auto apply_toggle = [checkbox, config_key, value_ptr, on_change](bool checked) {
             checkbox->SetValue(checked);
             if (value_ptr)
                 *value_ptr = checked;
