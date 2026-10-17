@@ -6380,13 +6380,15 @@ void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
                             if (slot_type.empty() || slot_type == "?")
                                 continue;
                             std::string slot_type_upper = boost::to_upper_copy(slot_type);
+                            std::string norm_slot = Slic3r::normalize_anycubic_material(slot_type);
 
                             const Preset* best_match = nullptr;
                             for (const auto& preset : wxGetApp().preset_bundle->filaments) {
                                 if (!preset.is_compatible || !preset.is_visible)
                                     continue;
                                 std::string p_type = preset.config.opt_string("filament_type");
-                                if (boost::to_upper_copy(p_type) == slot_type_upper) {
+                                if (boost::to_upper_copy(p_type) == slot_type_upper ||
+                                    (!norm_slot.empty() && Slic3r::normalize_anycubic_material(p_type) == norm_slot)) {
                                     if (boost::icontains(preset.name, "Anycubic")) {
                                         best_match = &preset;
                                         break;
