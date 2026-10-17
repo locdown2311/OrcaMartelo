@@ -860,10 +860,10 @@ REM worked out the same way in either run.
         REM The file name carries the version, which only CMake knows, so name
         REM the newest match, or the pattern when there is none yet.
         set "installer="
-        for /f "delims=" %%f in ('dir /b /o-d "!build_full!\OrcaSlicer_Windows_Installer_*.exe" 2^>nul') do (
+        for /f "delims=" %%f in ('dir /b /o-d "!build_full!\*Windows_Installer_*.exe" 2^>nul') do (
             if not defined installer set "installer=!build_full!\%%f"
         )
-        if not defined installer set "installer=!build_full!\OrcaSlicer_Windows_Installer_*.exe"
+        if not defined installer set "installer=!build_full!\*Windows_Installer_*.exe"
         echo   Installer     !installer!
     )
 
