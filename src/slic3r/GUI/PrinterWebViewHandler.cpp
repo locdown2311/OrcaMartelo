@@ -395,8 +395,19 @@ public:
 
         // 1. Filament & spool synchronization
         if (method == "sync_filaments_to_slicer") {
-            wxGetApp().CallAfter([]() {
-                wxGetApp().sidebar().sync_ams_list(true);
+            std::string filaments_json_str;
+            if (root.contains("data") && (root["data"].is_array() || root["data"].is_object())) {
+                filaments_json_str = root["data"].dump();
+            } else if (root.contains("params") && (root["params"].is_array() || root["params"].is_object())) {
+                filaments_json_str = root["params"].dump();
+            }
+
+            wxGetApp().CallAfter([filaments_json_str]() {
+                if (!filaments_json_str.empty()) {
+                    wxGetApp().sidebar().sync_anycubic_filaments_from_json(filaments_json_str);
+                } else {
+                    wxGetApp().sidebar().sync_ams_list(true);
+                }
             });
             send_ipc_message("response", request_id, method, 0, "success");
             return;

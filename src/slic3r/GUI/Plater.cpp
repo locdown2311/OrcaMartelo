@@ -6313,6 +6313,157 @@ void Sidebar::load_ams_list(MachineObject* obj)
     p->combo_printer->update();
 }
 
+static std::string clean_anycubic_hex_color(std::string col)
+{
+    if (col.empty()) return "#00d2ff";
+    if (col[0] == '#') {
+        if (col.size() >= 7) return col.substr(0, 7);
+        return "#00d2ff";
+    }
+    if (col.size() >= 6) {
+        return "#" + col.substr(0, 6);
+    }
+    return "#00d2ff";
+}
+
+void Sidebar::sync_anycubic_filaments_from_json(const std::string& filaments_json_str)
+{
+    if (filaments_json_str.empty())
+        return;
+
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(filaments_json_str);
+    } catch (...) {
+        return;
+    }
+
+    nlohmann::json filaments_array;
+    if (j.is_array()) {
+        filaments_array = j;
+    } else if (j.is_object()) {
+        if (j.contains("filaments") && j["filaments"].is_array())
+            filaments_array = j["filaments"];
+        else if (j.contains("data") && j["data"].is_array())
+            filaments_array = j["data"];
+        else if (j.contains("slots") && j["slots"].is_array())
+            filaments_array = j["slots"];
+    }
+
+    if (!filaments_array.is_array() || filaments_array.empty())
+        return;
+
+    auto* bundle = wxGetApp().preset_bundle;
+    if (!bundle)
+        return;
+
+    unsigned int num_filaments = static_cast<unsigned int>(filaments_array.size());
+    if (num_filaments == 0)
+        return;
+    if (num_filaments > MAXIMUM_EXTRUDER_NUMBER)
+        num_filaments = MAXIMUM_EXTRUDER_NUMBER;
+
+    wxBusyCursor cursor;
+
+    // 1. Resize all parallel filament arrays in project_config and preset_bundle
+    bundle->set_num_filaments(num_filaments, "#00d2ff");
+
+    // 2. Set colors and types in project_config
+    auto& project_config = bundle->project_config;
+    auto* color_opt = project_config.option<ConfigOptionStrings>("filament_colour");
+    auto* multi_color_opt = project_config.option<ConfigOptionStrings>("filament_multi_colour");
+    auto* color_type_opt = project_config.option<ConfigOptionStrings>("filament_colour_type");
+
+    for (size_t i = 0; i < num_filaments; ++i) {
+        std::string raw_col;
+        const auto& item = filaments_array[i];
+        if (item.contains("color")) {
+            if (item["color"].is_string())
+                raw_col = item["color"].get<std::string>();
+            else if (item["color"].is_number_integer()) {
+                unsigned int c = item["color"].get<unsigned int>();
+                raw_col = (boost::format("#%06X") % (c & 0xFFFFFF)).str();
+            }
+        }
+        if (raw_col.empty() && item.contains("color_group_hex") && item["color_group_hex"].is_array() && !item["color_group_hex"].empty()) {
+            if (item["color_group_hex"][0].is_string())
+                raw_col = item["color_group_hex"][0].get<std::string>();
+        }
+        std::string hex_col = clean_anycubic_hex_color(raw_col);
+
+        if (color_opt && i < color_opt->values.size())
+            color_opt->values[i] = hex_col;
+        if (multi_color_opt && i < multi_color_opt->values.size())
+            multi_color_opt->values[i] = hex_col;
+        if (color_type_opt && i < color_type_opt->values.size())
+            color_type_opt->values[i] = "1";
+
+        // Match preset based on filament type (PLA, PETG, ABS, etc.)
+        std::string slot_type;
+        if (item.contains("type") && item["type"].is_string())
+            slot_type = item["type"].get<std::string>();
+        else if (item.contains("material") && item["material"].is_string())
+            slot_type = item["material"].get<std::string>();
+
+        if (!slot_type.empty() && slot_type != "?") {
+            std::string slot_type_upper = boost::to_upper_copy(slot_type);
+            std::string norm_slot = Slic3r::normalize_anycubic_material(slot_type);
+
+            std::string slot_brand;
+            if (item.contains("brand") && item["brand"].is_string())
+                slot_brand = boost::to_upper_copy(item["brand"].get<std::string>());
+
+            const Preset* best_match = nullptr;
+            for (const auto& preset : bundle->filaments) {
+                if (!preset.is_compatible || !preset.is_visible)
+                    continue;
+                std::string p_type = preset.config.opt_string("filament_type");
+                if (boost::to_upper_copy(p_type) == slot_type_upper ||
+                    (!norm_slot.empty() && Slic3r::normalize_anycubic_material(p_type) == norm_slot)) {
+                    if (!slot_brand.empty() && boost::icontains(preset.name, slot_brand)) {
+                        best_match = &preset;
+                        break;
+                    }
+                    if (boost::icontains(preset.name, "Anycubic")) {
+                        best_match = &preset;
+                        if (slot_brand.empty() || slot_brand == "ANYCUBIC")
+                            break;
+                    }
+                    if (!best_match)
+                        best_match = &preset;
+                }
+            }
+            if (best_match && i < bundle->filament_presets.size()) {
+                bundle->filament_presets[i] = best_match->name;
+            }
+        }
+    }
+
+    // 3. Notify plater and sidebar of count change
+    if (wxGetApp().plater()) {
+        wxGetApp().plater()->on_filament_count_change(num_filaments);
+    }
+
+    // 4. Update UI combos
+    for (size_t i = 0; i < p->combos_filament.size(); ++i) {
+        p->combos_filament[i]->update();
+    }
+    update_filaments_area_height();
+
+    // 5. Update tabs and export selections
+    if (wxGetApp().get_tab(Preset::TYPE_PRINT))
+        wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
+    bundle->export_selections(*wxGetApp().app_config);
+
+    for (size_t i = 0; i < num_filaments; ++i) {
+        auto_calc_flushing_volumes(static_cast<int>(i));
+    }
+    Layout();
+    if (wxGetApp().plater())
+        wxGetApp().plater()->Refresh();
+    BOOST_LOG_TRIVIAL(info) << "[Sidebar::sync_anycubic_filaments_from_json] Successfully synchronized " << num_filaments << " Anycubic filaments!";
+}
+
 void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
 {
     static bool in_sync = false;
@@ -6357,69 +6508,16 @@ void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
 
         if (!status_body.empty()) {
             try {
-                auto j = json::parse(status_body);
+                auto j = nlohmann::json::parse(status_body);
                 if (j.contains("filaments") && j["filaments"].is_array()) {
-                    auto& filaments_array = j["filaments"];
-                    unsigned int num_filaments = static_cast<unsigned int>(filaments_array.size());
-                    if (num_filaments > 0) {
-                        // Use PresetBundle::set_num_filaments to resize all arrays atomically
-                        wxGetApp().preset_bundle->set_num_filaments(num_filaments, "#00d2ff");
-
-                        // Apply the exact colors from the physical spools
-                        auto& project_config = wxGetApp().preset_bundle->project_config;
-                        auto* color_opt = project_config.option<ConfigOptionStrings>("filament_colour");
-                        if (color_opt) {
-                            for (size_t i = 0; i < num_filaments && i < color_opt->values.size(); ++i) {
-                                color_opt->values[i] = filaments_array[i].value("color", "#00d2ff");
-                            }
-                        }
-
-                        // Also match presets based on material type (PETG, ABS, PLA, etc.)
-                        for (size_t i = 0; i < num_filaments && i < wxGetApp().preset_bundle->filament_presets.size(); ++i) {
-                            std::string slot_type = filaments_array[i].value("type", "");
-                            if (slot_type.empty() || slot_type == "?")
-                                continue;
-                            std::string slot_type_upper = boost::to_upper_copy(slot_type);
-                            std::string norm_slot = Slic3r::normalize_anycubic_material(slot_type);
-
-                            const Preset* best_match = nullptr;
-                            for (const auto& preset : wxGetApp().preset_bundle->filaments) {
-                                if (!preset.is_compatible || !preset.is_visible)
-                                    continue;
-                                std::string p_type = preset.config.opt_string("filament_type");
-                                if (boost::to_upper_copy(p_type) == slot_type_upper ||
-                                    (!norm_slot.empty() && Slic3r::normalize_anycubic_material(p_type) == norm_slot)) {
-                                    if (boost::icontains(preset.name, "Anycubic")) {
-                                        best_match = &preset;
-                                        break;
-                                    }
-                                    if (!best_match)
-                                        best_match = &preset;
-                                }
-                            }
-                            if (best_match) {
-                                wxGetApp().preset_bundle->filament_presets[i] = best_match->name;
-                            }
-                        }
-
-                        // Notify plater and sidebar of count change
-                        wxGetApp().plater()->on_filament_count_change(num_filaments);
-                        for (size_t i = 0; i < num_filaments && i < p->combos_filament.size(); ++i) {
-                            std::string hex_col = filaments_array[i].value("color", "#00d2ff");
-                            p->combos_filament[i]->sync_colour_config({hex_col}, false);
-                        }
-                        for (auto& c : p->combos_filament)
-                            c->update();
-                        update_filaments_area_height();
-                        wxGetApp().plater()->update();
-                        BOOST_LOG_TRIVIAL(info) << "[Sidebar::sync_ams_list] Successfully synchronized " << num_filaments << " Anycubic filaments!";
-                        return;
-                    }
+                    sync_anycubic_filaments_from_json(j["filaments"].dump());
                 }
             } catch (const std::exception& e) {
                 BOOST_LOG_TRIVIAL(error) << "[Sidebar::sync_ams_list] Error parsing filaments: " << e.what();
             }
         }
+        // Always return for Anycubic to prevent falling through to Bambu AMS code!
+        return;
     }
 
     // Force load ams list
