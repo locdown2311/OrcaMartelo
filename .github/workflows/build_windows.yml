@@ -1,0 +1,39 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-deps-only:
+        description: 'Only build dependencies (bypasses caching)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check_build_script:
+    name: Windows build script tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          lfs: 'false'
+
+      - name: Run the build script test suite
+        shell: powershell
+        run: .\scripts\test_build_win.ps1
+
+  build_windows:
+    name: Build Windows x64
+    needs: check_build_script
+    if: ${{ !cancelled() && needs.check_build_script.result == 'success' }}
+    uses: ./.github/workflows/build_check_cache.yml
+    with:
+      os: windows-latest
+      arch: x64
+      compiler: clang
+      build-deps-only: ${{ inputs.build-deps-only || false }}
+    secrets: inherit
