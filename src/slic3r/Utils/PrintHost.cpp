@@ -46,6 +46,7 @@
 #include "ElegooLink.hpp"
 #include "3DPrinterOS.hpp"
 #include "Moonraker.hpp"
+#include "AnycubicLink.hpp"
 
 namespace fs = boost::filesystem;
 using Slic3r::GUI::PrintHostQueueDialog;
@@ -88,6 +89,7 @@ PrintHost* PrintHost::get_print_host(DynamicPrintConfig *config)
             case htElegooLink: return new ElegooLink(config);
             case ht3DPrinterOS: return new C3DPrinterOS(config);
             case htMoonraker: return new Moonraker(config);
+            case htAnycubic:  return new AnycubicLink(config);
             default:          return nullptr;
         }
     } else {
@@ -107,6 +109,10 @@ std::string PrintHost::get_print_host_webui(DynamicPrintConfig* config)
     switch (host_type) {
     case htElegooLink: {
         webui_url = ElegooLink::get_print_host_webui(config);
+        break;
+    }
+    case htAnycubic: {
+        webui_url = AnycubicLink::get_print_host_webui(config);
         break;
     }
     default: break;

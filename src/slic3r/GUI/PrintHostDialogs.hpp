@@ -17,6 +17,7 @@
 #include "MsgDialog.hpp"
 #include "../Utils/PrintHost.hpp"
 #include "../Utils/Flashforge.hpp"
+#include "../Utils/AnycubicLink.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/ProjectTask.hpp"
 class wxButton;
@@ -28,6 +29,7 @@ class wxFlexGridSizer;
 class wxStaticText;
 class wxWrapSizer;
 class CheckBox;
+class ScalableButton;
 
 namespace Slic3r { namespace GUI { class BitmapComboBox; } }
 
@@ -281,6 +283,63 @@ private:
     const char* CONFIG_KEY_LEVELING  = "flashforge_leveling_before_print";
     const char* CONFIG_KEY_TIMELAPSE = "flashforge_timelapse_video";
     const char* CONFIG_KEY_IFS       = "flashforge_use_material_station";
+};
+
+class AnycubicPrintHostSendDialog : public PrintHostSendDialog
+{
+public:
+    AnycubicPrintHostSendDialog(const boost::filesystem::path& path,
+                                PrintHostPostUploadActions post_actions,
+                                const wxArrayString& groups,
+                                const wxArrayString& storage_paths,
+                                const wxArrayString& storage_names,
+                                bool switch_to_device_tab,
+                                const Slic3r::AnycubicLink* host,
+                                std::vector<Slic3r::AnycubicMaterialSlot> slots,
+                                std::vector<Slic3r::AnycubicToolFilament> project_filaments);
+
+    void init() override;
+    void EndModal(int ret) override;
+    std::map<std::string, std::string> extendedInfo() const override;
+
+private:
+    void auto_assign_mappings();
+    bool validate_before_close();
+    bool slot_matches_tool(const Slic3r::AnycubicMaterialSlot& slot, const Slic3r::AnycubicToolFilament& tool) const;
+
+    const Slic3r::AnycubicLink* m_host {nullptr};
+    std::vector<Slic3r::AnycubicMaterialSlot> m_slots;
+    std::vector<Slic3r::AnycubicToolFilament> m_project_filaments;
+    std::vector<BitmapComboBox*> m_slot_combos;
+    bool m_auto_leveling {true};
+    bool m_resonance_compensation {false};
+    bool m_flow_calibration {false};
+    bool m_timelapse {false};
+    bool m_pre_engage_filament {true};
+    bool m_skip_first_toolchange {true};
+    bool m_show_custom_gcode {false};
+    std::string m_skip_first_toolchange_script {"M83\nG28 X\nG1 E40 F300\nM106 S229\nM400 P2000\nG1 X20 F15000\nG28 X"};
+    bool m_save_dev_copy {false};
+
+    wxTextCtrl* m_txt_custom_gcode {nullptr};
+    wxBoxSizer* m_custom_gcode_box {nullptr};
+    ScalableButton* m_btn_edit_script {nullptr};
+    CheckBox* m_cb_auto_leveling {nullptr};
+    CheckBox* m_cb_resonance {nullptr};
+    CheckBox* m_cb_flow {nullptr};
+    CheckBox* m_cb_timelapse {nullptr};
+    CheckBox* m_cb_pre_engage {nullptr};
+    CheckBox* m_cb_skip_toolchange {nullptr};
+    CheckBox* m_cb_save_dev_copy {nullptr};
+
+    const char* CONFIG_KEY_LEVELING  = "anycubic_auto_leveling";
+    const char* CONFIG_KEY_RESONANCE = "anycubic_resonance_compensation";
+    const char* CONFIG_KEY_FLOW      = "anycubic_flow_calibration";
+    const char* CONFIG_KEY_TIMELAPSE = "anycubic_timelapse";
+    const char* CONFIG_KEY_PRE_ENGAGE = "anycubic_pre_engage_filament";
+    const char* CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE = "anycubic_skip_first_toolchange";
+    const char* CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE_SCRIPT = "anycubic_skip_first_toolchange_script";
+    const char* CONFIG_KEY_SAVE_DEV_COPY = "anycubic_save_dev_copy";
 };
 
 wxDECLARE_EVENT(EVT_PRINTHOST_PROGRESS, PrintHostQueueDialog::Event);

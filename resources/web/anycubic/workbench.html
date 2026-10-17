@@ -1,0 +1,3046 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OrcaCubic Workbench</title>
+    <script src="flv.min.js"></script>
+    <script src="color-groups.js"></script>
+    <style>
+        :root {
+            --bg-base: #0f1117;
+            --bg-surface: #171b24;
+            --bg-card: #1f2430;
+            --bg-card-hover: #262c3b;
+            --border: #2d3345;
+            --border-highlight: #3e475e;
+            --primary: #00d2ff;
+            --primary-glow: rgba(0, 210, 255, 0.2);
+            --accent: #00b4d8;
+            --success: #10b981;
+            --success-glow: rgba(16, 185, 129, 0.2);
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --text-dim: #6b7280;
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 14px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        .btn, .speed-btn, .jog-btn, .chip, .jog-step-chip, .slot-card, .logo-badge {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        body, p, span, div, h1, h2, h3, input, textarea, code, pre {
+            user-select: text;
+            -webkit-user-select: text;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg-base);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 16px;
+            overflow-x: hidden;
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            margin-bottom: 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .logo-badge {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 38px;
+            height: 38px;
+            background: linear-gradient(135deg, #00d2ff 0%, #0077b6 100%);
+            border-radius: var(--radius-md);
+            color: #000;
+            font-weight: 800;
+            font-size: 18px;
+            box-shadow: 0 0 12px var(--primary-glow);
+        }
+
+        .header-title h1 {
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--text-main);
+            letter-spacing: 0.3px;
+        }
+
+        .header-title p {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            background: rgba(16, 185, 129, 0.12);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #34d399;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #10b981;
+            border-radius: 50%;
+            box-shadow: 0 0 8px #10b981;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.85); }
+        }
+
+        .btn {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 7px 14px;
+            font-size: 12px;
+            font-weight: 600;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+        }
+
+        .btn:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-highlight);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00b4d8 0%, #0077b6 100%);
+            border-color: #0096c7;
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #00c4ea 0%, #0088cc 100%);
+            box-shadow: 0 0 10px var(--primary-glow);
+        }
+
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.15);
+            border-color: rgba(239, 68, 68, 0.4);
+            color: #f87171;
+        }
+
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.25);
+            border-color: rgba(239, 68, 68, 0.6);
+        }
+
+        .btn-active {
+            border-color: var(--primary) !important;
+            background: rgba(0, 210, 255, 0.15) !important;
+            color: var(--primary) !important;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: 1.15fr 1fr;
+            gap: 16px;
+        }
+
+        @media (max-width: 900px) {
+            .grid-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 10px;
+        }
+
+        .card-header h2 {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-header .tag {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            background: rgba(0, 210, 255, 0.12);
+            color: var(--primary);
+            border: 1px solid rgba(0, 210, 255, 0.25);
+        }
+
+        /* Camera Box */
+        .camera-container {
+            position: relative;
+            width: 100%;
+            height: 260px;
+            background: #090a0f;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .camera-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .camera-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-dim);
+            font-size: 13px;
+        }
+
+        .camera-controls {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            display: flex;
+            gap: 6px;
+        }
+
+        .camera-controls .btn-sm {
+            padding: 4px 8px;
+            font-size: 11px;
+            background: rgba(15, 17, 23, 0.85);
+            backdrop-filter: blur(4px);
+        }
+
+        .camera-top-controls {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            display: flex;
+            gap: 6px;
+        }
+
+        /* Temperatures Card */
+        .temp-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .temp-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .temp-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .temp-val {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .temp-target {
+            font-size: 13px;
+            color: var(--text-dim);
+            font-weight: 400;
+        }
+
+        .temp-bar-bg {
+            width: 100%;
+            height: 6px;
+            background: #12141c;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+
+        .temp-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.4s ease;
+        }
+
+        .bar-nozzle {
+            background: linear-gradient(90deg, #ff7b00, #ff3d00);
+            width: 0%;
+        }
+
+        .bar-bed {
+            background: linear-gradient(90deg, #00b4d8, #0077b6);
+            width: 0%;
+        }
+
+        /* Filament ACE Pro */
+        .slots-container {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+        }
+
+        .slot-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            position: relative;
+            transition: all 0.15s ease;
+        }
+
+        .slot-card.active {
+            border-color: var(--primary);
+            box-shadow: 0 0 10px var(--primary-glow);
+        }
+
+        .slot-badge {
+            position: absolute;
+            top: 6px;
+            left: 8px;
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-dim);
+        }
+
+        .slot-color-circle {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            border: 2px solid rgba(255,255,255,0.25);
+            margin-top: 6px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+
+        .slot-material {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+
+
+        /* Job Card */
+        .job-card {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .job-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .job-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-main);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 240px;
+        }
+
+        .job-progress-bar {
+            width: 100%;
+            height: 10px;
+            background: #12141c;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+        .job-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00b4d8 0%, #00e5ff 100%);
+            border-radius: 5px;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .job-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            text-align: center;
+        }
+
+        .job-stat-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 8px 4px;
+        }
+
+        .job-stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .job-stat-val {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-top: 2px;
+        }
+
+        .job-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        .job-actions .btn {
+            flex: 1;
+            justify-content: center;
+        }
+
+        .job-compact-row { display:flex; align-items:center; gap:8px; min-width:0; background:#1d2027; border:1px solid #30333b; border-radius:7px; padding:6px 8px; flex-wrap:wrap; }
+        .job-inline-stat { display:flex; align-items:baseline; gap:4px; white-space:nowrap; min-width:0; }
+        .job-inline-stat span { color:#898d97; font-size:9px; }
+        .job-inline-stat b { color:#f4f5f7; font-size:11px; font-weight:650; }
+        .job-inline-spacer { flex:1; min-width:3px; }
+        .job-icon-actions { display:flex; align-items:center; gap:5px; }
+        .job-icon-button { width:29px; height:29px; display:grid; place-items:center; padding:0; border-radius:6px; background:#292c33; border:1px solid #41444d; cursor:pointer; }
+        .job-icon-button img { width:15px; height:15px; object-fit:contain; }
+        .job-icon-button:hover:not(:disabled) { border-color:#1677ff; background:#303642; }
+        .job-icon-button.cancel { border-color:rgba(239,68,68,.42); background:rgba(239,68,68,.12); }
+        .job-icon-button:disabled { opacity:.32; cursor:not-allowed; }
+
+        /* Speed buttons row */
+        .speed-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 6px 10px;
+        }
+
+        .speed-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-right: 4px;
+        }
+
+        .speed-btn {
+            flex: 1;
+            padding: 4px 6px;
+            font-size: 11px;
+            font-weight: 600;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            border-radius: 4px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.15s ease;
+        }
+
+        .speed-btn:hover {
+            border-color: var(--border-highlight);
+            color: var(--text-main);
+        }
+
+        .speed-btn.active {
+            background: rgba(0, 210, 255, 0.15);
+            border-color: var(--primary);
+            color: var(--primary);
+            font-weight: 700;
+        }
+
+        /* Jog Control Panel */
+        .jog-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .jog-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .jog-step-chips {
+            display: flex;
+            gap: 6px;
+        }
+
+        .jog-step-chip {
+            padding: 3px 8px;
+            font-size: 11px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .jog-step-chip.active {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: rgba(0, 210, 255, 0.15);
+            font-weight: 700;
+        }
+
+        .jog-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            align-items: center;
+        }
+
+        .jog-btn {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 10px 4px;
+            font-size: 12px;
+            font-weight: 700;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.15s ease;
+        }
+
+        .jog-btn:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-highlight);
+            color: var(--primary);
+        }
+
+        .jog-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            border-color: var(--border);
+            color: var(--text-dim);
+        }
+
+        .jog-home {
+            background: rgba(0, 210, 255, 0.1);
+            border-color: rgba(0, 210, 255, 0.3);
+            color: var(--primary);
+        }
+
+        /* Run G-code Panel */
+        .gcode-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .gcode-textarea {
+            width: 100%;
+            height: 85px;
+            background: #090a0f;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: #a5f3fc;
+            font-family: Consolas, Monaco, "Courier New", Courier, monospace;
+            font-size: 12px;
+            padding: 8px;
+            resize: vertical;
+            outline: none;
+            user-select: text;
+        }
+
+        .wb3-gcode { display:flex; flex-direction:column; }
+        .wb3-gcode .gcode-container { flex:1; min-height:0; }
+        .wb3-gcode .gcode-textarea { flex:1; height:auto; min-height:210px; resize:none; }
+
+        .gcode-textarea:focus {
+            border-color: var(--primary);
+        }
+
+        .gcode-footer {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+            margin-top: 6px;
+        }
+
+        .gcode-meta-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-muted);
+            min-height: 18px;
+        }
+
+        .gcode-checkbox-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+            color: #9ca3af;
+            font-size: 11px;
+        }
+
+        .gcode-checkbox-label input[type="checkbox"] {
+            margin: 0;
+            cursor: pointer;
+            accent-color: #1677ff;
+        }
+
+        .btn-text-subtle {
+            background: transparent;
+            border: 0;
+            color: #858994;
+            font-size: 11px;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 4px;
+            transition: color .15s ease, background .15s ease;
+        }
+
+        .btn-text-subtle:hover {
+            color: #f4f5f7;
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .gcode-btn-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .gcode-btn-upload {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: #202229;
+            border: 1px solid #383b44;
+            color: #e5e7eb;
+            font-weight: 500;
+            padding: 7px 10px;
+            border-radius: 7px;
+            font-size: 11px;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: all .15s ease;
+        }
+
+        .gcode-btn-upload:hover {
+            border-color: #1677ff;
+            color: #fff;
+            background: #282c36;
+        }
+
+        .gcode-btn-run {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            padding: 7px 12px;
+            border-radius: 7px;
+            font-size: 11px;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .gcode-status {
+            font-size: 11px;
+            color: #34d399;
+            font-family: monospace;
+            min-height: 0;
+            word-break: break-all;
+        }
+        .gcode-status:empty {
+            display: none;
+        }
+
+        .preset-chips {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .chip {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .chip:hover {
+            border-color: var(--primary);
+            color: var(--text-main);
+        }
+
+        .btn:disabled, .jog-btn:disabled, .speed-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        .slot-card {
+            cursor: pointer;
+        }
+
+        .slot-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 210, 255, 0.18);
+        }
+
+        .slot-edit-hint {
+            font-size: 10px;
+            color: var(--primary);
+            opacity: 0.7;
+            margin-top: 2px;
+            transition: opacity 0.15s;
+        }
+
+        .slot-card:hover .slot-edit-hint {
+            opacity: 1;
+            font-weight: 700;
+        }
+
+        /* Modal Dialog */
+        .modal-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.72);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            backdrop-filter: blur(4px);
+        }
+
+        .modal-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            width: 92%;
+            max-width: 440px;
+            box-shadow: 0 12px 36px rgba(0,0,0,0.65);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            animation: modalFadeIn 0.18s ease-out;
+        }
+
+        @keyframes modalFadeIn {
+            from { opacity: 0; transform: scale(0.96); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .modal-header h3 {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 18px;
+            cursor: pointer;
+            padding: 4px;
+        }
+
+        .modal-close:hover {
+            color: #fff;
+        }
+
+        .modal-body {
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .modal-field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .modal-field label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .modal-select {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 9px 12px;
+            color: var(--text-main);
+            font-size: 13px;
+            outline: none;
+        }
+
+        .modal-select:focus {
+            border-color: var(--primary);
+        }
+
+        .swatch-palette {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+        }
+
+        .color-swatch {
+            width: 100%;
+            height: 34px;
+            border-radius: var(--radius-sm);
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .color-swatch:hover, .color-swatch.active {
+            border-color: #fff;
+            transform: scale(1.08);
+            box-shadow: 0 0 8px rgba(255,255,255,0.4);
+        }
+
+        .modal-color-input {
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            background: none;
+        }
+
+        .modal-footer {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
+            padding: 12px 18px;
+            border-top: 1px solid var(--border);
+            background: var(--bg-card);
+        }
+
+
+        .device-shell { display:grid; grid-template-columns:clamp(160px,13.75vw,264px) minmax(0,1fr); gap:12px; align-items:start; }
+        .printer-sidebar { position:sticky; top:0; height:calc(100vh - 32px); min-height:470px; background:#222; border:1px solid rgba(255,255,255,.08); border-radius:12px; display:flex; flex-direction:column; overflow:hidden; }
+        .printer-tabs { height:36px; display:grid; grid-template-columns:1fr 1fr; border-bottom:1px solid rgba(255,255,255,.08); }
+        .printer-tab { border:0; background:#1e1e1e; color:#777b85; font-size:12px; cursor:pointer; }
+        .printer-tab.active { color:#fff; background:#222; font-weight:650; }
+        .printer-tab:disabled { opacity:.38; cursor:not-allowed; }
+        .printer-list { display:grid; gap:10px; padding:12px 10px; overflow:auto; align-content:start; flex:1; }
+        .printer-list-empty { color:#747985; font-size:11px; line-height:1.5; padding:12px 4px; }
+        .printer-list-item { width:100%; text-align:left; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:5px 8px; align-items:center; border:1px solid transparent; border-radius:8px; padding:8px 14px; background:rgba(255,255,255,.02); color:#e7e9ee; cursor:pointer; }
+        .printer-list-item:hover { background:rgba(255,255,255,.06); }
+        .printer-list-item.monitored { background:rgba(0,117,255,.12); border-color:#0075ff; }
+        .printer-list-copy { min-width:0; }
+        .printer-list-name { display:block; font-size:13px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .printer-list-item.monitored .printer-list-name { color:#0075ff; }
+        .printer-list-model { display:block; color:#a4a8b1; font-size:13px; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .printer-list-item.monitored .printer-list-model { color:rgba(0,117,255,.6); }
+        .printer-list-status { grid-column:2; grid-row:1/span 2; justify-self:end; font-size:11px; color:#8c9099; }
+        .printer-list-status.free { color:#45d483; }
+        .printer-list-status.busy { color:#f5a623; }
+        .printer-active-badge { display:inline-block; margin-left:5px; color:#45d483; font-size:10px; }
+        .printer-sidebar-footer { min-height:60px; border-top:1px solid rgba(255,255,255,.08); display:grid; gap:7px; place-items:center; padding:8px; }
+        .printer-add { width:28px; height:28px; border:0; border-radius:50%; background:#0075ff; color:#fff; font-size:20px; line-height:1; cursor:pointer; }
+        .printer-make-active { border:1px solid #0075ff; border-radius:16px; padding:5px 11px; background:rgba(0,117,255,.12); color:#6aa7ff; font-size:10px; cursor:pointer; }
+        .printer-make-active[hidden] { display:none; }
+        .printer-switch-note { min-height:18px; color:#a4a8b1; font-size:10px; text-align:center; }
+        .printer-switch-note.error { color:#f87171; }
+        .device-content { min-width:0; }
+        @media (max-width:980px) { .device-shell { grid-template-columns:1fr; } .printer-sidebar { position:static; height:auto; min-height:0; } .printer-list { grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); max-height:230px; } }
+
+        /* Workbench V3 stock layout: task/control/device, camera/G-code/axis */
+        .wb3-grid {
+            display: grid;
+            grid-template-columns: minmax(300px, 1.15fr) minmax(290px, .95fr) minmax(310px, 1fr);
+            grid-template-areas:
+                "task control device"
+                "camera gcode axis";
+            gap: 12px;
+            align-items: start;
+        }
+        .wb3-grid > .card { margin: 0; min-width: 0; padding: 15px; border-radius: 12px; }
+        .wb3-task { grid-area: task; min-height: 250px; align-self:stretch; }
+        .wb3-control { grid-area: control; min-height: 250px; align-self:stretch; }
+        .wb3-device { grid-area: device; min-height: 250px; align-self:stretch; }
+        .wb3-camera { grid-area: camera; min-height: 310px; align-self:stretch; }
+        .wb3-axis { grid-area: axis; min-height: 310px; align-self:stretch; }
+        .wb3-gcode { grid-area: gcode; min-height:310px; align-self:stretch; }
+        .wb3-grid .card-header { margin-bottom: 13px; }
+        .wb3-grid .card-header h2, .axis-header h2 { font-size: 15px; }
+        .job-percent { font-weight: 700; font-size: 15px; color: #1677ff; }
+        .online-tag { background: rgba(39,174,96,.12); color: #45d483; }
+        .control-grid { display:grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap:8px; }
+        .control-tile { min-height:76px; background:#202229; border:1px solid #32343b; border-radius:9px; padding:10px; color:#fff; text-align:left; cursor:pointer; display:flex; flex-direction:column; justify-content:space-between; }
+        .control-tile:hover { border-color:#4f8cff; background:#252831; }
+        .control-label { display:flex; align-items:center; gap:7px; font-size:11px; color:#b6b8bf; white-space:nowrap; }
+        .control-label img { width:17px; height:17px; }
+        .control-value { display:flex; align-items:baseline; gap:3px; font-size:17px; }
+        .control-value b { color:#fff; font-weight:650; }
+        .control-value em { color:#777b85; font-style:normal; }
+        .control-value span { color:#858994; }
+        .control-value small { font-size:11px; color:#858994; }
+        .inline-editor { display:flex; align-items:center; gap:4px; }
+        .inline-editor[hidden] { display:none; }
+        .inline-editor input { width:75px; background:#111319; color:#fff; border:1px solid #1677ff; border-radius:5px; padding:5px 7px; font-size:16px; }
+        .switch-line { display:flex; justify-content:space-between; align-items:center; font-size:13px; }
+        .toggle-switch { width:30px; height:16px; background:#4a4d56; border-radius:10px; position:relative; }
+        .toggle-switch::after { content:""; width:12px; height:12px; border-radius:50%; background:#fff; position:absolute; left:2px; top:2px; transition:.15s; }
+        .toggle-switch.on { background:#1677ff; }
+        .toggle-switch.on::after { transform:translateX(14px); }
+        .control-presets { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:8px; }
+        .control-presets button { background:#181a20; border:1px solid #30323a; border-radius:6px; color:#a8abb4; padding:6px; cursor:pointer; font-size:10px; }
+        .control-presets button:hover { color:#fff; border-color:#1677ff; }
+        .device-summary { display:flex; align-items:center; gap:12px; padding-bottom:11px; border-bottom:1px solid #2d3038; }
+        .device-summary img { width:88px; height:74px; object-fit:contain; }
+        .device-summary h3 { font-size:14px; margin-bottom:5px; }
+        .device-summary span { display:block; font-size:10px; color:#8c909a; line-height:1.55; }
+        .device-selects { display:grid; gap:8px; margin-top:11px; }
+        .device-selects label { display:grid; grid-template-columns:90px 1fr; gap:8px; align-items:center; color:#9ca0aa; font-size:11px; }
+        .device-selects select { background:#1b1d23; color:#fff; border:1px solid #343740; border-radius:6px; padding:6px; font-size:11px; }
+        .device-cn { margin-top:8px; width:100%; display:flex; justify-content:space-between; background:transparent; color:#858994; border:0; font-size:10px; cursor:pointer; }
+        .device-cn span { color:#4f8cff; }
+        .device-info-status { color:#45d483; font-size:10px; margin-top:5px; }
+        .wb3-camera .camera-container { min-height:240px; height:calc(100% - 34px); }
+        .wb3-camera video { width:100%; height:100%; min-height:240px; object-fit:contain; background:#090a0d; display:none; }
+        .wb3-camera .camera-controls button,.wb3-camera .camera-top-controls button { background:rgba(26,29,35,.92); border:1px solid #41444d; color:#f4f5f7; border-radius:7px; padding:6px 10px; font-size:10px; cursor:pointer; box-shadow:none; }
+        .wb3-camera .camera-controls button:hover,.wb3-camera .camera-top-controls button:hover { border-color:#1677ff; color:#fff; }
+        .wb3-camera .camera-placeholder img { width:76px; opacity:.6; }
+        .card-actions { display:flex; gap:5px; }
+        .card-actions button { background:#24272e; border:1px solid #383b44; color:#c4c6cc; border-radius:15px; padding:4px 9px; font-size:10px; cursor:pointer; }
+        .card-actions button:hover { border-color:#1677ff; color:#fff; }
+        .embedded-consumables { margin-top:2px; padding-top:10px; border-top:1px solid #30323a; }
+        .embedded-consumables-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:7px; }
+        .embedded-consumables-head h3 { font-size:12px; color:#f4f5f7; }
+        .material-box-tabs { display:flex; gap:5px; margin-bottom:8px; overflow-x:auto; }
+        .material-box-tab { flex:0 0 auto; background:#191b21; border:1px solid #343740; border-radius:14px; color:#9498a2; padding:4px 9px; font-size:9px; cursor:pointer; }
+        .material-box-tab.active { border-color:#1677ff; background:rgba(22,119,255,.14); color:#fff; }
+        .material-box-empty { color:#747883; font-size:10px; padding:12px 4px; text-align:center; }
+        .embedded-consumables .slots-container { grid-template-columns:repeat(4,minmax(0,1fr)); gap:5px; }
+        .embedded-consumables .slot-card { min-height:64px; padding:7px 3px 5px; gap:2px; border-radius:7px; }
+        .embedded-consumables .slot-badge { top:4px; left:5px; font-size:8px; }
+        .embedded-consumables .slot-color-circle { width:24px; height:24px; margin-top:2px; border-width:1px; }
+        .embedded-consumables .slot-material { font-size:10px; }
+        .embedded-consumables .slot-edit-hint { margin-top:0; font-size:8px; }
+        .embedded-consumables .card-actions button { padding:3px 7px; font-size:9px; }
+        .module-note { color:#747883; font-size:10px; text-align:center; margin-top:10px; }
+        .axis-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:13px; }
+        .axis-steps { background:#1a1c22; border-radius:20px; padding:2px; display:flex; gap:2px; }
+        .axis-steps button { border:0; background:transparent; color:#90949e; padding:4px 10px; border-radius:16px; font-size:10px; cursor:pointer; font-weight:600; transition:background .15s, color .15s; }
+        .axis-steps button:hover:not(.active) { color:#fff; }
+        .axis-steps button.active { background:#1677ff!important; color:white!important; font-weight:700; }
+        #card-axis-move.axis-locked button { opacity:.34; cursor:not-allowed; pointer-events:none; }
+        #card-axis-move.axis-locked .axis-body { filter:saturate(.25); }
+        .axis-body { display:grid; grid-template-columns:40px 130px 42px 1px 68px; align-items:center; justify-content:center; gap:9px; min-height:207px; }
+        .axis-actions { display:flex; flex-direction:column; gap:12px; }
+        .axis-actions button { width:38px; height:38px; border-radius:50%; background:#22252c; border:1px solid #383b44; color:#4f8cff; font-size:21px; cursor:pointer; }
+        .xy-pad { width:130px; height:130px; border-radius:50%; background:#22252c; border:1px solid #3a3d46; position:relative; }
+        .xy-pad button { position:absolute; border:0; background:transparent; color:#fff; cursor:pointer; display:flex; gap:3px; align-items:center; justify-content:center; margin:0; padding:0; line-height:1; box-sizing:border-box; }
+        .xy-pad small,.z-pad small { font-size:10px; font-weight:700; }
+        .xy-up,.xy-down { left:50%; transform:translateX(-50%); width:44px; height:36px; flex-direction:column; }
+        .xy-up { top:5px; }
+        .xy-down { bottom:5px; }
+        .xy-left { left:7px; top:52px; }
+        .xy-right { right:7px; top:52px; }
+        .xy-home { left:43px; top:43px; width:44px; height:44px; border-radius:50%!important; background:#292c34!important; color:#1677ff!important; font-size:21px; z-index:2; }
+        .z-pad { height:130px; border-radius:23px; background:#22252c; border:1px solid #3a3d46; display:flex; flex-direction:column; justify-content:space-around; align-items:center; }
+        .z-pad button { border:0; background:transparent; color:#fff; cursor:pointer; display:flex; flex-direction:column; align-items:center; }
+        .z-pad button:nth-child(2) { width:30px; height:30px; background:#292c34; border-radius:5px; color:#1677ff; font-size:18px; }
+        .axis-divider { height:145px; border-left:1px dashed #3b3e47; }
+        .extruder-column { height:160px; display:flex; flex-direction:column; align-items:center; justify-content:space-between; }
+        .extruder-column span { font-size:10px; color:#a4a7af; }
+        .extruder-column img { width:41px; max-height:60px; object-fit:contain; }
+        .extruder-column button { width:34px; height:34px; background:#22252c; border:1px solid #383b44; color:#fff; border-radius:7px; font-size:18px; cursor:pointer; }
+        .material-controls { display:grid; gap:10px; }
+        .finish-editor { display:none; padding:10px; background:#17191f; border:1px solid #30333b; border-radius:8px; margin-top:7px; }
+        .finish-editor.active { display:block; }
+        .finish-editor-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+        .finish-editor label { color:#9da1aa; font-size:11px; }
+        .finish-editor input[type=color] { width:34px; height:30px; padding:0; border:0; background:transparent; }
+        .gradient-preview,.luminous-preview { height:34px; border-radius:7px; border:1px solid #3a3d46; flex:1; min-width:100px; }
+        .gradient-direction { background:#24272e; border:1px solid #383b44; color:#fff; border-radius:5px; padding:5px 8px; }
+        .custom-color-row { display:flex; align-items:center; gap:8px; margin-top:9px; }
+        .custom-color-row button { background:#24272e; border:1px dashed #4b4e58; color:#bfc2c9; border-radius:6px; padding:5px 9px; cursor:pointer; }
+        @media (max-width:1180px) { .wb3-grid { grid-template-columns:1fr 1fr; grid-template-areas:"task control" "camera gcode" "device axis"; } }
+        @media (max-width:760px) { .wb3-grid { grid-template-columns:1fr; grid-template-areas:"task" "control" "device" "camera" "gcode" "axis"; } }
+        .color-swatch-circle { width:26px; height:26px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0; transition:transform .15s, box-shadow .15s, border-color .15s; }
+        .color-swatch-circle.selected { border-color:#1677ff; transform:scale(1.12); box-shadow:0 0 0 2px rgba(22,119,255,.22); }
+        .color-swatch-circle.gradient { background:linear-gradient(135deg,#23a3c7,#9333ea); }
+        .color-swatch-circle.luminous { background:linear-gradient(135deg,#33a13a 0 48%,#7fff64 52%); box-shadow:0 0 8px rgba(127,255,100,.38); }
+        #swatch-grid-7x5 { align-content:start; }
+        .original-color-picker { display:grid; grid-template-columns:76px minmax(0,1fr); gap:12px; min-height:290px; }
+        .original-color-tabs { display:flex; flex-direction:column; gap:4px; padding-top:3px; }
+        .original-color-tabs button { background:transparent; border:0; border-left:3px solid transparent; color:#777b85; text-align:left; padding:7px 8px; font-size:12px; cursor:pointer; }
+        .original-color-tabs button.active { border-left-color:#1677ff; color:#fff; font-weight:650; }
+        .original-color-sections { max-height:290px; overflow:auto; scroll-behavior:smooth; padding-right:5px; }
+        .original-color-section { padding-bottom:17px; }
+        .original-color-section h4 { color:#8e929c; font-size:10px; font-weight:600; margin:1px 0 7px; text-transform:uppercase; letter-spacing:.08em; }
+        .original-color-grid { display:grid; grid-template-columns:repeat(7,26px); gap:9px; align-items:center; }
+        .original-color-dot { width:26px; height:26px; border-radius:50%; border:2px solid transparent; padding:0; cursor:pointer; position:relative; background:#333; }
+        .original-color-dot:hover { transform:scale(1.08); }
+        .original-color-dot.selected { border-color:#1677ff; box-shadow:0 0 0 2px rgba(22,119,255,.25); }
+        .original-color-dot.luminous::before { content:""; position:absolute; inset:-7px; border-radius:50%; background:var(--night-glow,#7fff64); opacity:.24; filter:blur(5px); z-index:-1; }
+        .original-color-add { width:26px; height:26px; border-radius:50%; border:1px dashed #6b6f79; background:#252830; color:#c7cad0; cursor:pointer; display:grid; place-items:center; font-size:20px; line-height:1; }
+        .original-color-add:hover { border-color:#1677ff; color:#fff; }
+        .custom-color-card { width:min(390px,92vw); background:#202228; border:1px solid #3a3d46; border-radius:12px; box-shadow:0 18px 60px rgba(0,0,0,.55); overflow:hidden; }
+        .custom-color-body { padding:18px; display:grid; gap:14px; }
+        .custom-kind-controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; color:#b9bcc4; font-size:12px; }
+        .custom-kind-controls[hidden] { display:none; }
+        .custom-kind-controls label { display:flex; align-items:center; gap:7px; }
+        .custom-kind-controls input[type=color] { width:35px; height:31px; border:0; padding:0; background:transparent; }
+        .custom-kind-controls select { background:#272a31; color:#fff; border:1px solid #41444e; border-radius:6px; padding:5px 7px; }
+        .custom-color-preview { height:58px; border:1px solid #424550; border-radius:8px; background:#23a3c7; }
+        .speed-mode-card { width:min(480px,92vw); background:#202228; border:1px solid #3a3d46; border-radius:12px; box-shadow:0 18px 60px rgba(0,0,0,.55); overflow:hidden; }
+        .speed-mode-list { display:grid; gap:8px; padding:18px; }
+        .speed-option { display:grid; grid-template-columns:54px 1fr auto; gap:12px; align-items:center; width:100%; background:#292c33; border:1px solid #3b3f48; border-radius:9px; padding:12px; color:#fff; cursor:pointer; text-align:left; }
+        .speed-option:hover { border-color:#1677ff; background:#2e323b; }
+        .speed-option.selected { border-color:#1677ff; box-shadow:0 0 0 2px rgba(22,119,255,.18); }
+        .speed-option .speed-percent { font-size:16px; font-weight:750; color:#6aa7ff; }
+        .speed-option strong { display:block; font-size:13px; margin-bottom:3px; }
+        .speed-option p { color:#989ca6; font-size:10px; line-height:1.4; }
+        .speed-option .speed-check { width:19px; height:19px; border:1px solid #555a65; border-radius:50%; display:grid; place-items:center; color:transparent; }
+        .speed-option.selected .speed-check { background:#1677ff; border-color:#1677ff; color:white; }
+
+    </style>
+</head>
+<body>
+
+    <!-- Filament Slot Edit Modal (Authentic Anycubic Design) -->
+    <div id="slot-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-card" style="max-width: 780px; width: 92%;">
+            <div class="modal-header" style="position: relative; justify-content: center; padding: 16px 20px;">
+                <h3 id="modal-slot-title" style="font-size: 16px; font-weight: 600; color: #fff; margin: 0;">Material Settings</h3>
+                <button class="modal-close" onclick="closeSlotEditModal()" style="position: absolute; right: 18px; top: 14px; font-size: 18px; color: #9ca3af; background: none; border: none; cursor: pointer;">✕</button>
+            </div>
+            <div class="modal-body" style="display:flex; flex-direction:row; align-items:stretch; gap:24px; padding:24px; max-height:620px; overflow:auto;">
+                <!-- Left Section: 3D Spool Render & Feed/Unfeed -->
+                <div style="width: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;">
+                    <div id="modal-spool-container" style="width: 130px; height: 165px; display: flex; align-items: center; justify-content: center;">
+                        <svg width="130" height="165" viewBox="0 0 55 70" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <defs>
+                                <linearGradient id="spool-dynamic-gradient" x1="0" y1="0" x2="1" y2="1">
+                                    <stop id="spool-stop-0" offset="0%" stop-color="#23a3c7"/>
+                                    <stop id="spool-stop-1" offset="33%" stop-color="#9333ea"/>
+                                    <stop id="spool-stop-2" offset="66%" stop-color="#ff8da1"/>
+                                    <stop id="spool-stop-3" offset="100%" stop-color="#fddb27"/>
+                                </linearGradient>
+                            </defs>
+                            <g id="spool-model">
+                                <ellipse cx="10.6468" cy="34.9304" rx="10.6468" ry="34.9304" transform="matrix(-1 0 0 1 55 0)" fill="#D1D1D1" fill-opacity="0.25"/>
+                                <path d="M44.3515 0.478516C43.1101 0.478516 41.8342 1.30526 40.5957 3.02439C39.3648 4.73202 38.2375 7.23458 37.2818 10.3705C35.3723 16.6345 34.1836 25.3178 34.1836 34.9295C34.1836 44.5422 35.3723 53.2255 37.2818 59.4896C38.2375 62.6254 39.3648 65.128 40.5957 66.8353C41.8342 68.5551 43.1101 69.381 44.3515 69.381C45.5919 69.381 46.8678 68.5542 48.1063 66.8353C49.3372 65.128 50.4655 62.6254 51.4212 59.4896C53.3307 53.2255 54.5184 44.5422 54.5184 34.9295C54.5184 25.3178 53.3307 16.6345 51.4212 10.3705C50.4655 7.23458 49.3372 4.73202 48.1063 3.02439C46.8669 1.30545 45.5919 0.478611 44.3515 0.478516Z" stroke="#9ca3af" stroke-width="1.2"/>
+                                <path id="spool-wound-fill" d="M42.4334 3.73242C39.5451 3.73242 8.28125 3.73242 8.28125 3.73242C8.28125 3.73242 13.7817 19.5175 13.7817 35.6481C13.7817 51.7787 8.28125 67.5635 8.28125 67.5635C8.28125 67.5635 40.2324 67.5635 42.4334 67.5635C44.6343 67.5635 50.2968 52.8068 50.2968 35.6481C50.2968 18.4894 45.3216 3.73242 42.4334 3.73242Z" fill="#009639"/>
+                                <ellipse cx="10.6468" cy="34.9304" rx="10.6468" ry="34.9304" transform="matrix(-1 0 0 1 21.293 0.138672)" fill="#D1D1D1" fill-opacity="0.25"/>
+                                <path d="M10.6445 0.617188C9.40307 0.617188 8.12717 1.44393 6.88865 3.16316C5.65781 4.87145 4.53049 7.37402 3.57477 10.5089C1.66523 16.773 0.476562 25.4563 0.476562 35.069C0.476562 44.6807 1.66523 53.3639 3.57477 59.629C4.53049 62.7639 5.65781 65.2665 6.88865 66.9748C8.12717 68.6936 9.40307 69.5204 10.6445 69.5204C11.8849 69.5204 13.1598 68.6936 14.3993 66.9748C15.6301 65.2665 16.7584 62.7639 17.7141 59.629C19.6237 53.3639 20.8114 44.6807 20.8114 35.069C20.8114 25.4563 19.6237 16.773 17.7141 10.5089C16.7584 7.37402 15.6301 4.87145 14.3993 3.16316C13.1598 1.44413 11.8849 0.617283 10.6445 0.617188Z" stroke="#E5E7EB" stroke-width="1.2"/>
+                                <ellipse cx="10.3542" cy="35.0696" rx="4.43619" ry="13.0989" fill="black" fill-opacity="0.18"/>
+                                <path d="M6.6875 15.5055L8.71227 10.4393L9.40165 12.1799L8.07059 15.5055H6.6875ZM11.5045 15.5055L11.0015 14.2668H9.28024L9.90025 12.7102H10.3859L9.08517 9.47959L9.78755 7.75L12.8919 15.5055H11.5045Z" fill="#D6AD7A" opacity="0.9"/>
+                            </g>
+                        </svg>
+                    </div>
+                    <div style="text-align: center;">
+                        <div id="modal-spool-type" style="font-size: 16px; font-weight: 700; color: #fff;">PLA</div>
+                        <div id="modal-spool-hex" style="font-size: 12px; color: #9ca3af; font-family: monospace; margin-top: 2px;">#009639</div>
+                    </div>
+                    <div style="display: flex; gap: 10px; width: 100%;">
+                        <button class="btn btn-sm" id="btn-modal-feed" onclick="feedCurrentSlot()" title="Load this ACE slot's filament into the extruder." style="flex: 1; border-radius: 20px; background: #262a36; color: #6b7280; font-size: 12px;">Feed</button>
+                        <button class="btn btn-sm" id="btn-modal-unfeed" onclick="unfeedCurrentSlot()" title="Unload this ACE slot's filament from the extruder." style="flex: 1; border-radius: 20px; background: #262a36; color: #6b7280; font-size: 12px;">Unfeed</button>
+                    </div>
+                </div>
+
+                <!-- Separator -->
+                <div style="width: 1px; border-left: 1px dashed #374151;"></div>
+
+                <!-- Right Section: Brand, Material Type & 7-Column Swatches -->
+                <div style="flex: 1; display: flex; flex-direction: column; gap: 14px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+                        <div>
+                            <label style="font-size: 12px; color: #9ca3af; display: block; margin-bottom: 6px;">Brand</label>
+                            <select id="modal-brand-select" class="modal-select" style="width: 100%; color: #f59e0b; font-weight: 600; border-radius: 8px;">
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; color: #9ca3af; display: block; margin-bottom: 6px;">Material Type</label>
+                            <select id="modal-slot-type" class="modal-select" style="width: 100%; border-radius: 8px;" onchange="onModalTypeChange(this.value)">
+                                <option value="PLA">PLA</option>
+                                <option value="PLA+">PLA+</option>
+                                <option value="PETG">PETG</option>
+                                <option value="ABS">ABS</option>
+                                <option value="TPU">TPU</option>
+                                <option value="ASA">ASA</option>
+                                <option value="PC">PC</option>
+                                <option value="PA">PA (Nylon)</option>
+                                <option value="PLA-CF">PLA-CF</option>
+                                <option value="PETG-CF">PETG-CF</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Original Workbench color sections: palette entries plus one add item per section -->
+                    <div class="original-color-picker">
+                        <nav class="original-color-tabs">
+                            <button id="tab-solid" class="active" onclick="scrollToColorSection('solid')" title="Show the original solid-color palette.">Solid</button>
+                            <button id="tab-gradient" onclick="scrollToColorSection('gradient')" title="Show the original multicolor gradient palette.">Gradient</button>
+                            <button id="tab-luminous" onclick="scrollToColorSection('luminous')" title="Show the original daylight and glow color pairs.">Luminous</button>
+                        </nav>
+                        <div id="original-color-sections" class="original-color-sections">
+                            <section id="color-section-solid" class="original-color-section"><h4>Solid</h4><div id="solid-color-grid" class="original-color-grid"></div></section>
+                            <section id="color-section-gradient" class="original-color-section"><h4>Gradient</h4><div id="gradient-color-grid" class="original-color-grid"></div></section>
+                            <section id="color-section-luminous" class="original-color-section"><h4>Luminous</h4><div id="luminous-color-grid" class="original-color-grid"></div></section>
+                        </div>
+                        <div id="custom-finish-colors" class="custom-color-row"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 12px 24px; display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid #2d3345;">
+                <button class="btn btn-sm" onclick="closeSlotEditModal()" style="border-radius: 20px; padding: 6px 18px; background: #262a36; color: #fff;">Cancel</button>
+                <button class="btn btn-primary btn-sm" id="btn-save-slot" onclick="saveSlotFilament()" style="border-radius: 20px; padding: 6px 20px; background: #2563eb; color: #fff; font-weight: 600;">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="speed-mode-modal" class="modal-backdrop" style="display:none; z-index:10010;">
+        <div class="speed-mode-card">
+            <div class="modal-header"><h3>Speed Mode</h3><button class="modal-close" onclick="closeSpeedModeModal()" title="Close the speed mode selector.">✕</button></div>
+            <div class="speed-mode-list">
+                <button class="speed-option" data-mode="1" onclick="selectSpeedMode(1)"><span class="speed-percent">50%</span><span><strong>Quiet</strong><p>Reduces movement speed and noise. Best when quieter operation matters more than print time.</p></span><span class="speed-check">✓</span></button>
+                <button class="speed-option" data-mode="2" onclick="selectSpeedMode(2)"><span class="speed-percent">100%</span><span><strong>Standard</strong><p>Uses the normal sliced speed. Recommended for expected quality, cooling, and material flow.</p></span><span class="speed-check">✓</span></button>
+                <button class="speed-option" data-mode="3" onclick="selectSpeedMode(3)"><span class="speed-percent">125%</span><span><strong>Sport</strong><p>Runs approximately 25% faster. May increase noise and reduce quality on demanding geometry.</p></span><span class="speed-check">✓</span></button>
+                <button class="speed-option" data-mode="4" onclick="selectSpeedMode(4)"><span class="speed-percent">150%</span><span><strong>Ludicrous</strong><p>Runs approximately 50% faster. Highest noise and the greatest quality or flow risk.</p></span><span class="speed-check">✓</span></button>
+            </div>
+            <div class="modal-footer"><button class="btn" onclick="closeSpeedModeModal()" title="Close without changing the speed mode.">Cancel</button></div>
+        </div>
+    </div>
+
+    <!-- Original-style custom color editor, opened by the + item in each section -->
+    <div id="custom-color-modal" class="modal-backdrop" style="display:none; z-index:10020;">
+        <div class="custom-color-card">
+            <div class="modal-header"><h3 id="custom-color-title">Add Solid Color</h3><button class="modal-close" onclick="closeCustomColorDialog()" title="Close the custom color editor.">✕</button></div>
+            <div class="custom-color-body">
+                <div id="custom-solid-controls" class="custom-kind-controls"><label>Color <input type="color" id="modal-slot-color" value="#23a3c7" onchange="updateCustomPreview()"></label><span id="modal-color-hex">#23A3C7</span></div>
+                <div id="custom-gradient-controls" class="custom-kind-controls" hidden><label>Colors <select id="gradient-count" onchange="updateCustomPreview()"><option value="2">2</option><option value="3">3</option><option value="4" selected>4</option></select></label><input type="color" id="gradient-color-1" value="#23a3c7" onchange="updateCustomPreview()"><input type="color" id="gradient-color-2" value="#9333ea" onchange="updateCustomPreview()"><input type="color" id="gradient-color-3" value="#ff8da1" onchange="updateCustomPreview()"><input type="color" id="gradient-color-4" value="#fddb27" onchange="updateCustomPreview()"><select id="gradient-direction" onchange="updateCustomPreview()"><option value="180">Vertical</option><option value="90">Horizontal</option></select></div>
+                <div id="custom-luminous-controls" class="custom-kind-controls" hidden><label>Day <input type="color" id="luminous-day" value="#33a13a" onchange="updateCustomPreview()"></label><label>Glow <input type="color" id="luminous-night" value="#7fff64" onchange="updateCustomPreview()"></label></div>
+                <div id="custom-color-preview" class="custom-color-preview"></div>
+            </div>
+            <div class="modal-footer"><button class="btn" onclick="closeCustomColorDialog()" title="Discard this custom color.">Cancel</button><button class="btn btn-primary" onclick="saveCustomColorDialog()" title="Save this reusable custom color or color group.">Add</button></div>
+        </div>
+    </div>
+
+
+    <div id="feed-progress-modal" class="modal-backdrop" style="display:none; z-index:10050;">
+        <div class="modal-card" style="width:min(620px,92vw);">
+            <div class="modal-header"><h3>Material Management</h3><button class="modal-close" onclick="closeFeedProgress()">✕</button></div>
+            <div class="modal-body" style="padding:28px;">
+                <h2 id="feed-progress-title" style="margin:0 0 22px;">Unfeed</h2>
+                <div id="feed-progress-steps" style="display:grid; gap:16px;"></div>
+                <div id="feed-progress-error" style="display:none; color:#ff6b6b; margin-top:18px;"></div>
+            </div>
+            <div class="modal-actions" style="padding:14px 24px 20px;"><button class="btn" onclick="closeFeedProgress()">Exit</button></div>
+        </div>
+    </div>
+
+    <div id="printer-config-modal" class="modal-backdrop" style="display:none; z-index:10050;">
+        <div class="modal-card" style="width:min(470px,92vw);">
+            <div class="modal-header"><h3>Saved Printer</h3><button class="modal-close" onclick="closePrinterConfig()">✕</button></div>
+            <div class="modal-body">
+                <div class="modal-field"><label for="printer-config-name">Name</label><input class="modal-select" id="printer-config-name" placeholder="Workshop Kobra X"></div>
+                <div class="modal-field"><label for="printer-config-model">Model</label><input class="modal-select" id="printer-config-model" value="Anycubic Kobra X"></div>
+                <div class="modal-field"><label for="printer-config-host">Printer IP address</label><input class="modal-select" id="printer-config-host" placeholder="192.168.1.100"></div>
+                <div id="printer-config-error" style="color:#f87171;font-size:11px;"></div>
+            </div>
+            <div class="modal-footer"><button class="btn" onclick="closePrinterConfig()">Cancel</button><button class="btn btn-primary" onclick="savePrinterConfig()">Save</button></div>
+        </div>
+    </div>
+
+    <div class="device-shell">
+        <aside class="printer-sidebar" aria-label="Configured printers">
+            <div class="printer-tabs"><button class="printer-tab" type="button" disabled>Cloud Printer</button><button class="printer-tab active" type="button">LAN Printer</button></div>
+            <div class="printer-list" id="printer-list"><div class="printer-list-empty">Loading configured printers…</div></div>
+            <div class="printer-sidebar-footer"><button class="printer-add" type="button" onclick="requestPrinterSettings()" title="Add or configure a printer" aria-label="Add printer">+</button><button class="printer-make-active" id="printer-make-active" type="button" onclick="makeMonitoredPrinterActive()" hidden>Make Active for Slicing</button><div class="printer-switch-note" id="printer-switch-note"></div></div>
+        </aside>
+        <div class="device-content">
+
+    <!-- Alert Banner for LCD notices -->
+    <div id="printer-alert-banner" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: var(--radius-md); padding: 10px 16px; margin-bottom: 16px; align-items: center; justify-content: space-between; color: #fca5a5;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 18px;">⚠️</span>
+            <div>
+                <strong style="color: #fff;">Printer LCD Notice:</strong>
+                <span id="printer-alert-text">Home the axis before moving</span>
+            </div>
+        </div>
+        <div style="display: flex; gap: 8px;">
+            <button class="btn btn-sm btn-primary" id="btn-alert-home" onclick="homeAll()" title="Home all axes to resolve the movement warning.">🏠 Home Now</button>
+            <button class="btn btn-sm" onclick="dismissAlert()" title="Hide this printer notice.">✕ Dismiss</button>
+        </div>
+    </div>
+
+    <!-- Workbench V3 Grid: stock Anycubic section order -->
+    <main class="wb3-grid">
+        <!-- Row 1 / Column 1: Task -->
+        <section class="card job-card wb3-task">
+            <div class="card-header">
+                <h2>Print</h2>
+                <span class="tag" id="print-state">Ready</span>
+            </div>
+            <div class="job-title-row">
+                <div class="job-name" id="job-name">Ready</div>
+                <div class="job-percent" id="job-pct">0%</div>
+            </div>
+            <div class="job-progress-bar"><div class="job-progress-fill" id="job-progress-fill"></div></div>
+            <div class="job-compact-row">
+                <div class="job-inline-stat"><span>Layer</span><b id="stat-layer">0 / 0</b></div>
+                <div class="job-inline-stat"><span>Elapsed</span><b id="stat-elapsed">0m</b></div>
+                <div class="job-inline-stat"><span>Remaining</span><b id="stat-remaining">--</b></div>
+                <div class="job-inline-stat"><span>Action</span><b id="stat-action" style="color:#1677ff;">Ready</b></div>
+                <div class="job-inline-spacer"></div>
+                <div class="job-icon-actions">
+                    <button class="job-icon-button" id="btn-pause" onclick="sendControl('pause')" title="Pause print" aria-label="Pause print" disabled><img src="img/pause.a9342684.svg" alt=""></button>
+                    <button class="job-icon-button" id="btn-resume" onclick="sendControl('resume')" title="Resume print" aria-label="Resume print" disabled><img src="img/play.4317d5c2.svg" alt=""></button>
+                    <button class="job-icon-button cancel" id="btn-stop" onclick="sendControl('stop')" title="Cancel print" aria-label="Cancel print" disabled><img src="img/icon-stop.b1e60574.svg" alt=""></button>
+                </div>
+            </div>
+            <div class="embedded-consumables">
+                <div class="embedded-consumables-head">
+                    <h3>Material</h3>
+                    <div class="card-actions"><button onclick="syncFromSlicerToPrinter()" title="Read the active filament types and colors from the slicer and write them to the printer's ACE slots.">From Slicer</button><button onclick="syncFilamentsToSlicer()" title="Read the printer's current ACE slot materials and colors and apply them to the slicer.">To Slicer</button></div>
+                </div>
+                <div class="material-box-tabs" id="material-box-tabs"></div>
+                <div class="slots-container" id="slots-container"></div>
+            </div>
+        </section>
+
+        <!-- Row 1 / Column 2: Control -->
+        <section class="card wb3-control">
+            <div class="card-header"><h2>Control</h2><span class="tag">Live</span></div>
+            <div class="control-grid">
+                <button class="control-tile" onclick="startInlineTempEdit('nozzle')" title="Set the nozzle target temperature. Press Enter or click away to apply.">
+                    <span class="control-label"><img src="img/icon-nozzle.7a827791.svg">Nozzle</span>
+                    <span class="control-value" id="nozzle-value-wrap"><b id="cur-nozzle">0</b><em>/</em><span id="target-nozzle">0</span><small>°C</small></span>
+                    <span class="inline-editor" id="nozzle-inline-editor" hidden><input id="nozzle-inline-input" type="number" min="0" max="300"><small>°C</small></span>
+                </button>
+                <button class="control-tile" onclick="startInlineTempEdit('bed')" title="Set the heatbed target temperature. Press Enter or click away to apply.">
+                    <span class="control-label"><img src="img/icon-hotbed.ec6ce931.svg">Heatbed</span>
+                    <span class="control-value" id="bed-value-wrap"><b id="cur-bed">0</b><em>/</em><span id="target-bed">0</span><small>°C</small></span>
+                    <span class="inline-editor" id="bed-inline-editor" hidden><input id="bed-inline-input" type="number" min="0" max="120"><small>°C</small></span>
+                </button>
+                <button class="control-tile light-control" onclick="toggleLight()" title="Turn the printer's camera/chamber LED on or off.">
+                    <span class="control-label"><img src="img/icon-light.efdd1de5.svg">Camera Light</span>
+                    <span class="switch-line"><span id="control-light-state">Off</span><span id="control-light-switch" class="toggle-switch"></span></span>
+                </button>
+                <button class="control-tile" onclick="promptSetFan()" title="Set the model cooling fan speed from 0% to 100%.">
+                    <span class="control-label"><img src="img/icon-fan.02d8a4a3.svg">Model Fan</span>
+                    <span class="control-value"><b id="control-fan-value">0%</b></span>
+                </button>
+                <button class="control-tile speed-control" onclick="openSpeedModeModal()" title="Choose Quiet, Standard, Sport, or Ludicrous print speed.">
+                    <span class="control-label"><img src="img/speed-mode.47b8f8db.svg">Speed Mode</span>
+                    <span class="control-value"><b id="control-speed-value">Standard</b></span>
+                </button>
+                <button class="control-tile" onclick="preheat(0, 0)" title="Turn off the nozzle and heatbed heaters.">
+                    <span class="control-label"><img src="img/temp.9134d606.svg">Cooldown</span>
+                    <span class="control-value"><b>All heaters off</b></span>
+                </button>
+            </div>
+            <div class="control-presets">
+                <button onclick="preheat(205,60)" title="Preheat nozzle to 205°C and heatbed to 60°C for PLA.">PLA <b>205/60</b></button>
+                <button onclick="preheat(235,75)" title="Preheat nozzle to 235°C and heatbed to 75°C for PETG.">PETG <b>235/75</b></button>
+                <button onclick="preheat(255,90)" title="Preheat nozzle to 255°C and heatbed to 90°C for ABS.">ABS <b>255/90</b></button>
+            </div>
+        </section>
+
+        <!-- Row 1 / Column 3: Device Info -->
+        <section class="card wb3-device" id="card-device-info">
+            <div class="card-header"><h2>Device Info</h2><span class="tag online-tag">Online</span></div>
+            <div class="device-summary">
+                <img src="img/Kx.f7c08d6e.png" alt="Kobra X">
+                <div><h3 id="device-model-name">Anycubic Printer</h3><span id="device-model-id">Model —</span><span id="device-firmware">Firmware —</span><span id="device-ip">—</span></div>
+            </div>
+            <div class="device-selects">
+                <label>Buildplate Type<select id="device-buildplate-type" onchange="setBuildplateType(this.value)"><option value="texture_pei">Textured PEI Plate</option><option value="smooth_pei">Smooth PEI Plate</option><option value="low_temp">Low Temperature Plate</option><option value="engineering">Engineering Plate</option></select></label>
+                <label>Nozzle Type<select id="device-nozzle-type" onchange="setNozzleType(this.value)"><option value="steel_04">0.4mm Hardened Steel</option><option value="brass_04">0.4mm Brass</option><option value="brass_02">0.2mm Brass</option><option value="steel_06">0.6mm Hardened Steel</option><option value="steel_08">0.8mm Hardened Steel</option></select></label>
+            </div>
+            <button class="device-cn" id="device-cn" onclick="copyCN()" title="Copy the printer's CN identifier to the clipboard." hidden>CN — <span>Copy</span></button>
+            <div id="device-info-status" class="device-info-status" hidden></div>
+        </section>
+
+        <!-- Row 2 / Column 1: Camera -->
+        <section class="card wb3-camera">
+            <div class="card-header"><h2>Camera</h2><span class="tag" id="camera-status-tag">Stopped</span></div>
+            <div class="camera-container" id="cam-box">
+                <video id="cam-video" autoplay muted playsinline></video>
+                <div class="camera-placeholder" id="cam-placeholder"><img src="img/video-monitor.aa65df82.png"><span>Camera stream stopped</span></div>
+                <div class="camera-top-controls">
+                    <button class="icon-button" id="btn-light" onclick="toggleLight()" title="Turn the printer's camera/chamber LED on or off.">Light Off</button>
+                    <button class="icon-button" id="btn-cam-stream" onclick="toggleCameraStream()" title="Start or stop the live camera stream.">Start Stream</button>
+                </div>
+                <div class="camera-controls"><button onclick="openCamFull()" title="Open the raw camera feed in a separate window.">Full screen</button><button onclick="startCameraStream()" title="Restart the camera stream connection.">Reconnect</button></div>
+            </div>
+        </section>
+
+        <!-- Row 2 / Column 2: Run G-code File -->
+        <section class="card wb3-gcode">
+            <div class="card-header"><h2>Run G-code File</h2><span class="tag">LAN Exec</span></div>
+            <div class="gcode-container"><textarea class="gcode-textarea" id="gcode-input" title="Enter a block of G-code. It will be uploaded and executed as a temporary print file." placeholder="; Home all axes&#10;G28&#10;M400&#10;; Move X 10mm&#10;G91&#10;G1 X10 F3000&#10;G90&#10;; Move Y 10mm&#10;G91&#10;G1 Y10 F3000&#10;G90&#10;; Raise Z 5mm&#10;G91&#10;G1 Z5 F600&#10;G90&#10;; Wait 2 seconds&#10;G4 P2000"></textarea><div class="gcode-footer"><div class="gcode-meta-row"><label class="gcode-checkbox-label" title="Remove the generated temporary G-code file from printer storage after execution."><input type="checkbox" id="chk-delete-after" checked><span>Auto-delete after run</span></label><button class="btn-text-subtle" onclick="clearGcode()" title="Clear the G-code editor.">Clear editor</button></div><div class="gcode-btn-row"><button class="gcode-btn-upload" onclick="document.getElementById('print-file-input').click()" title="Pick a .gcode or .3mf file from this computer, upload it to the printer over LAN, and start printing it.">📁 Upload File…</button><button class="btn btn-primary btn-sm gcode-btn-run" onclick="runGcodeFile()" title="Package this G-code as a temporary file, upload it, and run it on the printer.">▶ Run on Printer</button></div><div class="gcode-status" id="gcode-status"></div><div class="gcode-status" id="print-file-status"></div><input type="file" id="print-file-input" accept=".gcode,.3mf" style="display:none" onchange="uploadPickedPrintFile(this)"></div></div>
+        </section>
+
+        <!-- Row 2 / Column 3: Axis -->
+        <section class="card wb3-axis" id="card-axis-move">
+            <div class="axis-header"><h2>Axis Move</h2><div class="axis-steps"><button id="step-1" class="axis-step-btn" onclick="setAxisStep(1,this)" title="Move axes by 1 millimeter per click.">1mm</button><button id="step-15" class="axis-step-btn active" onclick="setAxisStep(15,this)" title="Move axes by 15 millimeters per click.">15mm</button><button id="step-50" class="axis-step-btn" onclick="setAxisStep(50,this)" title="Move axes by 50 millimeters per click.">50mm</button></div></div>
+            <div class="axis-body">
+                <div class="axis-actions"><button onclick="homeAll()" title="Home all">⌂</button><button onclick="motorOff()" title="Release motors">✋</button></div>
+                <div class="xy-pad">
+                    <button class="xy-up" onclick="jog('Y',1)" title="Move the Y axis forward by the selected distance.">▲<small>Y</small></button>
+                    <button class="xy-left" onclick="jog('X',-1)" title="Move the X axis left by the selected distance.">◀<small>X</small></button>
+                    <button class="xy-home" onclick="homeXY()" title="Home the X and Y axes.">⌂</button>
+                    <button class="xy-right" onclick="jog('X',1)" title="Move the X axis right by the selected distance."><small>X</small>▶</button>
+                    <button class="xy-down" onclick="jog('Y',-1)" title="Move the Y axis backward by the selected distance."><small>Y</small>▼</button>
+                </div>
+                <div class="z-pad"><button onclick="jog('Z',1)" title="Raise Z by the selected distance.">▲<small>Z</small></button><button onclick="homeZ()" title="Home the Z axis.">⌂</button><button onclick="jog('Z',-1)" title="Lower Z by the selected distance. Watch nozzle-to-bed clearance."><small>Z</small>▼</button></div>
+                <div class="axis-divider"></div>
+                <div class="extruder-column"><span>Extruder</span><button onclick="extrudeFilament('retract')" title="Retract filament. Requires a heated nozzle.">↥</button><img src="img/extrusion-dark.006334bf.png"><button onclick="extrudeFilament('extrude')" title="Extrude filament. Requires a heated nozzle.">↧</button></div>
+            </div>
+            <p id="jog-hint" class="module-note">Axis control enables remote monitoring. Watch nozzle-bed distance.</p>
+        </section>
+    </main>
+
+        </div>
+    </div>
+
+    <script>
+
+        let configuredPrinters = [];
+        let monitoredPresetName = "";
+        let printerRequestSequence = 0;
+        let pendingPrinterRequests = new Map();
+        const PRINTER_STORAGE_KEY = "orcacubic_saved_printers_v1";
+        const MONITORED_PRINTER_STORAGE_KEY = "orcacubic_monitored_printer_v1";
+        const BROWSER_TEST_MODE = !window.wx && !(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.wx) && !(window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === "function");
+        window.orcacubicOpenPrinterConfig = () => requestPrinterSettings();
+
+        function normalizeStoredPrinter(printer, index) {
+            if (!printer || typeof printer !== "object") return null;
+            const host = String(printer.host || "").trim().replace(/^https?:\/\//i, "").replace(/\/$/, "");
+            if (!host) return null;
+            const presetName = String(printer.preset_name || printer.name || `Anycubic Printer ${index + 1}`).trim();
+            return {
+                preset_name: presetName,
+                name: String(printer.name || presetName),
+                model: String(printer.model || "Anycubic Printer"),
+                host,
+                active: !!printer.active,
+                monitored: !!printer.monitored,
+                selected: !!printer.selected
+            };
+        }
+
+        function readStoredPrinters() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(PRINTER_STORAGE_KEY) || "[]");
+                if (!Array.isArray(parsed)) return [];
+                const monitored = localStorage.getItem(MONITORED_PRINTER_STORAGE_KEY) || "";
+                return parsed.map(normalizeStoredPrinter).filter(Boolean).map(printer => ({
+                    ...printer,
+                    monitored: printer.preset_name === monitored || (!monitored && printer.monitored)
+                }));
+            } catch (_) {
+                return [];
+            }
+        }
+
+        function writeStoredPrinters(printers) {
+            const normalized = (Array.isArray(printers) ? printers : []).map(normalizeStoredPrinter).filter(Boolean);
+            localStorage.setItem(PRINTER_STORAGE_KEY, JSON.stringify(normalized));
+            const monitored = normalized.find(printer => printer.monitored);
+            if (monitored) localStorage.setItem(MONITORED_PRINTER_STORAGE_KEY, monitored.preset_name);
+            return normalized;
+        }
+
+        function mockSlicerMessage(body) {
+            setTimeout(() => {
+                let printers = readStoredPrinters();
+                if (body.command === "get_anycubic_printers") {
+                    handlePrinterMessage({type:"response", command:body.command, id:body.id, code:0, data:{printers}});
+                    return;
+                }
+                if (body.command === "monitor_anycubic_printer") {
+                    printers = printers.map(printer => ({...printer, monitored:printer.preset_name === body.data.preset_name}));
+                    writeStoredPrinters(printers);
+                } else if (body.command === "activate_anycubic_printer") {
+                    printers = printers.map(printer => ({...printer, active:printer.preset_name === body.data.preset_name, selected:printer.preset_name === body.data.preset_name}));
+                    writeStoredPrinters(printers);
+                }
+                handlePrinterMessage({type:"response", command:body.command, id:body.id, code:0, message:"success", data:{}});
+            }, 30);
+        }
+
+        function postOrcaMessage(payload) {
+            sendToSlicer(payload.command || payload.method || "", payload.data || {}, payload.id || payload.sequence_id || "");
+        }
+
+        function requestPrinterList() {
+            const stored = readStoredPrinters();
+            if (stored.length) renderPrinterList(stored);
+            const id = "printer-list-" + (++printerRequestSequence);
+            postOrcaMessage({ id, sequence_id:id, command:"get_anycubic_printers", data:{} });
+        }
+
+        function renderPrinterList(items) {
+            configuredPrinters = Array.isArray(items) ? items : [];
+            const list = document.getElementById("printer-list");
+            if (!list) return;
+            list.innerHTML = "";
+            let monitored = configuredPrinters.find(printer => printer.monitored);
+            if (monitoredPresetName) {
+                const requested = configuredPrinters.find(printer => printer.preset_name === monitoredPresetName);
+                if (requested && pendingPrinterRequests.size) monitored = requested;
+            }
+            monitored = monitored || configuredPrinters.find(printer => printer.active) || configuredPrinters[0];
+            monitoredPresetName = monitored ? monitored.preset_name : "";
+            if (!configuredPrinters.length) {
+                list.innerHTML = '<div class="printer-list-empty">Add a configured Anycubic printer preset to see it here.</div>';
+                updateMakeActiveButton();
+                return;
+            }
+            configuredPrinters.forEach(printer => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "printer-list-item" + (printer.monitored ? " monitored" : "");
+                button.title = printer.monitored ? "Currently shown in Device" : "Monitor " + printer.name;
+                button.setAttribute("aria-pressed", printer.monitored ? "true" : "false");
+                button.onclick = () => monitorPrinter(printer.preset_name);
+                const copy = document.createElement("span");
+                copy.className = "printer-list-copy";
+                const name = document.createElement("span");
+                name.className = "printer-list-name";
+                name.innerText = printer.name || printer.preset_name || "Anycubic Printer";
+                if (printer.active) {
+                    const active = document.createElement("span");
+                    active.className = "printer-active-badge";
+                    active.innerText = "Active";
+                    name.appendChild(active);
+                }
+                const model = document.createElement("span");
+                model.className = "printer-list-model";
+                model.innerText = printer.model || "Anycubic Printer";
+                copy.append(name, model);
+                const status = document.createElement("span");
+                const isBusy = printer.monitored && ["printing", "paused", "auto_leveling", "heating", "busy"].includes(String(currentPrinterState).toLowerCase());
+                status.className = "printer-list-status " + (printer.monitored ? (isBusy ? "busy" : "free") : "offline");
+                status.innerText = printer.monitored ? (isBusy ? "Busy" : "Free") : "Saved";
+                button.append(copy, status);
+                list.appendChild(button);
+            });
+            updateMakeActiveButton();
+        }
+
+        function updateMakeActiveButton() {
+            const button = document.getElementById("printer-make-active");
+            if (!button) return;
+            const monitored = configuredPrinters.find(printer => printer.preset_name === monitoredPresetName);
+            button.hidden = !monitored || !!monitored.active;
+        }
+
+        function setDeviceControlsDisabled(disabled) {
+            document.querySelectorAll('.device-content button, .device-content input, .device-content select, .device-content textarea').forEach(control => {
+                control.disabled = !!disabled;
+            });
+        }
+
+        function requestPrinterSelection(presetName, makeActive) {
+            const current = configuredPrinters.find(printer => printer.monitored);
+            if (!makeActive && current && current.preset_name === presetName) return;
+            stopCameraStream();
+            const note = document.getElementById("printer-switch-note");
+            if (note) { note.className="printer-switch-note"; note.innerText=makeActive ? "Making printer active…" : "Connecting Device…"; }
+            document.querySelectorAll(".printer-list-item,.printer-make-active").forEach(button => button.disabled = true);
+            setDeviceControlsDisabled(true);
+            const id = (makeActive ? "printer-activate-" : "printer-monitor-") + (++printerRequestSequence);
+            pendingPrinterRequests.set(id, { presetName, makeActive });
+            postOrcaMessage({ id, sequence_id:id, command:makeActive ? "activate_anycubic_printer" : "monitor_anycubic_printer", data:{ preset_name:presetName } });
+        }
+
+        function monitorPrinter(presetName) {
+            monitoredPresetName = presetName;
+            requestPrinterSelection(presetName, false);
+        }
+
+        function makeMonitoredPrinterActive() {
+            if (monitoredPresetName) requestPrinterSelection(monitoredPresetName, true);
+        }
+
+        function requestPrinterSettings() {
+            const testMode = BROWSER_TEST_MODE || new URLSearchParams(window.location.search).get("orcacubic_test") === "1";
+            if (testMode) {
+                const modal = document.getElementById("printer-config-modal");
+                if (modal) {
+                    modal.style.display = "flex";
+                    document.getElementById("printer-config-name").focus();
+                }
+                return;
+            }
+            const id = "printer-settings-" + (++printerRequestSequence);
+            postOrcaMessage({ id, sequence_id:id, command:"open_anycubic_printer_settings", data:{} });
+        }
+
+        function closePrinterConfig() {
+            document.getElementById("printer-config-modal").style.display = "none";
+            document.getElementById("printer-config-error").innerText = "";
+        }
+
+        function savePrinterConfig() {
+            const name = document.getElementById("printer-config-name").value.trim();
+            const model = document.getElementById("printer-config-model").value.trim() || "Anycubic Printer";
+            const host = document.getElementById("printer-config-host").value.trim().replace(/^https?:\/\//i, "").replace(/\/$/, "");
+            const error = document.getElementById("printer-config-error");
+            if (!name || !host) { error.innerText = "Enter a printer name and IP address."; return; }
+            let printers = readStoredPrinters();
+            const existing = printers.findIndex(printer => printer.preset_name === name);
+            const first = printers.length === 0;
+            const item = {preset_name:name,name,model,host,active:first,selected:first,monitored:first};
+            if (existing >= 0) printers[existing] = {...printers[existing],...item,active:printers[existing].active,selected:printers[existing].selected,monitored:printers[existing].monitored};
+            else printers.push(item);
+            writeStoredPrinters(printers);
+            closePrinterConfig();
+            requestPrinterList();
+        }
+
+        function handlePrinterMessage(message) {
+            if (typeof message === "string") { try { message = JSON.parse(message); } catch (_) { return; } }
+            if (!message || typeof message !== "object") return;
+            if (message.command === "get_anycubic_printers" || message.method === "get_anycubic_printers") {
+                const printers = message.data?.printers || message.printers || [];
+                if (Array.isArray(printers) && printers.length) writeStoredPrinters(printers);
+                renderPrinterList(printers);
+            }
+            const method = message.command || message.method;
+            if ((method === "monitor_anycubic_printer" || method === "activate_anycubic_printer") && message.type === "response") {
+                const note = document.getElementById("printer-switch-note");
+                const pending = pendingPrinterRequests.get(message.id || message.sequence_id);
+                if (message.code) {
+                    if (note) { note.className="printer-switch-note error"; note.innerText=message.message || "Printer connection failed"; }
+                    const current = configuredPrinters.find(printer => printer.monitored);
+                    monitoredPresetName = current ? current.preset_name : "";
+                } else if (note) {
+                    if (pending && !pending.makeActive) monitoredPresetName = pending.presetName;
+                    note.className="printer-switch-note";
+                    note.innerText = method === "activate_anycubic_printer" ? "Active printer updated" : "Device connected";
+                    setTimeout(() => { if (note.innerText === "Active printer updated" || note.innerText === "Device connected") note.innerText = ""; }, 1800);
+                }
+                document.querySelectorAll(".printer-list-item,.printer-make-active").forEach(button => button.disabled = false);
+                setDeviceControlsDisabled(false);
+                requestPrinterList();
+                pendingPrinterRequests.delete(message.id || message.sequence_id);
+            }
+        }
+
+        window.addEventListener("message", event => handlePrinterMessage(event.data));
+        window.__orcacubicHandlePrinterMessage = handlePrinterMessage;
+
+
+        // --- 35 Anycubic Swatches Palette ---
+        const ANYCUBIC_SWATCHES = [
+            // Row 1
+            "#111827", "#FFFFFF", "#FAF0E6", "#D1D5DB", "#75787B", "#4B5563", "transparent",
+            // Row 2
+            "#EF4444", "#E11D48", "#EC4899", "#FF8DA1", "#FDBA74", "#F97316", "#F59E0B",
+            // Row 3
+            "#FDDB27", "#FACC15", "#854D0E", "#D97706", "#FDE68A", "#009639", "#4D7C0F",
+            // Row 4
+            "#65A30D", "#84CC16", "#1E3A8A", "#2563EB", "#6366F1", "#23A3C7", "#7DD3FC",
+            // Row 5
+            "#9333EA", "#8B5CF6", "#C084FC", "#F43F5E", "#06B6D4", "#10B981", "#14B8A6"
+        ];
+
+        function initSwatchGrid() {
+            const container = document.getElementById("swatch-grid-7x5");
+            if (!container) return;
+            container.innerHTML = "";
+            ANYCUBIC_SWATCHES.forEach(color => {
+                const btn = document.createElement("button");
+                btn.className = "color-swatch-circle";
+                btn.dataset.color = color;
+                if (color === "transparent") {
+                    btn.style.background = "repeating-conic-gradient(#808080 0% 25%, #fff 0% 50%) 50% / 8px 8px";
+                    btn.title = "Transparent / Natural";
+                } else {
+                    btn.style.background = color;
+                    btn.title = color;
+                }
+                btn.onclick = () => setCustomSolid(color === "transparent" ? "#e5e7eb" : color);
+                container.appendChild(btn);
+            });
+            if (selectedFinishType === "gradient") {
+                const btn=document.createElement("button"); btn.className="color-swatch-circle gradient"; btn.title="Current gradient"; btn.onclick=()=>switchFinishTab("gradient"); container.appendChild(btn);
+            } else if (selectedFinishType === "luminous") {
+                const btn=document.createElement("button"); btn.className="color-swatch-circle luminous"; btn.title="Current luminous pair"; btn.onclick=()=>switchFinishTab("luminous"); container.appendChild(btn);
+            }
+            markSelectedSwatch();
+        }
+
+        function markSelectedSwatch() {
+            document.querySelectorAll(".color-swatch-circle").forEach(c => {
+                const selected = selectedFinishType === "solid" && c.dataset.color && c.dataset.color.toLowerCase() === String(selectedModalColor).toLowerCase();
+                c.classList.toggle("selected", !!selected);
+            });
+        }
+
+        function pickModalColor(hex) {
+            selectedModalColor = hex;
+            const wound = document.getElementById("spool-wound-fill");
+            if (wound) {
+                if (selectedFinishType === "gradient" && selectedColorGroup.length >= 2) {
+                    wound.setAttribute("fill", selectedColorGroup[0]);
+                    wound.setAttribute("fill-opacity", "1");
+                } else if (selectedFinishType === "luminous" && selectedColorGroup.length >= 2) {
+                    wound.setAttribute("fill", selectedColorGroup[0]);
+                    wound.setAttribute("fill-opacity", "1");
+                } else {
+                    wound.setAttribute("fill", hex === "transparent" ? "#e5e7eb" : hex);
+                    if (hex === "transparent") wound.setAttribute("fill-opacity", "0.35"); else wound.removeAttribute("fill-opacity");
+                }
+            }
+            const label = selectedFinishType === "gradient" ? "Gradient: " + selectedColorGroup.join(" → ") : selectedFinishType === "luminous" ? "Luminous: " + selectedColorGroup.join(" / ") : String(hex).toUpperCase();
+            const hexEl = document.getElementById("modal-spool-hex");
+            if (hexEl) hexEl.innerText = label;
+            const colorHexEl = document.getElementById("modal-color-hex");
+            if (colorHexEl) colorHexEl.innerText = String(hex).toUpperCase();
+            const picker = document.getElementById("modal-slot-color");
+            if (picker && /^#[0-9a-f]{6}$/i.test(hex)) picker.value = hex;
+            markSelectedSwatch();
+        }
+
+        function onModalTypeChange(type) {
+            const el = document.getElementById("modal-spool-type");
+            if (el) el.innerText = type;
+        }
+
+        function switchFinishTab(tab) {
+            document.querySelectorAll(".finish-tab").forEach(t => {
+                t.style.borderLeft = "3px solid transparent";
+                t.style.color = "#6b7280";
+            });
+            const active = document.getElementById("tab-" + tab);
+            if (active) {
+                active.style.borderLeft = "3px solid #2563eb";
+                active.style.color = "#fff";
+            }
+        }
+
+        function setAxisStep(step, el) {
+            jogStep = step;
+            document.querySelectorAll(".axis-steps button, .axis-step-btn").forEach(b => {
+                b.classList.remove("active");
+                b.style.background = "";
+                b.style.color = "";
+                b.style.fontWeight = "";
+            });
+            if (el) {
+                el.classList.add("active");
+            }
+        }
+
+        async function homeXY() {
+            try {
+                await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "home", axis: "XY" })
+                });
+            } catch(e) {}
+        }
+
+        async function homeZ() {
+            try {
+                await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "home", axis: "Z" })
+                });
+            } catch(e) {}
+        }
+
+        let activeFeedOperation = null;
+        let feedTimeoutTimer = null;
+
+        function openFeedProgress(type, slotIndex) {
+            closeSlotEditModal();
+            activeFeedOperation = { type, slotIndex, status: 1, error: "" };
+            document.getElementById("feed-progress-title").innerText = type === 1 ? "Feed" : "Unfeed";
+            document.getElementById("feed-progress-modal").style.display = "flex";
+            renderFeedProgress();
+            if (feedTimeoutTimer) clearTimeout(feedTimeoutTimer);
+            feedTimeoutTimer = setTimeout(() => {
+                if (activeFeedOperation && activeFeedOperation.status === 1 && !activeFeedOperation.error) {
+                    activeFeedOperation.error = "Printer did not initiate " + (activeFeedOperation.type === 1 ? "feed" : "unfeed") + ". Check printer touchscreen and verify filament is inserted in Slot " + (activeFeedOperation.slotIndex + 1) + ".";
+                    renderFeedProgress();
+                }
+            }, 12000);
+        }
+
+        function closeFeedProgress() {
+            if (feedTimeoutTimer) { clearTimeout(feedTimeoutTimer); feedTimeoutTimer = null; }
+            activeFeedOperation = null;
+            document.getElementById("feed-progress-modal").style.display = "none";
+        }
+
+        function renderFeedProgress() {
+            if (!activeFeedOperation) return;
+            const status = Number(activeFeedOperation.status) || 1;
+            const labels = activeFeedOperation.type === 1
+                ? [[1,"Preheat"],[2,"Retracting"],[3,"Feeding"],[10,"Loading Complete"]]
+                : [[1,"Preheat"],[2,"Retracting"],[10,"Unloading Complete"]];
+            const complete = status >= 10;
+            document.getElementById("feed-progress-steps").innerHTML = labels.map(([step,label], index) => {
+                const done = complete || status > step;
+                const active = !complete && status === step;
+                const mark = done ? "✓" : String(index + 1);
+                return `<div style="display:flex;align-items:center;gap:12px;color:${done||active?'#fff':'#6b7280'}"><span style="display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:${done?'#2563eb':active?'#1677ff':'#252831'};font-weight:700">${mark}</span><b>${label}</b></div>`;
+            }).join("");
+            const error = document.getElementById("feed-progress-error");
+            error.innerText = activeFeedOperation.error || "";
+            error.style.display = activeFeedOperation.error ? "block" : "none";
+        }
+
+        function updateFeedProgress(feedStatus) {
+            if (!feedStatus || !activeFeedOperation) return;
+            const reportedSlot = Number(feedStatus.slot_index);
+            const current = filaments[activeFeedOperation.slotIndex] || {};
+            if (feedStatus.box_id != null && Number(feedStatus.box_id) !== Number(current.box_id ?? -1)) return;
+            if (reportedSlot >= 0 && reportedSlot !== Number(current.box_slot ?? activeFeedOperation.slotIndex)) return;
+            const reportedType = Number(feedStatus.type);
+            if (reportedType === 1 || reportedType === 2) activeFeedOperation.type = reportedType;
+            activeFeedOperation.status = Number(feedStatus.current_status) || activeFeedOperation.status;
+            const code = Number(feedStatus.code) || 0;
+            if (code >= 10000) {
+                activeFeedOperation.error = "Printer reported error " + code;
+            } else if (activeFeedOperation.status > 1 && feedTimeoutTimer) {
+                clearTimeout(feedTimeoutTimer);
+                feedTimeoutTimer = null;
+            }
+            renderFeedProgress();
+        }
+
+        async function sendFeedCommand(action, type) {
+            const current = filaments[currentEditingSlot] || {};
+            if (current.source === "external") {
+                alert("Load or unload an external spool manually at the printer");
+                return;
+            }
+            const hasFilament = current.available !== false && (current.status === undefined || current.status !== 4);
+            if (type === 1 && !hasFilament) {
+                alert("Cannot feed: Slot " + (Number(current.box_slot ?? currentEditingSlot) + 1) + " has no filament inserted. Please insert filament into the ACE slot before feeding.");
+                return;
+            }
+            openFeedProgress(type, currentEditingSlot);
+            const response = await fetch("http://127.0.0.1:18988/control", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action, box_id:Number(current.box_id ?? -1), slot:Number(current.box_slot ?? currentEditingSlot), type: document.getElementById("modal-slot-type").value })
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || result.status !== "ok") {
+                if (activeFeedOperation) {
+                    activeFeedOperation.error = result.message || "Printer bridge rejected the command";
+                    renderFeedProgress();
+                }
+                throw new Error(result.message || "Printer bridge rejected the command");
+            }
+        }
+
+        async function feedCurrentSlot() {
+            try {
+                await sendFeedCommand("feed_filament", 1);
+            } catch(e) {
+                if (activeFeedOperation) { activeFeedOperation.error = "Feed failed: " + e.message; renderFeedProgress(); }
+            }
+        }
+
+        async function unfeedCurrentSlot() {
+            try {
+                await sendFeedCommand("unfeed_filament", 2);
+            } catch(e) {
+                if (activeFeedOperation) { activeFeedOperation.error = "Unfeed failed: " + e.message; renderFeedProgress(); }
+            }
+        }
+
+        function setBuildplateType(val) {
+            localStorage.setItem("anycubic_buildplate", val);
+            const status = document.getElementById("device-info-status");
+            if (status) {
+                status.innerText = "Buildplate set to " + val;
+                status.style.display = "block";
+                setTimeout(() => status.style.display = "none", 2500);
+            }
+        }
+
+        function setNozzleType(val) {
+            localStorage.setItem("anycubic_nozzle", val);
+            const status = document.getElementById("device-info-status");
+            if (status) {
+                status.innerText = "Nozzle set to " + val;
+                status.style.display = "block";
+                setTimeout(() => status.style.display = "none", 2500);
+            }
+        }
+
+        function copyCN() {
+            const button = document.getElementById("device-cn");
+            const cn = button ? button.dataset.cn || "" : "";
+            if (!cn) return;
+            navigator.clipboard.writeText(cn);
+            alert("CN Code copied to clipboard: " + cn);
+        }
+
+        let printerIP = "";
+        let materialBoxes = [];
+        let activeMaterialBoxKey = "";
+        let filaments = [];
+        let currentSpeedMode = 2;
+        let lightStatus = 1;
+        let jogStep = 10;
+        let currentPrinterState = "idle";
+        let flvPlayer = null;
+        let activeCameraUrl = "";
+        let alertDismissed = false;
+        let lastSeenAlert = "";
+
+        async function dismissAlert() {
+            alertDismissed = true;
+            document.getElementById("printer-alert-banner").style.display = "none";
+            try {
+                await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "clear_alert" })
+                });
+            } catch(e) {}
+        }
+
+        let isCameraStreaming = false;
+        // Camera is opt-in. Loading/reloading the Device tab must never start it.
+        let userStoppedCamera = true;
+
+        async function toggleCameraStream() {
+            if (isCameraStreaming) {
+                await stopCameraStream();
+            } else {
+                await startCameraStream();
+            }
+        }
+
+        async function startCameraStream() {
+            userStoppedCamera = false;
+            const btn = document.getElementById("btn-cam-stream");
+            if (btn) btn.innerText = "⏳ Connecting...";
+            const tag = document.getElementById("camera-status-tag");
+            if (tag) tag.innerText = "Connecting";
+            try {
+                await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "start_capture" })
+                });
+            } catch(e) {}
+            setTimeout(() => {
+                if (!userStoppedCamera) {
+                    initFlvVideo(activeCameraUrl);
+                }
+            }, 800);
+        }
+
+        async function stopCameraStream() {
+            userStoppedCamera = true;
+            isCameraStreaming = false;
+            const btn = document.getElementById("btn-cam-stream");
+            if (btn) {
+                btn.innerText = "▶ Start Stream";
+                btn.classList.remove("btn-danger");
+            }
+            const tag = document.getElementById("camera-status-tag");
+            if (tag) tag.innerText = "Stopped";
+            if (flvPlayer) {
+                try {
+                    flvPlayer.pause();
+                    flvPlayer.unload();
+                    flvPlayer.detachMediaElement();
+                    flvPlayer.destroy();
+                } catch(e) {}
+                flvPlayer = null;
+            }
+            const videoElement = document.getElementById("cam-video");
+            if (videoElement) {
+                videoElement.style.display = "none";
+            }
+            document.getElementById("cam-placeholder").style.display = "flex";
+
+            try {
+                await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "stop_capture" })
+                });
+            } catch(e) {}
+        }
+
+        function initFlvVideo(url) {
+            if (userStoppedCamera) return;
+            if (!url) return;
+            activeCameraUrl = url;
+            const videoElement = document.getElementById("cam-video");
+            if (!videoElement) return;
+
+            if (typeof flvjs !== "undefined" && flvjs.isSupported()) {
+                if (flvPlayer) {
+                    try {
+                        flvPlayer.pause();
+                        flvPlayer.unload();
+                        flvPlayer.detachMediaElement();
+                        flvPlayer.destroy();
+                    } catch(e) {}
+                    flvPlayer = null;
+                }
+                try {
+                    flvPlayer = flvjs.createPlayer({
+                        type: "flv",
+                        isLive: true,
+                        url: url,
+                        cors: true,
+                        hasAudio: false
+                    }, {
+                        enableWorker: false,
+                        enableStashBuffer: false,
+                        reuseRedirectedURL: true,
+                        autoCleanupSourceBuffer: true,
+                        stashInitialSize: 128
+                    });
+                    flvPlayer.attachMediaElement(videoElement);
+                    flvPlayer.load();
+                    flvPlayer.play().then(() => {
+                        document.getElementById("cam-placeholder").style.display = "none";
+                        videoElement.style.display = "block";
+                        isCameraStreaming = true;
+                        const btn = document.getElementById("btn-cam-stream");
+                        if (btn) {
+                            btn.innerText = "⏹ Stop Stream";
+                            btn.classList.add("btn-danger");
+                        }
+                        const tag = document.getElementById("camera-status-tag");
+                        if (tag) tag.innerText = "Live";
+                    }).catch(e => {
+                        console.log("Play catch:", e);
+                        isCameraStreaming = false;
+                        const btn = document.getElementById("btn-cam-stream");
+                        if (btn) {
+                            btn.innerText = "▶ Start Stream";
+                            btn.classList.remove("btn-danger");
+                        }
+                        const tag = document.getElementById("camera-status-tag");
+                        if (tag) tag.innerText = "Stopped";
+                    });
+
+                    flvPlayer.on(flvjs.Events.ERROR, (errType, errDetail, errInfo) => {
+                        console.warn("FLV Error:", errType, errDetail, errInfo);
+                        isCameraStreaming = false;
+                        const btn = document.getElementById("btn-cam-stream");
+                        if (btn) {
+                            btn.innerText = "▶ Start Stream";
+                            btn.classList.remove("btn-danger");
+                        }
+                        const tag = document.getElementById("camera-status-tag");
+                        if (tag) tag.innerText = "Stopped";
+                    });
+                } catch(e) {
+                    console.error("Failed to init flv player:", e);
+                }
+            } else {
+                console.warn("flvjs not supported");
+            }
+        }
+
+        function openCamFull() {
+            window.open(activeCameraUrl, "_blank");
+        }
+
+        function updateLightUI(status) {
+            lightStatus = Number(status) === 1 ? 1 : 0;
+            const isOn = lightStatus === 1;
+            const btnLight = document.getElementById("btn-light");
+            const controlState = document.getElementById("control-light-state");
+            const controlSwitch = document.getElementById("control-light-switch");
+            if (btnLight) btnLight.innerText = isOn ? "Light On" : "Light Off";
+            if (controlState) controlState.innerText = isOn ? "On" : "Off";
+            if (controlSwitch) {
+                controlSwitch.classList.toggle("on", isOn);
+                controlSwitch.setAttribute("aria-checked", isOn ? "true" : "false");
+            }
+        }
+
+        async function toggleLight() {
+            const previousStatus = Number(lightStatus) === 1 ? 1 : 0;
+            const nextStatus = previousStatus === 1 ? 0 : 1;
+            updateLightUI(nextStatus);
+            try {
+                const response = await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "light", status: nextStatus })
+                });
+                const data = await response.json();
+                if (!response.ok || data.status !== "ok") throw new Error(data.message || "Light update failed");
+            } catch(e) {
+                updateLightUI(previousStatus);
+                console.error("Error toggling light:", e);
+            }
+        }
+
+        async function setSpeed(mode) {
+            currentSpeedMode = mode;
+            const speedLabels = {1:"Quiet",2:"Standard",3:"Sport",4:"Ludicrous"};
+            const speedValue = document.getElementById("control-speed-value");
+            if (speedValue) speedValue.innerText = speedLabels[mode] || "Standard";
+            try {
+                const response = await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "speed", mode: mode })
+                });
+                const data = await response.json();
+                if (data.status !== "ok") throw new Error(data.message || "Speed update failed");
+            } catch(e) {
+                console.error("Speed error:", e);
+                throw e;
+            }
+        }
+
+        function setJogStep(step, el) {
+            jogStep = step;
+            document.querySelectorAll(".jog-step-chip").forEach(c => c.classList.remove("active"));
+            if (el) el.classList.add("active");
+        }
+
+        async function jog(axis, dir) {
+            if (currentPrinterState === "printing" || currentPrinterState === "busy") {
+                alert("Cannot jog axes while a print is actively running.");
+                return;
+            }
+            try {
+                const res = await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "jog", axis: axis, dir: dir, dist: jogStep })
+                });
+            } catch(e) {
+                console.error("Jog error:", e);
+            }
+        }
+
+        async function homeAll() {
+            if (currentPrinterState === "printing" || currentPrinterState === "busy") {
+                alert("Cannot home axes while a print is actively running.");
+                return;
+            }
+            if (confirm("Home all axes (XYZ)?")) {
+                try {
+                    await fetch("http://127.0.0.1:18988/control", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ action: "home", axis: "XYZ" })
+                    });
+                } catch(e) {
+                    console.error("Home error:", e);
+                }
+            }
+        }
+
+        async function motorOff() {
+            try {
+                await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "motor_off" })
+                });
+            } catch(e) {}
+        }
+
+        async function runGcodeDirect(gcode, label = "Command") {
+            const statusEl = document.getElementById("gcode-status");
+            if (statusEl) statusEl.innerText = `Executing ${label}...`;
+            try {
+                const res = await fetch("http://127.0.0.1:18988/run_gcode", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ gcode: gcode, delete_after: true })
+                });
+                const data = await res.json();
+                if (data.status === "ok") {
+                    if (statusEl) statusEl.innerText = `✓ ${label} sent (${data.filename})`;
+                } else {
+                    if (statusEl) statusEl.innerText = `Error: ${data.message || 'failed'}`;
+                }
+            } catch(e) {
+                if (statusEl) statusEl.innerText = `Network error: ${e.message}`;
+            }
+        }
+
+        async function runGcodeFile() {
+            const text = document.getElementById("gcode-input").value.trim();
+            if (!text) {
+                alert("Please enter G-code commands.");
+                return;
+            }
+            const delAfter = document.getElementById("chk-delete-after").checked;
+            await runGcodeDirect(text, "Run G-code file");
+        }
+
+        function clearGcode() {
+            document.getElementById("gcode-input").value = "";
+            document.getElementById("gcode-status").innerText = "";
+        }
+
+        // 512 MiB cap, matching the bridge daemon's MAX_UPLOAD_FILE_BYTES.
+        const MAX_PRINT_FILE_BYTES = 512 * 1024 * 1024;
+
+        function bytesToBase64(bytes) {
+            let binary = "";
+            const chunk = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunk) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+            }
+            return btoa(binary);
+        }
+
+        async function uploadPickedPrintFile(input) {
+            const statusEl = document.getElementById("print-file-status");
+            const file = input.files && input.files[0];
+            input.value = ""; // allow re-picking the same file later
+            if (!file) return;
+            const name = file.name || "";
+            if (!/\.(gcode|3mf)$/i.test(name)) {
+                if (statusEl) statusEl.innerText = "Error: pick a .gcode or .3mf file.";
+                return;
+            }
+            if (file.size > MAX_PRINT_FILE_BYTES) {
+                if (statusEl) statusEl.innerText = "Error: file is larger than 512 MB.";
+                return;
+            }
+            if (statusEl) statusEl.innerText = `Reading ${name} (${(file.size / 1048576).toFixed(1)} MB)...`;
+            try {
+                const contentBase64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+                if (statusEl) statusEl.innerText = `Uploading ${name} to printer...`;
+                const res = await fetch("http://127.0.0.1:18988/upload_print_file", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ filename: name, content_base64: contentBase64, use_ams: true })
+                });
+                const data = await res.json();
+                if (data.status === "ok") {
+                    if (statusEl) statusEl.innerText = `✓ ${data.filename} uploaded — print started (${(data.filesize / 1048576).toFixed(1)} MB).`;
+                } else {
+                    if (statusEl) statusEl.innerText = `Error: ${data.message || "upload failed"}`;
+                }
+            } catch(e) {
+                if (statusEl) statusEl.innerText = `Network error: ${e.message}`;
+            }
+        }
+
+        function sendToSlicer(command, data, requestId = "") {
+            const body = { command: command, data: data };
+            if (requestId) {
+                body.id = requestId;
+                body.sequence_id = requestId;
+            }
+            const payload = JSON.stringify(body);
+            if (window.wx && typeof window.wx.postMessage === 'function') {
+                window.wx.postMessage(payload);
+            } else if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.wx) {
+                window.webkit.messageHandlers.wx.postMessage(payload);
+            } else if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === 'function') {
+                window.chrome.webview.postMessage(payload);
+            } else if (BROWSER_TEST_MODE) {
+                mockSlicerMessage(body);
+            }
+        }
+
+        function syncFilamentsToSlicer() {
+            const available = materialBoxes.flatMap(box => box.slots || []).filter(slot => slot.available !== false);
+            sendToSlicer("sync_filaments_to_slicer", available.length ? available : filaments);
+            alert("Filament profiles pushed to OrcaSlicer!");
+        }
+
+        function activeMaterialBox() {
+            return materialBoxes.find(box => String(box.id) + ":" + box.source === activeMaterialBoxKey) || materialBoxes[0] || null;
+        }
+
+        function materialBoxLabel(box, index) {
+            if (box.source === "external") return "External";
+            if (box.source === "rack" || box.source === "external_mcb") return "Filaments";
+            return `ACE ${Number(box.id) + 1 || index + 1}`;
+        }
+
+        function materialBoxKey(box) {
+            return String(box.id) + ":" + box.source;
+        }
+
+        function mergeMaterialBoxes(boxes) {
+            const next = [...materialBoxes];
+            (Array.isArray(boxes) ? boxes : []).forEach(box => {
+                if (!box || !Array.isArray(box.slots)) return;
+                const index = next.findIndex(current => materialBoxKey(current) === materialBoxKey(box));
+                if (index < 0) next.push(box);
+                else {
+                    const bySlot = new Map((next[index].slots || []).map(slot => [Number(slot.box_slot ?? slot.slot), slot]));
+                    box.slots.forEach(slot => {
+                        const key = Number(slot.box_slot ?? slot.slot);
+                        bySlot.set(key, {...(bySlot.get(key) || {}),...slot});
+                    });
+                    next[index] = {...next[index],...box,slots:[...bySlot.values()].sort((a,b)=>Number(a.box_slot??a.slot)-Number(b.box_slot??b.slot))};
+                }
+            });
+            return next;
+        }
+
+        function selectMaterialBox(key) {
+            activeMaterialBoxKey = key;
+            renderMaterialBoxes();
+        }
+
+        function updateMaterialBoxes(boxes, fallbackFilaments = []) {
+            materialBoxes = mergeMaterialBoxes(boxes);
+            if (!materialBoxes.length && fallbackFilaments.length) {
+                materialBoxes = [{id:-1,source:"rack",slots:fallbackFilaments}];
+            }
+            if (!materialBoxes.some(box => String(box.id) + ":" + box.source === activeMaterialBoxKey)) {
+                const first = materialBoxes[0];
+                activeMaterialBoxKey = first ? String(first.id) + ":" + first.source : "";
+            }
+            renderMaterialBoxes();
+        }
+
+        function renderMaterialBoxes() {
+            const tabs = document.getElementById("material-box-tabs");
+            if (tabs) {
+                tabs.innerHTML = "";
+                if (materialBoxes.length > 1) {
+                    tabs.style.display = "flex";
+                    materialBoxes.forEach((box, index) => {
+                        const key = String(box.id) + ":" + box.source;
+                        const button = document.createElement("button");
+                        button.className = "material-box-tab" + (key === activeMaterialBoxKey ? " active" : "");
+                        button.innerText = materialBoxLabel(box, index);
+                        button.onclick = () => selectMaterialBox(key);
+                        tabs.appendChild(button);
+                    });
+                } else {
+                    tabs.style.display = "none";
+                }
+            }
+            const box = activeMaterialBox();
+            updateFilamentUI(box ? box.slots || [] : []);
+        }
+
+        async function syncFromSlicerToPrinter() {
+            sendToSlicer("request_plate_filaments_to_printer", {});
+            await new Promise(r => setTimeout(r, 250));
+
+            let slicerFilaments = window.orcacubic_filaments;
+            if (!slicerFilaments || slicerFilaments.length === 0) {
+                alert("No active plate filaments found in Slicer. Please select filaments on the Prepare tab first.");
+                return;
+            }
+
+            let slots = [];
+            const targetBox = activeMaterialBox();
+            const targetSource = targetBox ? targetBox.source : "ace";
+            const targetBoxId = targetBox ? Number(targetBox.id) : -1;
+            const targetSlots = targetBox && Array.isArray(targetBox.slots) ? targetBox.slots : [];
+            slicerFilaments.forEach((f, idx) => {
+                const target = targetSlots[idx] || {};
+                slots.push({
+                    index: Number(target.box_slot ?? idx),
+                    box_id: targetBoxId,
+                    source: targetSource,
+                    type: f.type || f.material || "PLA",
+                    color: f.color || "#00d2ff"
+                });
+            });
+
+            try {
+                const res = await fetch("http://127.0.0.1:18988/sync_to_printer", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ slots: slots })
+                });
+                const data = await res.json();
+                if (data.status === "ok") {
+                    alert("Filament profiles imported from Slicer into Kobra X ACE Pro successfully!");
+                    refreshStatus();
+                } else {
+                    alert("Error syncing to printer: " + (data.message || "failed"));
+                }
+            } catch(e) {
+                alert("Failed to send profiles to printer: " + e.message);
+            }
+        }
+
+        async function sendControl(action) {
+            if (action === "stop") {
+                if (!confirm("Are you sure you want to CANCEL this print job?")) return;
+            }
+            try {
+                await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: action })
+                });
+            } catch(e) {}
+        }
+
+        // --- Custom Temperature Setting ---
+        async function promptSetTemp(heater) {
+            const isNozzle = heater === 'nozzle';
+            const curTarget = isNozzle ?
+                (document.getElementById("target-nozzle").innerText || "0") :
+                (document.getElementById("target-bed").innerText || "0");
+            const promptMsg = isNozzle ?
+                "Enter target Nozzle temperature in °C (0 to 300):" :
+                "Enter target Heatbed temperature in °C (0 to 110):";
+            const input = prompt(promptMsg, curTarget);
+            if (input === null) return;
+            const val = parseInt(input.trim(), 10);
+            if (isNaN(val) || val < 0 || (isNozzle && val > 300) || (!isNozzle && val > 120)) {
+                alert("Invalid temperature. Please enter a valid number (0 - " + (isNozzle ? "300" : "120") + "°C).");
+                return;
+            }
+            await setTargetTemp(heater, val);
+        }
+
+        async function setTargetTemp(heater, val) {
+            try {
+                await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "temp", heater: heater, value: val })
+                });
+                if (heater === 'nozzle') {
+                    document.getElementById("target-nozzle").innerText = val;
+                } else {
+                    document.getElementById("target-bed").innerText = val;
+                }
+            } catch(e) {
+                alert("Failed to set temperature: " + e.message);
+            }
+        }
+
+        async function preheat(nozzle, bed) {
+            document.getElementById("target-nozzle").innerText = nozzle;
+            document.getElementById("target-bed").innerText = bed;
+            await setTargetTemp('nozzle', nozzle);
+            await setTargetTemp('bed', bed);
+        }
+
+        // --- Extrusion Controls ---
+        let extrudeDistance = 10;
+
+        function setExtrudeDist(dist, el) {
+            extrudeDistance = dist;
+            document.querySelectorAll(".extrusion-box .jog-step-chip").forEach(c => c.classList.remove("active"));
+            if (el) el.classList.add("active");
+        }
+
+        async function extrudeFilament(dir) {
+            const curNozzle = parseFloat(document.getElementById("cur-nozzle").innerText) || 0;
+            if (curNozzle < 170) {
+                if (confirm("Current nozzle temperature (" + Math.round(curNozzle) + "°C) is below 170°C.\nExtrusion requires a heated nozzle to prevent motor stall.\n\nHeat nozzle to 210°C now?")) {
+                    await setTargetTemp('nozzle', 210);
+                    alert("Preheating nozzle to 210°C started. Click " + (dir === 'extrude' ? 'Extrude' : 'Retract') + " once hot.");
+                }
+                return;
+            }
+            const statusEl = document.getElementById("extrude-status");
+            if (statusEl) statusEl.innerText = "⏳ Extruding " + extrudeDistance + "mm (" + dir + ")...";
+            try {
+                const res = await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "extrude", dir: dir, dist: extrudeDistance })
+                });
+                const data = await res.json();
+                if (data.status === "ok") {
+                    if (statusEl) statusEl.innerText = "✅ " + (dir === 'extrude' ? 'Extruded' : 'Retracted') + " " + extrudeDistance + "mm successfully.";
+                    setTimeout(() => { if (statusEl) statusEl.innerText = "Requires heated nozzle (≥ 170°C)."; }, 4000);
+                } else {
+                    if (statusEl) statusEl.innerText = "⚠️ Extrude error: " + (data.message || "failed");
+                }
+            } catch(e) {
+                if (statusEl) statusEl.innerText = "❌ Extrude failed: " + e.message;
+            }
+        }
+
+        // --- Slot Edit Modal State ---
+        let currentEditingSlot = 0;
+        let selectedModalColor = "#23a3c7";
+
+        function closeSlotEditModal() {
+            document.getElementById("slot-modal").style.display = "none";
+        }
+
+        function refreshStatus() {
+            pollTelemetry();
+        }
+
+        function updateFilamentUI(newFilaments) {
+            filaments = newFilaments;
+            const container = document.getElementById("slots-container");
+            container.innerHTML = "";
+            if (!newFilaments.length) {
+                container.innerHTML = '<div class="material-box-empty">No material unit reported. OrcaCubic queries ACE and external spool data directly; KX-Bridge is not required.</div>';
+                return;
+            }
+            newFilaments.forEach((f, idx) => {
+                const div = document.createElement("div");
+                div.className = "slot-card" + (f.loaded ? " active" : "");
+                div.id = "slot-" + idx;
+                div.title = "Click to edit material and color";
+                div.onclick = () => openSlotEditModal(idx);
+                let colorStyle = f.color || '#00d2ff';
+                const group = Array.isArray(f.color_group_hex) ? f.color_group_hex : [];
+                if (f.finish_type === 'gradient' && group.length >= 2) {
+                    colorStyle = `linear-gradient(${Number(f.icon_type) === 2 ? '90deg' : '180deg'}, ${group.join(',')})`;
+                } else if (f.finish_type === 'luminous' && group.length >= 2) {
+                    colorStyle = `linear-gradient(90deg, ${group[0]} 0 50%, ${group[1]} 50% 100%)`;
+                }
+
+                const savedBrand = localStorage.getItem("orcacubic_brand_" + idx);
+                let brandText = savedBrand || f.brand || "Anycubic";
+                if (brandText.toLowerCase() === "custom") brandText = "Custom";
+                else if (brandText.toLowerCase() === "generic") brandText = "Generic";
+                else if (brandText.toLowerCase() === "anycubic") brandText = "Anycubic";
+
+                div.innerHTML = `
+                    <span class="slot-badge">${f.source === 'external' ? 'EXT' : Number(f.box_slot ?? idx) + 1}</span>
+                    <div class="slot-color-circle" style="background: ${colorStyle};"></div>
+                    <div class="slot-brand" style="font-size: 11px; color: #f59e0b; margin-top: 3px; max-width: 68px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;">${brandText}</div>
+                    <div class="slot-material" style="font-weight: 700; font-size: 13px; line-height: 1.1;">${f.type || 'PLA'}</div>
+                    <div class="slot-edit-hint">Edit</div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        function updateTelemetryUI(data) {
+            if (data.nozzle_temp !== undefined) {
+                document.getElementById("cur-nozzle").innerText = Math.round(data.nozzle_temp);
+            }
+            if (data.target_nozzle_temp !== undefined && data.target_nozzle_temp > 0) {
+                document.getElementById("target-nozzle").innerText = Math.round(data.target_nozzle_temp);
+            }
+            if (data.bed_temp !== undefined) {
+                document.getElementById("cur-bed").innerText = Math.round(data.bed_temp);
+            }
+            if (data.target_bed_temp !== undefined && data.target_bed_temp > 0) {
+                document.getElementById("target-bed").innerText = Math.round(data.target_bed_temp);
+            }
+
+            // Printer status and control button states
+            const state = (data.state || data.print_state || "free").toLowerCase();
+            currentPrinterState = state;
+            document.getElementById("print-state").innerText = data.state || data.print_state || "Ready";
+
+            const isPrinting = (state === "printing" || state === "busy");
+            const isPaused = (state === "paused");
+            const hasActiveJob = (isPrinting || isPaused);
+
+            // Active Print Job controls: disabled when there is no active job
+            const btnPause = document.getElementById("btn-pause");
+            const btnResume = document.getElementById("btn-resume");
+            const btnStop = document.getElementById("btn-stop");
+
+            if (btnPause) btnPause.disabled = !isPrinting;
+            if (btnResume) btnResume.disabled = !isPaused;
+            if (btnStop) btnStop.disabled = !hasActiveJob;
+
+            // Lock every Axis Move action (steps, home/release, XYZ and extruder) while a job is active.
+            const axisCard = document.getElementById("card-axis-move");
+            if (axisCard) {
+                axisCard.classList.toggle("axis-locked", hasActiveJob);
+                axisCard.querySelectorAll("button").forEach(btn => {
+                    btn.disabled = hasActiveJob;
+                    btn.setAttribute("aria-disabled", hasActiveJob ? "true" : "false");
+                });
+            }
+
+            const hintEl = document.getElementById("jog-hint");
+            if (data.axis_error) {
+                hintEl.innerText = "⚠️ " + data.axis_error;
+                hintEl.style.color = "#f87171";
+            } else if (isPrinting) {
+                hintEl.innerText = "⚠️ Jogging locked during active print.";
+                hintEl.style.color = "var(--text-dim)";
+            } else {
+                hintEl.innerText = "Jogging ready. (Click 🏠 Home first if motors were reset).";
+                hintEl.style.color = "var(--text-dim)";
+            }
+            if (data.progress !== undefined) {
+                document.getElementById("job-pct").innerText = Math.round(data.progress) + "%";
+                document.getElementById("job-progress-fill").style.width = data.progress + "%";
+            }
+            if (data.job_name) {
+                document.getElementById("job-name").innerText = data.job_name;
+            }
+            if (data.curr_layer !== undefined && data.total_layers !== undefined) {
+                document.getElementById("stat-layer").innerText = data.curr_layer + " / " + data.total_layers;
+            }
+            if (data.print_time !== undefined) {
+                document.getElementById("stat-elapsed").innerText = data.print_time + "m";
+            }
+            if (data.remain_time !== undefined) {
+                document.getElementById("stat-remaining").innerText = data.remain_time + "m";
+            }
+            const actionEl = document.getElementById("stat-action");
+            if (actionEl) {
+                const rawState = String(data.state || data.print_state || "free").toLowerCase();
+                const ACTION_NAMES = {
+                    "free": "Idle",
+                    "ready": "Ready",
+                    "printing": "Printing",
+                    "paused": "Paused",
+                    "busy": "Busy",
+                    "heating": "Heating",
+                    "nozzle_heating": "Heating Nozzle",
+                    "bed_heating": "Heating Bed",
+                    "homing": "Homing",
+                    "auto_leveling": "Auto Leveling",
+                    "z_offset_calibrating": "Z-Offset Calibrating",
+                    "nozzle_purging": "Purging",
+                    "nozzle_wiping": "Wiping",
+                    "nozzle_cooling": "Cooling Nozzle",
+                    "completed": "Completed",
+                    "finish": "Finished",
+                    "stopping": "Stopping",
+                    "abnormal": "Error"
+                };
+                let label = ACTION_NAMES[rawState];
+                if (!label) {
+                    label = rawState.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                }
+                actionEl.innerText = label;
+                if (rawState === "nozzle_purging" || rawState === "nozzle_wiping" || rawState.includes("heating") || rawState === "auto_leveling" || rawState.includes("calibrat")) {
+                    actionEl.style.color = "#f59e0b"; // warm amber during calibration/purging/heating
+                } else if (rawState === "printing") {
+                    actionEl.style.color = "#1677ff";
+                } else if (rawState === "paused") {
+                    actionEl.style.color = "#eab308";
+                } else if (rawState === "free" || rawState === "ready") {
+                    actionEl.style.color = "#45d483";
+                } else {
+                    actionEl.style.color = "#f4f5f7";
+                }
+            }
+            if (data.speed_mode !== undefined) {
+                currentSpeedMode = Number(data.speed_mode) || 2;
+                const speedLabels = {1:"Quiet",2:"Standard",3:"Sport",4:"Ludicrous"};
+                const speedValue = document.getElementById("control-speed-value");
+                if (speedValue) speedValue.innerText = speedLabels[currentSpeedMode] || "Standard";
+            }
+            if (data.fan !== undefined) {
+                modelFanPct = Number(data.fan) || 0;
+                const fanValue = document.getElementById("control-fan-value");
+                if (fanValue) fanValue.innerText = Math.round(modelFanPct) + "%";
+            }
+            if (data.light !== undefined) {
+                updateLightUI(data.light);
+            }
+            if (configuredPrinters.length) {
+                const row = document.querySelector('.printer-list-item.monitored .printer-list-status');
+                if (row) {
+                    const busy = ["printing", "paused", "auto_leveling", "heating", "busy"].includes(String(currentPrinterState).toLowerCase());
+                    row.className = "printer-list-status " + (busy ? "busy" : "free");
+                    row.innerText = busy ? "Busy" : "Free";
+                }
+            }
+        }
+
+        async function pollTelemetry() {
+            try {
+                const res = await fetch("http://127.0.0.1:18988/status", { cache: "no-store" });
+                if (res.ok) {
+                    const data = await res.json();
+                    const monitored = configuredPrinters.find(printer => printer.preset_name === monitoredPresetName);
+                    if (monitored && data.ip && String(data.ip) !== String(monitored.host)) return;
+
+                    if (data.ip) {
+                        printerIP = data.ip;
+                        const ip = document.getElementById("device-ip");
+                        if (ip) ip.innerText = data.ip;
+                    }
+                    const modelName = document.getElementById("device-model-name");
+                    if (modelName && data.model) modelName.innerText = data.model;
+                    const modelId = document.getElementById("device-model-id");
+                    if (modelId) modelId.innerText = "Model " + (data.model_id || "—");
+                    const firmware = document.getElementById("device-firmware");
+                    if (firmware) {
+                        firmware.innerText = data.firmware ? "Firmware " + data.firmware : "";
+                        firmware.hidden = !data.firmware;
+                    }
+                    const cnButton = document.getElementById("device-cn");
+                    if (cnButton) {
+                        const cn = data.cn || "";
+                        cnButton.dataset.cn = cn;
+                        cnButton.hidden = !cn;
+                        cnButton.firstChild.nodeValue = cn ? "CN " + cn + " " : "CN — ";
+                    }
+
+                    if (data.camera_url && data.camera_url.startsWith("http")) {
+                        activeCameraUrl = data.camera_url;
+                        if (!flvPlayer && !userStoppedCamera) {
+                            initFlvVideo(data.camera_url);
+                        }
+                    }
+                    if (Array.isArray(data.material_boxes)) {
+                        materialBoxes = data.material_boxes.filter(box => box && Array.isArray(box.slots));
+                        updateMaterialBoxes([], Array.isArray(data.filaments) ? data.filaments : []);
+                    } else if (Array.isArray(data.filaments)) {
+                        updateMaterialBoxes([], data.filaments);
+                    }
+                    if (data.feed_status) updateFeedProgress(data.feed_status);
+                    const isBusyOrPrinting = (data.state && ["printing", "auto_leveling", "heating", "busy"].includes(data.state.toLowerCase()));
+                    if (isBusyOrPrinting) {
+                        document.getElementById("printer-alert-banner").style.display = "none";
+                        alertDismissed = true;
+                    } else if (data.last_error && data.last_error.trim()) {
+                        if (data.last_error !== lastSeenAlert) {
+                            alertDismissed = false;
+                            lastSeenAlert = data.last_error;
+                        }
+                        if (!alertDismissed) {
+                            document.getElementById("printer-alert-text").innerText = data.last_error;
+                            document.getElementById("printer-alert-banner").style.display = "flex";
+                        }
+                    } else {
+                        document.getElementById("printer-alert-banner").style.display = "none";
+                        alertDismissed = false;
+                        lastSeenAlert = "";
+                    }
+
+                    updateTelemetryUI({
+                        nozzle_temp: data.nozzle_temp,
+                        target_nozzle_temp: data.target_nozzle_temp,
+                        bed_temp: data.bed_temp,
+                        target_bed_temp: data.target_bed_temp,
+                        print_state: data.state ? (data.state.charAt(0).toUpperCase() + data.state.slice(1)) : "Printing",
+                        progress: data.progress,
+                        job_name: data.job_name,
+                        curr_layer: data.curr_layer,
+                        total_layers: data.total_layers,
+                        remain_time: data.remain_time,
+                        print_time: data.print_time,
+                        speed_mode: data.speed_mode,
+                        fan: data.fan,
+                        light: data.light,
+                        axis_error: data.axis_error || ""
+                    });
+                }
+            } catch (err) {}
+        }
+
+        // Original Anycubic LAN color catalog + persisted user colors.
+        let selectedFinishType = "solid";
+        let selectedColorGroup = ["#23a3c7"];
+        let selectedIconType = 0;
+        let selectedCatalogKey = "";
+        let modelFanPct = 0;
+        let activeColorSection = "solid";
+        const COLOR_STORAGE_KEY = "orca_ac_lan_user_color_groups_v1";
+        const TYPE_TO_GROUP = {solid:"flat_color",gradient:"gradient_color",luminous:"luminous_color"};
+        const TYPE_TO_PROTOCOL = {solid:1,gradient:2,luminous:3};
+
+        function rgbaToHex(value) {
+            if (!Array.isArray(value) || value.length < 3) return "#afafaf";
+            return "#" + value.slice(0,3).map(v=>Math.max(0,Math.min(255,Number(v)||0)).toString(16).padStart(2,"0")).join("");
+        }
+
+        function normalizeGroup(group) {
+            return (Array.isArray(group)?group:[]).filter(v=>Array.isArray(v)&&v.length>=3).map(v=>[Number(v[0]),Number(v[1]),Number(v[2]),v[3]==null?255:Number(v[3])]);
+        }
+
+        function readUserColors() {
+            try { const parsed=JSON.parse(localStorage.getItem(COLOR_STORAGE_KEY)||"[]"); return Array.isArray(parsed)?parsed:[]; } catch(e) { return []; }
+        }
+
+        function writeUserColors(items) { localStorage.setItem(COLOR_STORAGE_KEY,JSON.stringify(items)); }
+
+        function originalColorGroups() {
+            const base=Array.isArray(window.ORCACUBIC_COLOR_GROUPS)?JSON.parse(JSON.stringify(window.ORCACUBIC_COLOR_GROUPS)):[];
+            const byKey=new Map(base.map(g=>[g.key,g]));
+            readUserColors().forEach(item=>{ const key=TYPE_TO_GROUP[item.finish_type]||TYPE_TO_GROUP.solid; const group=byKey.get(key); if(group){ if(!Array.isArray(group.color))group.color=[]; group.color.push(item); } });
+            return base;
+        }
+
+        function colorItemStyle(item,type) {
+            const colors=normalizeGroup(item.color_group).map(rgbaToHex);
+            if(type==="gradient") return `linear-gradient(${Number(item.icon_type)===2?90:180}deg,${colors.join(',')})`;
+            if(type==="luminous") return `linear-gradient(90deg,${colors[0]||'#afafaf'} 0 50%,${colors[1]||colors[0]||'#7fff64'} 50% 100%)`;
+            if(normalizeGroup(item.color_group)[0]?.[3]===0) return "repeating-conic-gradient(#858585 0 25%,#fff 0 50%) 50%/8px 8px";
+            return colors[0]||"#afafaf";
+        }
+
+        function itemCatalogKey(item,type,index) { return `${type}-${index}-${item.id||0}-${item.name||''}`; }
+
+        function renderOriginalColorPicker() {
+            const groups=originalColorGroups();
+            ["solid","gradient","luminous"].forEach(type=>{
+                const container=document.getElementById(type+"-color-grid"); if(!container)return; container.innerHTML="";
+                const group=groups.find(g=>g.key===TYPE_TO_GROUP[type]);
+                const list=group&&Array.isArray(group.color)?group.color:[];
+                list.forEach((item,index)=>{
+                    const button=document.createElement("button");
+                    const key=itemCatalogKey(item,type,index);
+                    button.className="original-color-dot"+(type==="luminous"?" luminous":"")+(selectedCatalogKey===key?" selected":"");
+                    button.title=item.name||`${type} color`;
+                    button.style.background=colorItemStyle(item,type);
+                    if(type==="luminous")button.style.setProperty("--night-glow",rgbaToHex(normalizeGroup(item.color_group)[1]||normalizeGroup(item.color_group)[0]));
+                    button.onclick=()=>selectCatalogColor(item,type,key);
+                    container.appendChild(button);
+                });
+                const count=list.filter(item=>Number(item.type)===1).length;
+                if(count<20){const add=document.createElement("button");add.className="original-color-add";add.title=`Add custom ${type} color`;add.innerText="+";add.onclick=()=>openCustomColorDialog(type);container.appendChild(add);}
+            });
+        }
+
+        function scrollToColorSection(type) {
+            activeColorSection=type;
+            document.querySelectorAll(".original-color-tabs button").forEach(b=>b.classList.toggle("active",b.id==="tab-"+type));
+            document.getElementById("color-section-"+type)?.scrollIntoView({behavior:"smooth",block:"nearest"});
+        }
+
+        function selectCatalogColor(item,type,key) {
+            const group=normalizeGroup(item.color_group);
+            if(!group.length)return;
+            selectedFinishType=type;
+            selectedColorGroup=group.map(rgbaToHex);
+            selectedIconType=Number(item.icon_type)||({gradient:1,luminous:3}[type]||0);
+            selectedCatalogKey=key;
+            activeColorSection=type;
+            applySpoolFinish();
+            renderOriginalColorPicker();
+            scrollToColorSection(type);
+        }
+
+        function applySpoolFinish() {
+            const wound=document.getElementById("spool-wound-fill"); if(!wound)return;
+            wound.style.filter="none";
+            if(selectedFinishType==="gradient"&&selectedColorGroup.length>=2){
+                const stops=[0,1,2,3]; stops.forEach((idx)=>{const stop=document.getElementById("spool-stop-"+idx);const color=selectedColorGroup[Math.min(idx,selectedColorGroup.length-1)];if(stop&&color){stop.setAttribute("stop-color",color);stop.setAttribute("offset",`${Math.round(idx/3*100)}%`);}});
+                const gradient=document.getElementById("spool-dynamic-gradient");if(gradient){gradient.setAttribute("x2",selectedIconType===2?"1":"0");gradient.setAttribute("y2",selectedIconType===2?"0":"1");}wound.setAttribute("fill","url(#spool-dynamic-gradient)");
+            }else{wound.setAttribute("fill",selectedColorGroup[0]||"#afafaf");if(selectedFinishType==="luminous"&&selectedColorGroup[1])wound.style.filter=`drop-shadow(0 0 5px ${selectedColorGroup[1]})`;}
+            const label=selectedFinishType==="gradient"?`Gradient: ${selectedColorGroup.join(" → ")}`:selectedFinishType==="luminous"?`Luminous: ${selectedColorGroup.join(" / ")}`:(selectedColorGroup[0]||"").toUpperCase();
+            const hex=document.getElementById("modal-spool-hex");if(hex)hex.innerText=label;
+        }
+
+        function openCustomColorDialog(type) {
+            activeColorSection=type;
+            document.getElementById("custom-color-title").innerText={solid:"Add Solid Color",gradient:"Add Gradient Color",luminous:"Add Luminous Color"}[type];
+            document.getElementById("custom-solid-controls").hidden=type!=="solid";
+            document.getElementById("custom-gradient-controls").hidden=type!=="gradient";
+            document.getElementById("custom-luminous-controls").hidden=type!=="luminous";
+            document.getElementById("custom-color-modal").style.display="flex";
+            updateCustomPreview();
+        }
+
+        function closeCustomColorDialog(){document.getElementById("custom-color-modal").style.display="none";}
+
+        function updateCustomPreview(){
+            const preview=document.getElementById("custom-color-preview"); if(!preview)return;
+            if(activeColorSection==="solid"){
+                const color=document.getElementById("modal-slot-color").value;preview.style.background=color;document.getElementById("modal-color-hex").innerText=color.toUpperCase();
+            }else if(activeColorSection==="gradient"){
+                const count=Number(document.getElementById("gradient-count").value||2);const inputs=[1,2,3,4].map(i=>document.getElementById("gradient-color-"+i));inputs.forEach((el,i)=>el.style.display=i<count?"inline-block":"none");const colors=inputs.slice(0,count).map(el=>el.value);const angle=Number(document.getElementById("gradient-direction").value||180);preview.style.background=`linear-gradient(${angle}deg,${colors.join(',')})`;
+            }else{
+                const day=document.getElementById("luminous-day").value,night=document.getElementById("luminous-night").value;preview.style.background=`linear-gradient(90deg,${day} 0 50%,${night} 50% 100%)`;preview.style.boxShadow=`0 0 12px ${night}`;
+            }
+        }
+
+        function saveCustomColorDialog(){
+            let colors=[],icon=0;
+            if(activeColorSection==="solid")colors=[document.getElementById("modal-slot-color").value];
+            else if(activeColorSection==="gradient"){const count=Number(document.getElementById("gradient-count").value||2);colors=[1,2,3,4].slice(0,count).map(i=>document.getElementById("gradient-color-"+i).value);icon=Number(document.getElementById("gradient-direction").value)===90?2:1;}
+            else{colors=[document.getElementById("luminous-day").value,document.getElementById("luminous-night").value];icon=3;}
+            const rgba=colors.map(hex=>{const h=hex.slice(1);return[parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16),255];});
+            const items=readUserColors();const item={id:`lan-user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,9)}`,name:"",type:1,color_type:TYPE_TO_PROTOCOL[activeColorSection],finish_type:activeColorSection,icon_type:icon,color_group:rgba};items.push(item);writeUserColors(items);
+            closeCustomColorDialog();renderOriginalColorPicker();
+            const group=originalColorGroups().find(g=>g.key===TYPE_TO_GROUP[activeColorSection]);const index=group.color.length-1;selectCatalogColor(group.color[index],activeColorSection,itemCatalogKey(group.color[index],activeColorSection,index));
+        }
+
+        function updateBrandSelectOptions(selectedBrand) {
+            const select = document.getElementById("modal-brand-select");
+            if (!select) return;
+
+            // Collect all unique brands currently reported by the printer across all slots
+            const brands = [];
+            (filaments || []).forEach(f => {
+                if (f && f.brand) {
+                    let b = f.brand.trim();
+                    if (b.toLowerCase() === "custom") b = "Custom";
+                    else if (b.toLowerCase() === "generic") b = "Generic";
+                    else if (b.toLowerCase() === "anycubic") b = "Anycubic";
+                    if (b && !brands.includes(b)) {
+                        brands.push(b);
+                    }
+                }
+            });
+
+            // Normalize current slot's brand
+            let cur = selectedBrand || "Anycubic";
+            if (cur.toLowerCase() === "custom") cur = "Custom";
+            else if (cur.toLowerCase() === "generic") cur = "Generic";
+            else if (cur.toLowerCase() === "anycubic") cur = "Anycubic";
+            if (cur && !brands.includes(cur)) brands.unshift(cur);
+
+            // Additional standard printer brands
+            const standard = ["Anycubic", "Generic", "Custom", "eSUN", "Sunlu", "Polymaker", "Bambu Lab", "Overture", "Elegoo"];
+            standard.forEach(b => {
+                if (!brands.includes(b)) brands.push(b);
+            });
+
+            select.innerHTML = "";
+            brands.forEach(b => {
+                const opt = document.createElement("option");
+                opt.value = b;
+                opt.textContent = b;
+                select.appendChild(opt);
+            });
+
+            select.value = cur;
+            if (select.selectedIndex < 0 && select.options.length > 0) {
+                select.selectedIndex = 0;
+            }
+        }
+
+        function openSlotEditModal(slotIdx) {
+            currentEditingSlot=slotIdx;const f=filaments[slotIdx]||{};
+            document.getElementById("modal-slot-title").innerText="Material Settings";
+            document.getElementById("modal-slot-type").value=f.type||"PLA";
+            const savedBrand = localStorage.getItem("orcacubic_brand_" + slotIdx);
+            let brandVal = savedBrand || f.brand || "Anycubic";
+            updateBrandSelectOptions(brandVal);
+            selectedFinishType=f.finish_type||"solid";
+            selectedColorGroup=Array.isArray(f.color_group_hex)&&f.color_group_hex.length?f.color_group_hex:[f.color||"#23a3c7"];
+            selectedIconType=Number(f.icon_type)||({gradient:1,luminous:3}[selectedFinishType]||0);
+            selectedCatalogKey="";
+            applySpoolFinish();renderOriginalColorPicker();scrollToColorSection(selectedFinishType);
+
+            // Feed & Unfeed button state hints based on filament detection
+            const feedBtn = document.getElementById("btn-modal-feed");
+            const unfeedBtn = document.getElementById("btn-modal-unfeed");
+            const hasFilament = f.available !== false && (f.status === undefined || f.status !== 4);
+            if (feedBtn) {
+                feedBtn.style.opacity = hasFilament ? "1" : "0.5";
+                feedBtn.title = hasFilament ? "Load this ACE slot's filament into the extruder." : "No filament inserted in this slot. Insert filament in ACE first.";
+            }
+            if (unfeedBtn) {
+                unfeedBtn.style.opacity = f.loaded ? "1" : "0.5";
+                unfeedBtn.title = f.loaded ? "Unload this ACE slot's filament from the extruder." : "Filament is not currently in the extruder.";
+            }
+
+            document.getElementById("slot-modal").style.display="flex";
+        }
+
+        async function saveSlotFilament() {
+            const btn=document.getElementById("btn-save-slot");btn.disabled=true;btn.innerText="Saving…";
+            const type=document.getElementById("modal-slot-type").value;
+            let brand=(document.getElementById("modal-brand-select").value||"").trim() || "Custom";
+            if(brand.toLowerCase()==="custom") brand="Custom";
+            else if(brand.toLowerCase()==="generic") brand="Generic";
+            else if(brand.toLowerCase()==="anycubic") brand="Anycubic";
+            localStorage.setItem("orcacubic_brand_" + currentEditingSlot, brand);
+            const current=filaments[currentEditingSlot]||{};
+            try{
+                const response=await fetch("http://127.0.0.1:18988/sync_to_printer",{
+                    method:"POST",
+                    headers:{"Content-Type":"application/json"},
+                    body:JSON.stringify({slots:[{
+                        index:Number(current.box_slot??currentEditingSlot),
+                        box_id:Number(current.box_id??-1),
+                        source:current.source||"ace",
+                        type,
+                        brand,
+                        color:selectedColorGroup[0],
+                        finish_type:selectedFinishType,
+                        icon_type:selectedIconType,
+                        color_group:selectedColorGroup
+                    }]})
+                });
+                const data=await response.json();
+                if(data.status!=="ok")throw new Error(data.message||"Printer rejected setting");
+                Object.assign(filaments[currentEditingSlot],{type,brand,color:selectedColorGroup[0],finish_type:selectedFinishType,icon_type:selectedIconType,color_group_hex:[...selectedColorGroup]});
+                updateFilamentUI(filaments);
+                closeSlotEditModal();
+                setTimeout(pollTelemetry,500);
+            }catch(e){
+                alert("Failed to update slot: "+e.message);
+            }finally{
+                btn.disabled=false;
+                btn.innerText="Save";
+            }
+        }
+
+        function startInlineTempEdit(type) {
+            const wrap=document.getElementById(type+"-value-wrap");
+            const editor=document.getElementById(type+"-inline-editor");
+            const input=document.getElementById(type+"-inline-input");
+            if(!wrap||!editor||!input) return;
+            input.value=document.getElementById("target-"+(type==="bed"?"bed":"nozzle")).innerText;
+            wrap.hidden=true; editor.hidden=false; input.focus(); input.select();
+            const finish=async commit=>{ if(editor.hidden)return; editor.hidden=true; wrap.hidden=false; if(commit){const n=Number(input.value);const max=type==="nozzle"?300:120;if(Number.isFinite(n)&&n>=0&&n<=max)await setTargetTemp(type,n);}};
+            input.onkeydown=e=>{if(e.key==="Enter")finish(true);if(e.key==="Escape")finish(false);}; input.onblur=()=>finish(true);
+        }
+
+        async function promptSetFan() {
+            const raw=prompt("Model fan speed (0–100%)", String(modelFanPct));
+            if(raw===null)return; const value=Math.max(0,Math.min(100,Number(raw)));
+            if(!Number.isFinite(value)){alert("Enter a value from 0 to 100.");return;}
+            const response=await fetch("http://127.0.0.1:18988/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"fan",value})});
+            const data=await response.json(); if(data.status!=="ok") throw new Error(data.message||"Fan update failed"); modelFanPct=value; document.getElementById("control-fan-value").innerText=Math.round(value)+"%";
+        }
+
+        function updateSpeedModeSelection() {
+            document.querySelectorAll("#speed-mode-modal .speed-option").forEach(option => {
+                const selected = Number(option.dataset.mode) === Number(currentSpeedMode);
+                option.classList.toggle("selected", selected);
+                option.setAttribute("aria-selected", selected ? "true" : "false");
+            });
+        }
+
+        function openSpeedModeModal() {
+            updateSpeedModeSelection();
+            document.getElementById("speed-mode-modal").style.display = "flex";
+        }
+
+        function closeSpeedModeModal() {
+            document.getElementById("speed-mode-modal").style.display = "none";
+        }
+
+        async function selectSpeedMode(mode) {
+            const modal = document.getElementById("speed-mode-modal");
+            modal.querySelectorAll(".speed-option").forEach(option => option.disabled = true);
+            const previous = currentSpeedMode;
+            currentSpeedMode = mode;
+            updateSpeedModeSelection();
+            try {
+                await setSpeed(mode);
+                closeSpeedModeModal();
+            } catch (error) {
+                currentSpeedMode = previous;
+                updateSpeedModeSelection();
+                alert("Failed to update speed mode: " + error.message);
+            } finally {
+                modal.querySelectorAll(".speed-option").forEach(option => option.disabled = false);
+            }
+        }
+
+        function cycleSpeedMode() { openSpeedModeModal(); }
+
+        renderOriginalColorPicker();
+        updateFilamentUI(filaments);
+        const savedPlate=localStorage.getItem("anycubic_buildplate"); if(savedPlate) document.getElementById("device-buildplate-type").value=savedPlate;
+        const savedNozzle=localStorage.getItem("anycubic_nozzle"); if(savedNozzle) document.getElementById("device-nozzle-type").value=savedNozzle;
+        setInterval(pollTelemetry, 1500);
+        pollTelemetry();
+
+        requestPrinterList();
+</script>
+</body>
+</html>

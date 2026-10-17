@@ -196,6 +196,7 @@
 
 #include "../Utils/PresetUpdater.hpp"
 #include "../Utils/PrintHost.hpp"
+#include "../Utils/AnycubicLink.hpp"
 #include "../Utils/Process.hpp"
 #include "../Utils/wxInspectorPlugins/Registration.hpp"
 #include "../Utils/Http.hpp"
@@ -2879,6 +2880,7 @@ bool GUI_App::OnInit()
 
 int GUI_App::OnExit()
 {
+    shutdown_anycubic_lan_bridge();
     stop_http_server();
     stop_sync_user_preset();
 
@@ -4231,12 +4233,17 @@ std::string GUI_App::canonical_printer_agent_id(const std::string& picked_id)
 
 void GUI_App::switch_printer_agent()
 {
+    DynamicPrintConfig* selected_printer_config = nullptr;
+    if (preset_bundle != nullptr)
+        selected_printer_config = &preset_bundle->printers.get_edited_preset().config;
+    reconcile_anycubic_lan_bridge(selected_printer_config);
+
     if (!m_agent) {
         BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": no agent exists";
         return;
     }
 
-    const DynamicPrintConfig& config = preset_bundle->printers.get_edited_preset().config;
+    const DynamicPrintConfig& config = *selected_printer_config;
     const std::string effective_agent_id = resolve_printer_agent_id(config.opt_string("printer_agent"));
 
     // Check if agent is registered

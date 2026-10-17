@@ -199,6 +199,7 @@
 #include "GUI_Factories.hpp"
 #include "wxExtensions.hpp"
 #include "../Utils/PrintHost.hpp"
+#include "../Utils/AnycubicLink.hpp"
 #include "MainFrame.hpp"
 #ifdef SLIC3R_CAD
 #include "slic3r/GUI/CAD/DesignPanel.hpp"
@@ -2327,6 +2328,29 @@ void Sidebar::priv::update_extruder_separator_icon(bool show, bool ready)
 
 bool Sidebar::priv::sync_extruder_list(bool &only_external_material, bool is_manual)
 {
+    PresetBundle *bundle = wxGetApp().preset_bundle;
+    if (bundle != nullptr) {
+        const Preset &cur_printer = bundle->printers.get_edited_preset();
+        bool is_anycubic = false;
+        if (cur_printer.config.has("host_type")) {
+            auto opt = cur_printer.config.option("host_type");
+            if (opt && opt->getInt() == static_cast<int>(htAnycubic))
+                is_anycubic = true;
+        }
+        if (!is_anycubic) {
+            std::string pname = cur_printer.name;
+            boost::to_lower(pname);
+            if (pname.find("anycubic") != std::string::npos || pname.find("kobra") != std::string::npos)
+                is_anycubic = true;
+        }
+
+        if (is_anycubic) {
+            BOOST_LOG_TRIVIAL(info) << "[Sidebar::sync_extruder_list] Anycubic printer detected, executing sync_ams_list";
+            wxGetApp().sidebar().sync_ams_list(true);
+            return true;
+        }
+    }
+
     MachineObject *obj = wxGetApp().getDeviceManager()->get_selected_machine();
     auto           printer_name = plater->get_selected_printer_name_in_combox();
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << __LINE__ << " begin sync_extruder_list";
@@ -6291,7 +6315,111 @@ void Sidebar::load_ams_list(MachineObject* obj)
 
 void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
 {
+    static bool in_sync = false;
+    if (in_sync)
+        return;
+    struct SyncGuard {
+        bool& flag;
+        SyncGuard(bool& f) : flag(f) { flag = true; }
+        ~SyncGuard() { flag = false; }
+    } guard(in_sync);
+
     wxBusyCursor cursor;
+
+    // Check if Anycubic printer is active
+    bool is_anycubic = false;
+    if (wxGetApp().preset_bundle) {
+        const auto& cur_printer = wxGetApp().preset_bundle->printers.get_edited_preset();
+        if (cur_printer.config.has("host_type")) {
+            auto opt = cur_printer.config.option("host_type");
+            if (opt && opt->getInt() == static_cast<int>(htAnycubic))
+                is_anycubic = true;
+        }
+        if (!is_anycubic) {
+            std::string pname = cur_printer.name;
+            boost::to_lower(pname);
+            if (pname.find("anycubic") != std::string::npos || pname.find("kobra") != std::string::npos)
+                is_anycubic = true;
+        }
+    }
+
+    if (is_anycubic) {
+        // Fetch filaments directly from local daemon
+        std::string status_body;
+        auto http = Http::get("http://127.0.0.1:18988/status");
+        http.header("X-OrcaCubic-Token", anycubic_lan_bridge_token())
+            .timeout_connect(1)
+            .timeout_max(2)
+            .on_complete([&status_body](std::string body, unsigned status) {
+                if (status == 200) status_body = std::move(body);
+            })
+            .perform_sync();
+
+        if (!status_body.empty()) {
+            try {
+                auto j = json::parse(status_body);
+                if (j.contains("filaments") && j["filaments"].is_array()) {
+                    auto& filaments_array = j["filaments"];
+                    unsigned int num_filaments = static_cast<unsigned int>(filaments_array.size());
+                    if (num_filaments > 0) {
+                        // Use PresetBundle::set_num_filaments to resize all arrays atomically
+                        wxGetApp().preset_bundle->set_num_filaments(num_filaments, "#00d2ff");
+
+                        // Apply the exact colors from the physical spools
+                        auto& project_config = wxGetApp().preset_bundle->project_config;
+                        auto* color_opt = project_config.option<ConfigOptionStrings>("filament_colour");
+                        if (color_opt) {
+                            for (size_t i = 0; i < num_filaments && i < color_opt->values.size(); ++i) {
+                                color_opt->values[i] = filaments_array[i].value("color", "#00d2ff");
+                            }
+                        }
+
+                        // Also match presets based on material type (PETG, ABS, PLA, etc.)
+                        for (size_t i = 0; i < num_filaments && i < wxGetApp().preset_bundle->filament_presets.size(); ++i) {
+                            std::string slot_type = filaments_array[i].value("type", "");
+                            if (slot_type.empty() || slot_type == "?")
+                                continue;
+                            std::string slot_type_upper = boost::to_upper_copy(slot_type);
+
+                            const Preset* best_match = nullptr;
+                            for (const auto& preset : wxGetApp().preset_bundle->filaments) {
+                                if (!preset.is_compatible || !preset.is_visible)
+                                    continue;
+                                std::string p_type = preset.config.opt_string("filament_type");
+                                if (boost::to_upper_copy(p_type) == slot_type_upper) {
+                                    if (boost::icontains(preset.name, "Anycubic")) {
+                                        best_match = &preset;
+                                        break;
+                                    }
+                                    if (!best_match)
+                                        best_match = &preset;
+                                }
+                            }
+                            if (best_match) {
+                                wxGetApp().preset_bundle->filament_presets[i] = best_match->name;
+                            }
+                        }
+
+                        // Notify plater and sidebar of count change
+                        wxGetApp().plater()->on_filament_count_change(num_filaments);
+                        for (size_t i = 0; i < num_filaments && i < p->combos_filament.size(); ++i) {
+                            std::string hex_col = filaments_array[i].value("color", "#00d2ff");
+                            p->combos_filament[i]->sync_colour_config({hex_col}, false);
+                        }
+                        for (auto& c : p->combos_filament)
+                            c->update();
+                        update_filaments_area_height();
+                        wxGetApp().plater()->update();
+                        BOOST_LOG_TRIVIAL(info) << "[Sidebar::sync_ams_list] Successfully synchronized " << num_filaments << " Anycubic filaments!";
+                        return;
+                    }
+                }
+            } catch (const std::exception& e) {
+                BOOST_LOG_TRIVIAL(error) << "[Sidebar::sync_ams_list] Error parsing filaments: " << e.what();
+            }
+        }
+    }
+
     // Force load ams list
     auto obj = wxGetApp().getDeviceManager()->get_selected_machine();
     if (!obj)
@@ -20973,6 +21101,53 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
                                                                  storage_paths, storage_names,
                                                                  config->get_bool("open_device_tab_post_upload"),
                                                                  upload_job.printhost.get());
+        } else if (host_type == htAnycubic) {
+            auto* anycubic_host = dynamic_cast<AnycubicLink*>(upload_job.printhost.get());
+            if (anycubic_host == nullptr) {
+                show_error(this, _L("Anycubic host is not available."), false);
+                return;
+            }
+
+            std::vector<AnycubicMaterialSlot> slots;
+            {
+                wxBusyCursor wait;
+                wxString msg;
+                anycubic_host->fetch_material_slots(slots, msg);
+            }
+
+            std::vector<int> used_extruders;
+            if (PartPlate* plate = get_partplate_list().get_plate(resolved_plate_idx); plate != nullptr) {
+                used_extruders = plate->get_extruders();
+                std::sort(used_extruders.begin(), used_extruders.end());
+                used_extruders.erase(std::unique(used_extruders.begin(), used_extruders.end()), used_extruders.end());
+            }
+
+            // Only block if this is a multi-material print that requires an ACE/multi-material unit
+            // but no material slots were found.
+            if (slots.empty() && used_extruders.size() > 1) {
+                show_error(this, _L("This multi-color print requires an ACE unit or material changer. Please connect an ACE unit or slice as a single-material print."), false);
+                return;
+            }
+
+            DynamicPrintConfig cfg = preset_bundle->full_config();
+            const auto* colors = cfg.option<ConfigOptionStrings>("filament_colour");
+            const auto* types = cfg.option<ConfigOptionStrings>("filament_type");
+            std::vector<AnycubicToolFilament> project_filaments;
+            for (int extruder : used_extruders) {
+                if (extruder < 1)
+                    continue;
+                const size_t idx = static_cast<size_t>(extruder - 1);
+                project_filaments.push_back({
+                    static_cast<int>(idx),
+                    types && idx < types->values.size() ? types->values[idx] : "Unknown",
+                    colors && idx < colors->values.size() ? colors->values[idx] : "#FFFFFF"
+                });
+            }
+
+            pDlg = std::make_unique<AnycubicPrintHostSendDialog>(default_output_file, upload_job.printhost->get_post_upload_actions(), groups,
+                                                                 storage_paths, storage_names,
+                                                                 config->get_bool("open_device_tab_post_upload"),
+                                                                 anycubic_host, std::move(slots), std::move(project_filaments));
         } else if (flashforge_local_api) {
             auto* flashforge_host = dynamic_cast<Flashforge*>(upload_job.printhost.get());
             if (flashforge_host == nullptr) {
@@ -21069,6 +21244,19 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
         if (use_3mf) {
             const int plateindex = (plate_idx == PLATE_ALL_IDX ? get_partplate_list().get_curr_plate_index() : resolved_plate_idx) + 1;
             upload_job.upload_data.extended_info["plateindex"] = std::to_string(plateindex);
+
+            // Pass resolved plate extruders to upload_data for Anycubic ACE Pro mapping
+            if (PartPlate* plate = get_partplate_list().get_plate(resolved_plate_idx); plate != nullptr) {
+                std::vector<int> used_extruders = plate->get_extruders();
+                std::sort(used_extruders.begin(), used_extruders.end());
+                used_extruders.erase(std::unique(used_extruders.begin(), used_extruders.end()), used_extruders.end());
+                std::string extruders_str;
+                for (size_t i = 0; i < used_extruders.size(); ++i) {
+                    if (i > 0) extruders_str += ",";
+                    extruders_str += std::to_string(used_extruders[i]);
+                }
+                upload_job.upload_data.extended_info["plate_extruders"] = extruders_str;
+            }
         }
     }
 
