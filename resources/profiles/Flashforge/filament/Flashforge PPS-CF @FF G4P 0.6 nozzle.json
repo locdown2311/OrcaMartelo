@@ -1,15 +1,10 @@
 {
 	"type": "filament",
-	"name": "Flashforge PPS-CF @FF G4P 0.6 nozzle",
-	"renamed_from": "FlashForge PPS-CF @FF G4P 0.6 nozzle;FlashForge PPS-CF FF G4P 0.6 nozzle",
-	"inherits": "FusRock PET-CF @G3U 0.6 Nozzle",
+	"name": "FlashForge PPS-CF @FF G4P 0.6 nozzle",
+	"inherits": "FusRock Generic PET-CF @G3U 0.6 Nozzle",
 	"from": "system",
-	"setting_id": "dSI79hoaa9jLGvhz",
-	"filament_id": "OFTSXxzE",
+	"setting_id": "94vPnztRcpnbfAKx",
 	"instantiation": "true",
-	"filament_vendor": [
-		"Flashforge"
-	],
 	"close_fan_the_first_x_layers": [
 		"2"
 	],
@@ -50,7 +45,7 @@
 		"15"
 	],
 	"filament_settings_id": [
-		"Flashforge PPS-CF @FF G4P 0.6 nozzle"
+		"FlashForge PPS-CF @FF G4P 0.6 nozzle"
 	],
 	"filament_start_gcode": [
 		"; filament start gcode\n;right_extruder_material:PPS"

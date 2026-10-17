@@ -1,15 +1,10 @@
 {
 	"type": "filament",
-	"name": "Flashforge PPS @FF G4 0.8 HF nozzle",
-	"renamed_from": "FlashForge PPS @FF G4 0.8 HF nozzle;FlashForge PPS FF G4 0.8 HF nozzle",
-	"inherits": "FusRock PET-CF @G3U 0.6 Nozzle",
+	"name": "FlashForge PPS @FF G4 0.8 HF nozzle",
+	"inherits": "FusRock Generic PET-CF @G3U 0.6 Nozzle",
 	"from": "system",
-	"setting_id": "EsrSpDB3Kx35qb76",
-	"filament_id": "OFlgMgNM",
+	"setting_id": "eFK1zzT1JY9ZnEl9",
 	"instantiation": "true",
-	"filament_vendor": [
-		"Flashforge"
-	],
 	"activate_chamber_temp_control": [
 		"1"
 	],
@@ -62,7 +57,7 @@
 		"15"
 	],
 	"filament_settings_id": [
-		"Flashforge PPS @FF G4 0.8 HF nozzle"
+		"FlashForge PPS @FF G4 0.8 HF nozzle"
 	],
 	"filament_start_gcode": [
 		"; filament start gcode\n;right_extruder_material:PPS"

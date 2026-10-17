@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="512" viewBox="0 0 1280 512"><defs><linearGradient id="top" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#27D3BE"/><stop offset="1" stop-color="#00A896"/></linearGradient><linearGradient id="side" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#00A896"/><stop offset="1" stop-color="#007D72"/></linearGradient></defs><rect width="100%" height="100%" fill="#FFFFFF"/>
+      <rect x="49.61" y="49.61" width="412.78" height="412.78" rx="93.66" fill="#101B1F" stroke="#36515A" stroke-width="6.94"/>
+      <polygon points="256.00,99.04 399.09,177.09 256.00,255.13 112.91,177.09" fill="url(#top)"/>
+      <polygon points="112.91,177.09 256.00,255.13 256.00,385.21 112.91,307.16" fill="#35525B"/>
+      <polygon points="399.09,177.09 256.00,255.13 256.00,385.21 399.09,307.16" fill="url(#side)"/>
+      <path d="M 167.55 201.37 L 256.00 249.93 L 344.45 201.37" fill="none" stroke="white" stroke-width="25.15" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M 256.00 249.93 V 335.78" fill="none" stroke="white" stroke-width="25.15" stroke-linecap="round"/>
+      <circle cx="256.00" cy="249.93" r="19.08" fill="white"/>
+      <path d="M 154.54 236.05 C 171.02 224.78, 190.96 228.25, 197.03 245.59 C 178.82 252.53, 163.21 249.06, 154.54 236.05 Z" fill="white" opacity=".9"/>
+    
+      <text x="522" y="251" fill="#18252A" font-family="Segoe UI, Arial, sans-serif" font-size="116" font-weight="700" letter-spacing="-5">Orca</text>
+      <text x="785" y="251" fill="#00A896" font-family="Segoe UI, Arial, sans-serif" font-size="116" font-weight="700" letter-spacing="-5">Cubic</text>
+      <text x="529" y="309" fill="#849399" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="600" letter-spacing="7">SLICE · SEND · CREATE</text></svg>

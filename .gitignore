@@ -53,5 +53,12 @@ __pycache__/
 *.pyc
 *.opc
 /.test/
+<<<<<<< HEAD
 docs/superpowers/
 ctest_results.xml
+=======
+
+# Local developer diagnostics (never release or commit)
+/last_remote_print_processed.gcode
+/last_remote_print_processed.3mf
+>>>>>>> temp-orcacubic
