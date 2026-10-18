@@ -6417,7 +6417,11 @@ void Sidebar::sync_anycubic_filaments_from_json(const std::string& filaments_jso
             for (const auto& preset : bundle->filaments) {
                 if (!preset.is_compatible || !preset.is_visible)
                     continue;
-                std::string p_type = preset.config.opt_string("filament_type");
+                std::string p_type;
+                if (auto* opt = preset.config.option<ConfigOptionStrings>("filament_type")) {
+                    if (!opt->values.empty())
+                        p_type = opt->values[0];
+                }
                 if (boost::to_upper_copy(p_type) == slot_type_upper ||
                     (!norm_slot.empty() && Slic3r::normalize_anycubic_material(p_type) == norm_slot)) {
                     if (!slot_brand.empty() && boost::icontains(preset.name, slot_brand)) {
@@ -6451,13 +6455,13 @@ void Sidebar::sync_anycubic_filaments_from_json(const std::string& filaments_jso
     update_filaments_area_height();
 
     // 5. Update tabs and export selections
-    if (wxGetApp().get_tab(Preset::TYPE_PRINT))
-        wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
-    bundle->export_selections(*wxGetApp().app_config);
-
-    for (size_t i = 0; i < num_filaments; ++i) {
-        auto_calc_flushing_volumes(static_cast<int>(i));
+    if (!bundle->filament_presets.empty()) {
+        if (auto* tab = wxGetApp().get_tab(Preset::TYPE_FILAMENT))
+            tab->select_preset(bundle->filament_presets[0]);
     }
+    bundle->export_selections(*wxGetApp().app_config);
+    update_dynamic_filament_list();
+
     Layout();
     if (wxGetApp().plater())
         wxGetApp().plater()->Refresh();
@@ -7230,18 +7234,31 @@ void Sidebar::auto_calc_flushing_volumes(const int filament_idx, const int extru
 void Sidebar::auto_calc_flushing_volumes_internal(const int modify_id, const int extruder_id)
 {
     auto& preset_bundle = wxGetApp().preset_bundle;
+    if (!preset_bundle)
+        return;
     // A mixed-colour slot is virtual and is never flushed to or from: leave its row and column
     // alone (the flushing dialog hides them and only compares physical slots).
     if (modify_id >= 0 && preset_bundle->is_mixed_filament((size_t)modify_id))
         return;
     auto& project_config = preset_bundle->project_config;
-    const auto& full_config = wxGetApp().preset_bundle->full_config();
+    const auto& full_config = preset_bundle->full_config();
+
+    auto* matrix_opt = project_config.option<ConfigOptionFloats>("flush_volumes_matrix");
+    if (!matrix_opt)
+        return;
+
+    auto* dataset_opt = full_config.option<ConfigOptionIntsNullable>("nozzle_flush_dataset");
+    if (!dataset_opt || extruder_id >= dataset_opt->values.size())
+        return;
+
     auto& ams_multi_color_filament = preset_bundle->ams_multi_color_filment;
     size_t extruder_nums = preset_bundle->get_printer_extruder_count();
-    int nozzle_flush_dataset = full_config.option<ConfigOptionIntsNullable>("nozzle_flush_dataset")->values[extruder_id];
-    std::vector<double> init_matrix = get_flush_volumes_matrix((project_config.option<ConfigOptionFloats>("flush_volumes_matrix"))->values, extruder_id, extruder_nums);
+    int nozzle_flush_dataset = dataset_opt->values[extruder_id];
+    std::vector<double> init_matrix = get_flush_volumes_matrix(matrix_opt->values, extruder_id, extruder_nums);
 
     const std::vector<int>& min_flush_volumes = get_min_flush_volumes(full_config, extruder_id);
+    if (min_flush_volumes.empty())
+        return;
 
     const auto* flush_multi_opt = project_config.option<ConfigOptionFloats>("flush_multiplier");
     float flush_multiplier = flush_multi_opt ? (float)flush_multi_opt->get_at(extruder_id) : 1.f;
@@ -7277,6 +7294,8 @@ void Sidebar::auto_calc_flushing_volumes_internal(const int modify_id, const int
             // from to modify
             int from_idx = i;
             if (from_idx != modify_id) {
+                if (from_idx >= min_flush_volumes.size())
+                    continue;
                 Slic3r::FlushVolCalculator calculator(min_flush_volumes[from_idx], m_max_flush_volume, nozzle_flush_dataset);
                 int flushing_volume = 0;
                 bool is_from_support = is_support_filament(from_idx);
@@ -7296,12 +7315,16 @@ void Sidebar::auto_calc_flushing_volumes_internal(const int modify_id, const int
                     if (is_from_support)
                         flushing_volume = std::max(flushing_volume, Slic3r::g_min_flush_volume_from_support);
                 }
-                matrix[m_number_of_extruders * from_idx + modify_id] = flushing_volume;
+                size_t mat_idx = m_number_of_extruders * from_idx + modify_id;
+                if (mat_idx < matrix.size())
+                    matrix[mat_idx] = flushing_volume;
             }
 
             // modify to to
             int to_idx = i;
             if (to_idx != modify_id) {
+                if (modify_id >= min_flush_volumes.size())
+                    continue;
                 Slic3r::FlushVolCalculator calculator(min_flush_volumes[modify_id], m_max_flush_volume, nozzle_flush_dataset);
                 bool is_from_support = is_support_filament(modify_id);
                 bool is_to_support = is_support_filament(to_idx);
