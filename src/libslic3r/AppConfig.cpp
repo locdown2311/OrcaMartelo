@@ -60,6 +60,7 @@ namespace Slic3r {
 
 static const std::string VERSION_CHECK_URL = "https://check-version.orcaslicer.com/latest";
 static const std::string PROFILE_UPDATE_URL = "https://check-version.orcaslicer.com/profile";
+static const std::string PROJECT_RELEASES_URL = "https://api.github.com/repos/locdown2311/OrcaMartelo/releases";
 
 constexpr const char* CONFIG_ORCA_UPDATER_URL = "orca_updater_url";
 
@@ -1917,6 +1918,12 @@ std::string AppConfig::profile_update_url() const
     if (orca_updater_url.empty())
         return PROFILE_UPDATE_URL;
     return orca_updater_url;
+}
+
+std::string AppConfig::project_releases_url() const
+{
+    auto from_settings = get("project_releases_url");
+    return from_settings.empty() ? PROJECT_RELEASES_URL : from_settings;
 }
 
 bool AppConfig::exists()

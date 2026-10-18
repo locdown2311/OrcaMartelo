@@ -3,6 +3,7 @@
 
 #include "bambu_networking.hpp"
 #include "libslic3r/Utils.hpp"
+#include "libslic3r/libslic3r_version.h"
 #include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "GUI_Utils.hpp"
@@ -295,7 +296,7 @@ void UpdatePluginDialog::update_info(std::string json_path)
 }
 
 UpdateVersionDialog::UpdateVersionDialog(wxWindow *parent)
-    : DPIDialog(parent, wxID_ANY, _L("New version of Orca Slicer"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
+    : DPIDialog(parent, wxID_ANY, wxString::Format(_L("New version of %s"), SLIC3R_APP_NAME), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
 {
     SetBackgroundColour(*wxWHITE);
 
@@ -314,9 +315,13 @@ UpdateVersionDialog::UpdateVersionDialog(wxWindow *parent)
 
     // Store builds get updates from the Microsoft Store: wxID_YES opens the Store
     // product page there (see the EVT_SLIC3R_VERSION_ONLINE handler) instead of GitHub.
-    auto github_link = new HyperLink(this, is_running_in_msix() ? _L("Check on Microsoft Store") : _L("Check on GitHub"), "", LB_AUTO_WRAP);
-    github_link->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent &e) {
-        EndModal(wxID_YES);
+    m_github_link = new HyperLink(this, is_running_in_msix() ? _L("Check on Microsoft Store") : _L("Check on GitHub"), "", LB_AUTO_WRAP);
+    m_github_link->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent &e) {
+        if (!m_release_url.empty()) {
+            wxLaunchDefaultBrowser(m_release_url);
+        } else {
+            EndModal(wxID_YES);
+        }
     });
 
     m_simplebook_release_note = new wxSimplebook(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxSIMPLE_BORDER);
@@ -407,7 +412,7 @@ UpdateVersionDialog::UpdateVersionDialog(wxWindow *parent)
 
     m_sizer_desc->AddStretchSpacer();
     m_sizer_desc->Add(m_text_up_info, 0, wxEXPAND | wxBOTTOM, FromDIP(5));
-    m_sizer_desc->Add(github_link);
+    m_sizer_desc->Add(m_github_link);
     m_sizer_desc->AddStretchSpacer();
 
     m_sizer_top->Add(m_brand     , 0, wxRIGHT  | wxALIGN_CENTER_VERTICAL, FromDIP(15));
@@ -514,37 +519,41 @@ std::vector<std::string> UpdateVersionDialog::splitWithStl(std::string str,std::
     return result;
 }
 
-void UpdateVersionDialog::update_version_info(wxString release_note, wxString version)
+void UpdateVersionDialog::update_version_info(wxString release_note, wxString version, const std::string& release_url, bool is_project_update)
 {
-    //bbs check whether the web display is used
+    m_release_url = release_url;
+    m_is_project_update = is_project_update;
     bool use_web_link = false;
     url_line          = "";
-    // Orca: not used in Orca Slicer
-    // auto split_array = splitWithStl(release_note.ToStdString(), "###");
-    // if (split_array.size() >= 3) {
-    //     for (auto i = 0; i < split_array.size(); i++) {
-    //         std::string url = split_array[i];
-    //         if (std::strstr(url.c_str(), "http://") != NULL || std::strstr(url.c_str(), "https://") != NULL) {
-    //             use_web_link = true;
-    //             url_line     = url;
-    //             break;
-    //         }
-    //     }
-    // }
 
-    // if (use_web_link) {
-    //     m_brand->Hide();
-    //     m_text_up_info->Hide();
-    //     m_simplebook_release_note->SetSelection(1);
-    //     m_vebview_release_note->LoadURL(from_u8(url_line));
-    // }
-    // else {
-    //m_simplebook_release_note->SetMaxSize(wxSize(FromDIP(560), FromDIP(430)));
     m_simplebook_release_note->SetSelection(1);
-    if (is_running_in_msix())
-        m_text_up_info->SetLabel(wxString::Format(_L("New version available: %s. Please update OrcaSlicer from the Microsoft Store."), version));
-    else
-        m_text_up_info->SetLabel(wxString::Format(_L("Click to download new version in default browser: %s"), version));
+    if (m_is_project_update) {
+        SetTitle(wxString::Format(_L("New version of %s"), SLIC3R_APP_NAME));
+        if (is_running_in_msix())
+            m_text_up_info->SetLabel(wxString::Format(_L("New version available: %s. Please update %s from the Microsoft Store."), version, SLIC3R_APP_NAME));
+        else
+            m_text_up_info->SetLabel(wxString::Format(_L("Click to download new version of %s in default browser: %s"), SLIC3R_APP_NAME, version));
+        if (m_button_download)
+            m_button_download->Show();
+        if (m_github_link) {
+            m_github_link->SetLabel(is_running_in_msix() ? _L("Check on Microsoft Store") : _L("Check on GitHub"));
+            if (!m_release_url.empty())
+                m_github_link->SetURL(m_release_url);
+        }
+    } else {
+        SetTitle(_L("New version of OrcaSlicer (Upstream)"));
+        m_text_up_info->SetLabel(wxString::Format(
+            _L("New upstream OrcaSlicer release available: %s\n"
+               "Note: This build is %s. Automatic updates can only be downloaded from the %s project repository."),
+            version, SLIC3R_APP_NAME, SLIC3R_APP_NAME));
+        if (m_button_download)
+            m_button_download->Hide();
+        if (m_github_link) {
+            m_github_link->SetLabel(_L("View upstream release on GitHub"));
+            if (!m_release_url.empty())
+                m_github_link->SetURL(m_release_url);
+        }
+    }
     auto data_buf_in = release_note.utf8_str();
     auto bg_color = StateColor::darkModeColorFor(wxColour("#FFFFFF")).GetAsString();
     auto fg_color = StateColor::darkModeColorFor(wxColour("#262E30")).GetAsString();

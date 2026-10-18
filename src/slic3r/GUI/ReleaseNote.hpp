@@ -101,11 +101,14 @@ public:
     bool ShowReleaseNote(std::string content);
     void RunScript(std::string script);
     void on_dpi_changed(const wxRect& suggested_rect) override;
-    void update_version_info(wxString release_note, wxString version);
+    void update_version_info(wxString release_note, wxString version, const std::string& release_url = "", bool is_project_update = true);
     std::vector<std::string> splitWithStl(std::string str, std::string pattern);
 
     wxStaticBitmap*   m_brand{nullptr};
     Label *           m_text_up_info{nullptr};
+    HyperLink*        m_github_link{nullptr};
+    std::string       m_release_url;
+    bool              m_is_project_update{true};
     wxWebView*        m_vebview_release_note{nullptr};
     wxSimplebook*     m_simplebook_release_note{nullptr};
     wxScrolledWindow* m_scrollwindows_release_note{nullptr};

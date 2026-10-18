@@ -190,6 +190,8 @@ public:
     std::string version_name;
     std::string description;
     std::string url;
+    std::string release_url;
+    bool        is_project_update{ true };
     bool        force_upgrade{ false };
     int      ver_items[VERSION_LEN];  // AA.BB.CC.DD
     VersionInfo() {
@@ -197,6 +199,7 @@ public:
             ver_items[i] = 0;
         }
         force_upgrade = false;
+        is_project_update = true;
         version_str = "";
     }
 
@@ -250,6 +253,8 @@ public:
         return -1;
     }
 };
+
+struct UpdateCheckState;
 
 class GUI_App : public wxApp
 {
@@ -595,6 +600,7 @@ public:
     void            check_update(bool show_tips, int by_user);
     void            check_new_version(bool show_tips = false, int by_user = 0);
     void            check_new_version_sf(bool show_tips = false, int by_user = 0);
+    void            handle_update_check_results(std::shared_ptr<UpdateCheckState> state, int by_user, bool check_stable_only);
     // Offers to migrate user filament presets made against an older release that lost printers their parent
     // listed then. At startup it asks on every start that finds such presets, unless the user chose not to be
     // reminded; while the user presets sync with the cloud, it waits until they have been pulled. by_user also

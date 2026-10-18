@@ -209,3 +209,16 @@ TEST_CASE("AppConfig Speed Dial recent count defaults, clamps and parses", "[App
         REQUIRE(config.get_speed_dial_recent_count() == SPEED_DIAL_RECENT_COUNT_DEFAULT);
     }
 }
+
+TEST_CASE("AppConfig project releases url", "[AppConfig]") {
+    AppConfig config;
+
+    SECTION("default project releases url") {
+        REQUIRE(config.project_releases_url() == "https://api.github.com/repos/locdown2311/OrcaMartelo/releases");
+    }
+
+    SECTION("overridden project releases url") {
+        config.set("project_releases_url", "https://api.github.com/repos/test/custom/releases");
+        REQUIRE(config.project_releases_url() == "https://api.github.com/repos/test/custom/releases");
+    }
+}

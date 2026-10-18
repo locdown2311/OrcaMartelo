@@ -3418,14 +3418,16 @@ bool GUI_App::on_init_inner()
 
 
                 dialog.SetExtendedMessage(extmsg);*/
-                std::string skip_version_str = this->app_config->get("app", "skip_version");
+                std::string skip_key = version_info.is_project_update ? "skip_version" : "skip_upstream_version";
+                std::string skip_version_str = this->app_config->get("app", skip_key);
                 bool skip_this_version = false;
                 if (!skip_version_str.empty()) {
-                    BOOST_LOG_TRIVIAL(info) << "new version = " << version_info.version_str << ", skip version = " << skip_version_str;
+                    BOOST_LOG_TRIVIAL(info) << (version_info.is_project_update ? "OrcaMartelo" : "Upstream")
+                                            << " new version = " << version_info.version_str << ", skip version = " << skip_version_str;
                     if (version_info.version_str <= skip_version_str) {
                         skip_this_version = true;
                     } else {
-                        app_config->set("skip_version", "");
+                        app_config->set(skip_key, "");
                         skip_this_version = false;
                     }
                 }
@@ -3433,19 +3435,20 @@ bool GUI_App::on_init_inner()
                     || evt.GetInt() != 0) {
                     UpdateVersionDialog dialog(this->mainframe);
                     wxString            extmsg = wxString::FromUTF8(version_info.description);
-                    dialog.update_version_info(extmsg, version_info.version_str);
-                    //dialog.update_version_info(version_info.description);
+                    dialog.update_version_info(extmsg, version_info.version_str, version_info.release_url, version_info.is_project_update);
                     if (evt.GetInt() != 0) {
                         dialog.m_button_skip_version->Hide();
                     }
                     switch (dialog.ShowModal())
                     {
                     case wxID_YES:
-                        // Store builds get updates from the Microsoft Store, not the GitHub release page.
-                        if (is_running_in_msix())
-                            open_ms_store_product_page();
-                        else
-                            wxLaunchDefaultBrowser(version_info.url);
+                        if (version_info.is_project_update && !version_info.url.empty()) {
+                            // Store builds get updates from the Microsoft Store, not the GitHub release page.
+                            if (is_running_in_msix())
+                                open_ms_store_product_page();
+                            else
+                                wxLaunchDefaultBrowser(version_info.url);
+                        }
                         break;
                     case wxID_NO:
                         break;
@@ -6455,14 +6458,262 @@ void maybe_attach_updater_signature(Http& http, const std::string& canonical_que
     http.header("X-Orca-Sig", "v1:" + signature);
 }
 
+struct ReleaseResult {
+    bool        found{ false };
+    bool        is_prerelease{ false };
+    Semver      version{ 0, 0, 0 };
+    std::string version_str;
+    std::string html_url;
+    std::string asset_url;
+    std::string body;
+};
+
+ReleaseResult parse_releases_json(const std::string& body, bool check_stable_only, const Semver& current_version)
+{
+    ReleaseResult result;
+    if (body.empty())
+        return result;
+
+    try {
+        boost::property_tree::ptree root;
+        std::stringstream           json_stream(body);
+        boost::property_tree::read_json(json_stream, root);
+
+        std::regex  matcher("[0-9]+\\.[0-9]+(\\.[0-9]+)*(-[A-Za-z0-9]+)?(\\+[A-Za-z0-9]+)?");
+        Semver      best_pre(0, 0, 0);
+        Semver      best_release(0, 0, 0);
+        bool        best_pre_valid = false;
+        bool        best_release_valid = false;
+        std::string best_pre_url;
+        std::string best_release_url;
+        std::string best_pre_asset_url;
+        std::string best_release_asset_url;
+        std::string best_release_content;
+        std::string best_pre_content;
+
+        auto consider_release = [&](const boost::property_tree::ptree& node) {
+            if (node.get_optional<bool>("draft").get_value_or(false))
+                return;
+
+            auto tag_opt = node.get_optional<std::string>("tag_name");
+            if (!tag_opt)
+                return;
+
+            std::string tag = *tag_opt;
+            if (!tag.empty() && (tag.front() == 'v' || tag.front() == 'V'))
+                tag.erase(0, 1);
+
+            Semver tag_version = get_version(tag, matcher);
+            if (!tag_version.valid())
+                return;
+
+            const bool        is_prerelease = node.get_optional<bool>("prerelease").get_value_or(false);
+            const std::string html_url      = node.get_optional<std::string>("html_url").get_value_or(std::string());
+            std::string       body_copy     = node.get_optional<std::string>("body").get_value_or(std::string());
+            if (body_copy == "null")
+                body_copy.clear();
+
+            std::string asset_dl_url;
+            auto assets_opt = node.get_child_optional("assets");
+            if (assets_opt) {
+                for (const auto& asset_pair : *assets_opt) {
+                    const auto& asset_node = asset_pair.second;
+                    std::string asset_name = asset_node.get<std::string>("name", "");
+                    std::string dl = asset_node.get<std::string>("browser_download_url", "");
+                    if (dl.empty())
+                        continue;
+#if defined(_WIN32)
+                    if (asset_name.size() >= 4 && asset_name.substr(asset_name.size() - 4) == ".exe") {
+                        if (asset_name.find("Installer") != std::string::npos || asset_dl_url.empty()) {
+                            asset_dl_url = dl;
+                        }
+                    }
+#elif defined(__APPLE__)
+                    if (asset_name.find(".dmg") != std::string::npos || asset_name.find(".zip") != std::string::npos) {
+                        asset_dl_url = dl;
+                    }
+#else
+                    if (asset_name.find(".AppImage") != std::string::npos || asset_name.find(".tar.gz") != std::string::npos) {
+                        asset_dl_url = dl;
+                    }
+#endif
+                }
+            }
+            if (asset_dl_url.empty())
+                asset_dl_url = html_url;
+
+            if (is_prerelease) {
+                if (!best_pre_valid || best_pre < tag_version) {
+                    best_pre            = tag_version;
+                    best_pre_url        = html_url;
+                    best_pre_asset_url  = asset_dl_url;
+                    best_pre_content    = body_copy;
+                    best_pre_valid      = true;
+                }
+            } else {
+                if (!best_release_valid || best_release < tag_version) {
+                    best_release            = tag_version;
+                    best_release_url        = html_url;
+                    best_release_asset_url  = asset_dl_url;
+                    best_release_content    = body_copy;
+                    best_release_valid      = true;
+                }
+            }
+        };
+
+        if (root.get_optional<std::string>("tag_name")) {
+            consider_release(root);
+        } else {
+            for (const auto& child : root)
+                consider_release(child.second);
+        }
+
+        if (best_pre_valid && best_release_valid && best_pre < best_release) {
+            best_pre            = best_release;
+            best_pre_url        = best_release_url;
+            best_pre_asset_url  = best_release_asset_url;
+            best_pre_content    = best_release_content;
+            best_pre_valid      = true;
+        }
+
+        const bool    prefer_release = check_stable_only || !best_pre_valid;
+        const Semver& chosen_version = prefer_release ? best_release : best_pre;
+        const bool    chosen_valid   = prefer_release ? best_release_valid : best_pre_valid;
+
+        if (chosen_valid && (!current_version.valid() || current_version < chosen_version)) {
+            result.found         = true;
+            result.is_prerelease = prefer_release ? false : best_pre_valid;
+            result.version       = chosen_version;
+            result.version_str   = prefer_release ? best_release.to_string_sf() : best_pre.to_string_sf();
+            result.html_url      = prefer_release ? best_release_url : best_pre_url;
+            result.asset_url     = prefer_release ? best_release_asset_url : best_pre_asset_url;
+            result.body          = prefer_release ? best_release_content : best_pre_content;
+        }
+    } catch (const std::exception& e) {
+        BOOST_LOG_TRIVIAL(error) << "parse_releases_json exception: " << e.what();
+    }
+    return result;
+}
+
 } // namespace
+
+struct UpdateCheckState {
+    std::mutex    mtx;
+    int           pending{ 2 };
+    ReleaseResult project_result;
+    ReleaseResult upstream_result;
+    bool          project_done{ false };
+    bool          upstream_done{ false };
+};
+
+void GUI_App::handle_update_check_results(std::shared_ptr<UpdateCheckState> state, int by_user, bool check_stable_only)
+{
+    wxGetApp().CallAfter([this, state, by_user]() {
+        const auto& proj = state->project_result;
+        const auto& up   = state->upstream_result;
+
+        if (proj.found) {
+            // OrcaMartelo update available!
+            version_info.url           = proj.asset_url;
+            version_info.release_url   = proj.html_url;
+            version_info.version_str   = proj.version_str;
+            version_info.description   = proj.body.empty() ? (std::string(SLIC3R_APP_NAME) + " " + proj.version_str) : proj.body;
+            version_info.is_project_update = true;
+            version_info.force_upgrade = false;
+
+            if (up.found) {
+                version_info.description += "\n\n---\n*Note: Upstream OrcaSlicer " + up.version_str + " is also available.*";
+            }
+
+            wxCommandEvent* evt = new wxCommandEvent(EVT_SLIC3R_VERSION_ONLINE);
+            evt->SetString(proj.version.to_string());
+            evt->SetInt(by_user);
+            GUI::wxGetApp().QueueEvent(evt);
+        } else if (up.found) {
+            // Upstream update available, but no OrcaMartelo update yet.
+            // Push notice to plater notification manager.
+            if (this->plater_ != nullptr && this->plater_->get_notification_manager() != nullptr) {
+                std::string notif_msg = (boost::format(_u8L("A new version of upstream OrcaSlicer is available: %1%\n(OrcaMartelo updates are managed from the OrcaMartelo project).")) % up.version_str).str();
+                this->plater_->get_notification_manager()->push_notification(
+                    NotificationType::CustomNotification,
+                    NotificationManager::NotificationLevel::ImportantNotificationLevel,
+                    notif_msg,
+                    _u8L("View release notes"),
+                    [up_url = up.html_url](wxEvtHandler*) -> bool {
+                        wxLaunchDefaultBrowser(up_url);
+                        return true;
+                    }
+                );
+            }
+
+            version_info.url           = ""; // Upstream updates cannot be downloaded/installed directly!
+            version_info.release_url   = up.html_url;
+            version_info.version_str   = up.version_str;
+            version_info.description   = up.body.empty() ? ("OrcaSlicer " + up.version_str) : up.body;
+            version_info.is_project_update = false;
+            version_info.force_upgrade = false;
+
+            wxCommandEvent* evt = new wxCommandEvent(EVT_SLIC3R_VERSION_ONLINE);
+            evt->SetString(up.version.to_string());
+            evt->SetInt(by_user);
+            GUI::wxGetApp().QueueEvent(evt);
+        } else {
+            if (by_user != 0) {
+                this->no_new_version();
+            }
+        }
+    });
+}
 
 void GUI_App::check_new_version_sf(bool show_tips, int by_user)
 {
-    AppConfig* app_config = wxGetApp().app_config;
-    bool       check_stable_only = app_config->get_bool("check_stable_update_only");
-    auto version_check_url = app_config->version_check_url();
+    AppConfig*  app_config        = wxGetApp().app_config;
+    bool        check_stable_only = app_config->get_bool("check_stable_update_only");
+    std::regex  matcher("[0-9]+\\.[0-9]+(\\.[0-9]+)*(-[A-Za-z0-9]+)?(\\+[A-Za-z0-9]+)?");
+    Semver      current_version   = get_version(SoftFever_VERSION, matcher);
 
+    auto state = std::make_shared<UpdateCheckState>();
+
+    // 1. Check OrcaMartelo project releases from GitHub
+    std::string project_url = app_config->project_releases_url();
+    auto http_proj = Http::get(project_url);
+    http_proj.header("accept", "application/vnd.github.v3+json")
+        .header("user-agent", std::string(SLIC3R_APP_NAME) + "/" + SoftFever_VERSION)
+        .timeout_connect(5)
+        .timeout_max(10)
+        .on_error([this, state, by_user, check_stable_only](std::string body, std::string error, unsigned http_status) {
+            (void)body;
+            BOOST_LOG_TRIVIAL(warning) << format("Error checking OrcaMartelo releases: HTTP %1%, %2%", http_status, error);
+            bool dispatch = false;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                state->project_done = true;
+                state->pending--;
+                if (state->pending == 0)
+                    dispatch = true;
+            }
+            if (dispatch)
+                this->handle_update_check_results(state, by_user, check_stable_only);
+        })
+        .on_complete([this, state, by_user, check_stable_only, current_version](std::string body, unsigned http_status) {
+            if (http_status == 200) {
+                boost::trim(body);
+                state->project_result = parse_releases_json(body, check_stable_only, current_version);
+            }
+            bool dispatch = false;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                state->project_done = true;
+                state->pending--;
+                if (state->pending == 0)
+                    dispatch = true;
+            }
+            if (dispatch)
+                this->handle_update_check_results(state, by_user, check_stable_only);
+        });
+
+    // 2. Check upstream OrcaSlicer releases
+    auto version_check_url = app_config->version_check_url();
     UpdaterQuery query{
         detect_updater_iid(app_config),
         detect_updater_version(),
@@ -6481,125 +6732,45 @@ void GUI_App::check_new_version_sf(bool show_tips, int by_user)
         version_check_url += query_string;
     }
 
-    auto http = Http::get(version_check_url);
-    maybe_attach_updater_signature(http, query_string, version_check_url);
+    auto http_upstream = Http::get(version_check_url);
+    maybe_attach_updater_signature(http_upstream, query_string, version_check_url);
 
-    http.header("accept", "application/vnd.github.v3+json")
+    http_upstream.header("accept", "application/vnd.github.v3+json")
         .timeout_connect(5)
         .timeout_max(10)
-        .on_error([&](std::string body, std::string error, unsigned http_status) {
-          (void)body;
-          BOOST_LOG_TRIVIAL(error) << format("Error getting: `%1%`: HTTP %2%, %3%", "check_new_version_sf", http_status,
-                                             error);
+        .on_error([this, state, by_user, check_stable_only](std::string body, std::string error, unsigned http_status) {
+            (void)body;
+            BOOST_LOG_TRIVIAL(warning) << format("Error checking upstream releases: HTTP %1%, %2%", http_status, error);
+            bool dispatch = false;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                state->upstream_done = true;
+                state->pending--;
+                if (state->pending == 0)
+                    dispatch = true;
+            }
+            if (dispatch)
+                this->handle_update_check_results(state, by_user, check_stable_only);
         })
-        .on_complete([this, by_user, check_stable_only](std::string body, unsigned http_status) {
-          if (http_status != 200)
-            return;
-          try {
-            boost::trim(body);
-            if (body.empty()) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
+        .on_complete([this, state, by_user, check_stable_only, current_version](std::string body, unsigned http_status) {
+            if (http_status == 200) {
+                boost::trim(body);
+                state->upstream_result = parse_releases_json(body, check_stable_only, current_version);
             }
-
-            boost::property_tree::ptree root;
-            std::stringstream           json_stream(body);
-            boost::property_tree::read_json(json_stream, root);
-
-            std::regex matcher("[0-9]+\\.[0-9]+(\\.[0-9]+)*(-[A-Za-z0-9]+)?(\\+[A-Za-z0-9]+)?");
-            Semver    current_version = get_version(SoftFever_VERSION, matcher);
-            Semver    best_pre(0, 0, 0);
-            Semver    best_release(0, 0, 0);
-            bool      best_pre_valid = false;
-            bool      best_release_valid = false;
-            std::string best_pre_url;
-            std::string best_release_url;
-            std::string best_release_content;
-            std::string best_pre_content;
-
-            auto consider_release = [&](const boost::property_tree::ptree& node) {
-                auto tag_opt = node.get_optional<std::string>("tag_name");
-                if (!tag_opt)
-                    return;
-
-                std::string tag = *tag_opt;
-                if (!tag.empty() && tag.front() == 'v')
-                    tag.erase(0, 1);
-
-                Semver tag_version = get_version(tag, matcher);
-                if (!tag_version.valid())
-                    return;
-
-                const bool is_prerelease = node.get_optional<bool>("prerelease").get_value_or(false);
-                const std::string html_url = node.get_optional<std::string>("html_url").get_value_or(std::string());
-                const std::string body_copy = node.get_optional<std::string>("body").get_value_or(std::string());
-
-                if (is_prerelease) {
-                    if (!best_pre_valid || best_pre < tag_version) {
-                        best_pre        = tag_version;
-                        best_pre_url    = html_url;
-                        best_pre_content = body_copy;
-                        best_pre_valid  = true;
-                    }
-                } else {
-                    if (!best_release_valid || best_release < tag_version) {
-                        best_release         = tag_version;
-                        best_release_url     = html_url;
-                        best_release_content = body_copy;
-                        best_release_valid   = true;
-                    }
-                }
-            };
-
-            if (root.get_optional<std::string>("tag_name")) {
-                consider_release(root);
-            } else {
-                for (const auto& child : root)
-                    consider_release(child.second);
+            bool dispatch = false;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                state->upstream_done = true;
+                state->pending--;
+                if (state->pending == 0)
+                    dispatch = true;
             }
-
-            if (!best_release_valid && !best_pre_valid) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
-            }
-
-            if (best_pre_valid && best_release_valid && best_pre < best_release) {
-                best_pre        = best_release;
-                best_pre_url    = best_release_url;
-                best_pre_content = best_release_content;
-                best_pre_valid  = true;
-            }
-
-            const bool        prefer_release = check_stable_only || !best_pre_valid;
-            const Semver&     chosen_version = prefer_release ? best_release : best_pre;
-            const bool        chosen_valid   = prefer_release ? best_release_valid : best_pre_valid;
-
-            if (!chosen_valid) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
-            }
-
-            if (current_version.valid() && chosen_version <= current_version) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
-            }
-
-            version_info.url           = prefer_release ? best_release_url : best_pre_url;
-            version_info.version_str   = prefer_release ? best_release.to_string_sf() : best_pre.to_string_sf();
-            version_info.description   = prefer_release ? best_release_content : best_pre_content;
-            version_info.force_upgrade = false;
-
-            wxCommandEvent* evt = new wxCommandEvent(EVT_SLIC3R_VERSION_ONLINE);
-            evt->SetString((prefer_release ? best_release : best_pre).to_string());
-            GUI::wxGetApp().QueueEvent(evt);
-          } catch (...) {}
+            if (dispatch)
+                this->handle_update_check_results(state, by_user, check_stable_only);
         });
 
-    http.perform();
+    http_proj.perform();
+    http_upstream.perform();
 }
 
 // return true if handled
@@ -6733,11 +6904,12 @@ void GUI_App::enter_force_upgrade()
 
 void GUI_App::set_skip_version(bool skip)
 {
-    BOOST_LOG_TRIVIAL(info) << "set_skip_version, skip = " << skip << ", version = " <<version_info.version_str;
+    BOOST_LOG_TRIVIAL(info) << "set_skip_version, skip = " << skip << ", version = " << version_info.version_str;
+    std::string skip_key = version_info.is_project_update ? "skip_version" : "skip_upstream_version";
     if (skip) {
-        app_config->set("skip_version", version_info.version_str);
-    }else {
-        app_config->set("skip_version", "");
+        app_config->set(skip_key, version_info.version_str);
+    } else {
+        app_config->set(skip_key, "");
     }
 }
 
