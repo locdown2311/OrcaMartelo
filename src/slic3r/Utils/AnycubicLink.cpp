@@ -1777,8 +1777,19 @@ bool AnycubicLink::upload(PrintHostUpload upload_data, ProgressFn progress_fn, E
                 // so poll until both the selector and the material feed are completely finished and idle.
                 BOOST_LOG_TRIVIAL(info) << "[AnycubicLink] Pre-engaging extruder channel " << slot_idx << ", waiting for hardware confirmation...";
                 const auto start_time = std::chrono::steady_clock::now();
-                const auto timeout = std::chrono::seconds(120);
+                const auto timeout = std::chrono::seconds(25);
                 while (std::chrono::steady_clock::now() - start_time < timeout) {
+                    bool cancel = false;
+                    Http::Progress dummy_progress(0, 0, 0, 0, "");
+                    progress_fn(std::move(dummy_progress), cancel);
+                    if (cancel) {
+                        if (!temp_modified_file.empty()) {
+                            boost::system::error_code ec;
+                            fs::remove(temp_modified_file, ec);
+                        }
+                        return false;
+                    }
+
                     try {
                         auto req = Http::get("http://127.0.0.1:18988/status");
                         req.header("X-OrcaCubic-Token", anycubic_lan_bridge_token())
@@ -1804,9 +1815,14 @@ bool AnycubicLink::upload(PrintHostUpload upload_data, ProgressFn progress_fn, E
                                                                   || (ch_status == 3)
                                                                   || (printer_state == "feeding" || printer_state == "loading");
 
+                                       bool is_idle_or_ready = (printer_state == "free" || printer_state == "ready"
+                                                             || printer_state == "idle" || printer_state == "standby"
+                                                             || printer_state == "finish" || printer_state == "completed"
+                                                             || printer_state == "stop" || printer_state == "stopped");
+
                                        // Confirmed only when target channel matches, selector is idle,
-                                       // material feed is complete/idle, and printer state is ready/free.
-                                       if (curr_ch == slot_idx && ch_status == 0 && !is_loading_in_progress && (printer_state == "free" || printer_state == "ready")) {
+                                       // material feed is complete/idle, and printer state is ready/free/idle.
+                                       if (curr_ch == slot_idx && ch_status == 0 && !is_loading_in_progress && is_idle_or_ready) {
                                            channel_confirmed = true;
                                        }
                                    } catch (...) {}
@@ -1822,21 +1838,23 @@ bool AnycubicLink::upload(PrintHostUpload upload_data, ProgressFn progress_fn, E
                     std::this_thread::sleep_for(std::chrono::milliseconds(300));
                 }
                 if (!channel_confirmed) {
-                    BOOST_LOG_TRIVIAL(warning) << "[AnycubicLink] Channel confirmation timed out after 120s.";
+                    BOOST_LOG_TRIVIAL(warning) << "[AnycubicLink] Channel confirmation timed out; continuing standard upload flow.";
                 }
             }
         } catch (...) {}
     }
 
-    // Starting a print while the filament feed is still in progress makes the
-    // printer cancel the job, so refuse to upload unless engagement completed.
     if (pre_engage_attempted && !channel_confirmed) {
-        if (!temp_modified_file.empty()) {
-            boost::system::error_code ec;
-            fs::remove(temp_modified_file, ec);
+        BOOST_LOG_TRIVIAL(warning) << "[AnycubicLink] Filament pre-engagement was not confirmed by the printer; reverting to standard toolchange.";
+        if (toolchange_skipped) {
+            if (!temp_modified_file.empty()) {
+                boost::system::error_code ec;
+                fs::remove(temp_modified_file, ec);
+                temp_modified_file.clear();
+            }
+            upload_file_path = upload_data.source_path;
+            toolchange_skipped = false;
         }
-        error_fn(_(L("Filament pre-engagement was not confirmed by the printer. The upload was aborted to avoid the printer cancelling the job mid-feed. Check the ACE/filament path and try again.")));
-        return false;
     }
 
     if (toolchange_skipped && !channel_confirmed) {
@@ -1869,6 +1887,7 @@ bool AnycubicLink::upload(PrintHostUpload upload_data, ProgressFn progress_fn, E
     std::string response_payload;
 
     BOOST_LOG_TRIVIAL(info) << "[AnycubicLink] Uploading file " << upload_filename << " (" << file_size_str << " bytes) to configured printer";
+    info_fn("AnycubicLink", GUI::from_u8((boost::format(_utf8(L("Uploading %1% to printer..."))) % upload_filename).str()));
 
     auto http = Http::post(url);
     http.header("User-Agent", "AnycubicSlicerNext/2.0.0.2")
@@ -1876,6 +1895,8 @@ bool AnycubicLink::upload(PrintHostUpload upload_data, ProgressFn progress_fn, E
         .header("X-BBL-Client-Type", "slicer")
         .header("X-BBL-Client-Version", "01.03.09.04")
         .header("X-File-Length", file_size_str)
+        .timeout_connect(10)
+        .timeout_max(600)
         .form_add("filename", upload_filename)
         .form_add_file("gcode", upload_file_path.string(), upload_filename)
         .on_complete([&](std::string body, unsigned status) {

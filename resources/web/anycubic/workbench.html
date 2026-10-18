@@ -2523,13 +2523,17 @@
         // 512 MiB cap, matching the bridge daemon's MAX_UPLOAD_FILE_BYTES.
         const MAX_PRINT_FILE_BYTES = 512 * 1024 * 1024;
 
-        function bytesToBase64(bytes) {
-            let binary = "";
-            const chunk = 0x8000;
-            for (let i = 0; i < bytes.length; i += chunk) {
-                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-            }
-            return btoa(binary);
+        function readFileAsBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const res = String(reader.result || "");
+                    const commaIdx = res.indexOf(",");
+                    resolve(commaIdx >= 0 ? res.slice(commaIdx + 1) : res);
+                };
+                reader.onerror = () => reject(new Error("Failed to read file"));
+                reader.readAsDataURL(file);
+            });
         }
 
         async function uploadPickedPrintFile(input) {
@@ -2546,10 +2550,11 @@
                 if (statusEl) statusEl.innerText = "Error: file is larger than 512 MB.";
                 return;
             }
-            if (statusEl) statusEl.innerText = `Reading ${name} (${(file.size / 1048576).toFixed(1)} MB)...`;
+            const sizeMb = (file.size / 1048576).toFixed(1);
+            if (statusEl) statusEl.innerText = `⏳ Reading ${name} (${sizeMb} MB)...`;
             try {
-                const contentBase64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
-                if (statusEl) statusEl.innerText = `Uploading ${name} to printer...`;
+                const contentBase64 = await readFileAsBase64(file);
+                if (statusEl) statusEl.innerText = `⏳ Uploading ${name} (${sizeMb} MB) to printer...`;
                 const res = await fetch("http://127.0.0.1:18988/upload_print_file", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -2559,10 +2564,10 @@
                 if (data.status === "ok") {
                     if (statusEl) statusEl.innerText = `✓ ${data.filename} uploaded — print started (${(data.filesize / 1048576).toFixed(1)} MB).`;
                 } else {
-                    if (statusEl) statusEl.innerText = `Error: ${data.message || "upload failed"}`;
+                    if (statusEl) statusEl.innerText = `⚠️ Upload error: ${data.message || "printer rejected upload"}`;
                 }
             } catch(e) {
-                if (statusEl) statusEl.innerText = `Network error: ${e.message}`;
+                if (statusEl) statusEl.innerText = `❌ Network error: ${e.message}`;
             }
         }
 

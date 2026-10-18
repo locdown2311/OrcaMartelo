@@ -69,6 +69,7 @@ telemetry = {
     "raw_camera_url": f"http://{PRINTER_IP}:18088/flv",
     "custom_camera_url": "",
     "upload_url": f"http://{PRINTER_IP}:{PRINTER_HTTP_PORT}/gcode_upload",
+    "token": "",
     "light": 1,
     "nozzle_light": 0,
     "camera_light": 1,
@@ -286,6 +287,9 @@ def fetch_credentials():
         token = info.get("token", "")
         if not token:
             return False
+        telemetry["token"] = token
+        if "?s=" not in telemetry.get("upload_url", ""):
+            telemetry["upload_url"] = f"http://{PRINTER_IP}:{PRINTER_HTTP_PORT}/gcode_upload?s={token}"
 
         telemetry["model"] = info.get("deviceName") or info.get("modelName") or "Anycubic Printer"
         telemetry["model_id"] = str(info.get("modelId", ""))
@@ -390,8 +394,12 @@ def on_mqtt_message(c, userdata, msg):
                     if val and isinstance(val, str) and val.startswith("http"):
                         telemetry["raw_camera_url"] = val
                         break
-                if "fileUploadurl" in urls and urls["fileUploadurl"]:
-                    telemetry["upload_url"] = urls["fileUploadurl"]
+                up_url = urls.get("fileUploadurl") or urls.get("fileUploadUrl") or urls.get("uploadUrl") or urls.get("file_upload_url")
+                if up_url:
+                    telemetry["upload_url"] = up_url
+                    up_token = urllib.parse.parse_qs(urllib.parse.urlparse(up_url).query).get("s", [""])[0]
+                    if up_token:
+                        telemetry["token"] = up_token
 
         elif t == "status":
             st = payload.get("state", "")
@@ -469,7 +477,7 @@ def query_extrude_control():
         "action": "getInfo",
         "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
         "timestamp": int(time.time() * 1000),
-        "data": None
+        "data": {}
     }
     try:
         mqtt_client.publish(topic, json.dumps(msg))
@@ -488,7 +496,7 @@ def query_all():
             "action": "getInfo" if q_type in ["multiColorBox", "extfilbox", "extrudeControl"] else "query",
             "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
             "timestamp": int(time.time() * 1000),
-            "data": None
+            "data": {}
         }
         try:
             mqtt_client.publish(topic, json.dumps(msg))
@@ -600,6 +608,9 @@ def upload_and_run_gcode(gcode_text, delete_after=True):
     fsize = len(content_bytes)
 
     upload_url = telemetry.get("upload_url", f"http://{PRINTER_IP}:{PRINTER_HTTP_PORT}/gcode_upload")
+    tok = telemetry.get("token") or urllib.parse.parse_qs(urllib.parse.urlparse(upload_url).query).get("s", [""])[0]
+    if tok and "?s=" not in upload_url:
+        upload_url = f"http://{PRINTER_IP}:{PRINTER_HTTP_PORT}/gcode_upload?s={tok}"
     boundary = "----WebKitFormBoundary" + "".join(random.choices(string.ascii_letters + string.digits, k=16))
     
     part1 = f'--{boundary}\r\nContent-Disposition: form-data; name="filename"\r\n\r\n{fname}\r\n'
@@ -730,6 +741,9 @@ def upload_and_start_print_file(content_bytes, raw_filename, use_ams=True, task_
     fsize = len(content_bytes)
 
     upload_url = telemetry.get("upload_url", f"http://{PRINTER_IP}:{PRINTER_HTTP_PORT}/gcode_upload")
+    tok = telemetry.get("token") or urllib.parse.parse_qs(urllib.parse.urlparse(upload_url).query).get("s", [""])[0]
+    if tok and "?s=" not in upload_url:
+        upload_url = f"http://{PRINTER_IP}:{PRINTER_HTTP_PORT}/gcode_upload?s={tok}"
     boundary = "----WebKitFormBoundary" + "".join(random.choices(string.ascii_letters + string.digits, k=16))
     part1 = f'--{boundary}\r\nContent-Disposition: form-data; name="filename"\r\n\r\n{fname}\r\n'
     part2 = f'--{boundary}\r\nContent-Disposition: form-data; name="gcode"; filename="{fname}"\r\nContent-Type: application/octet-stream\r\n\r\n'
@@ -947,7 +961,7 @@ class BridgeServer(BaseHTTPRequestHandler):
             return
         elif self.path.startswith("/upload-token"):
             upload_url = telemetry.get("upload_url", "")
-            token = urllib.parse.parse_qs(urllib.parse.urlparse(upload_url).query).get("s", [""])[0]
+            token = urllib.parse.parse_qs(urllib.parse.urlparse(upload_url).query).get("s", [""])[0] or telemetry.get("token", "")
             self.send_response(200 if token else 503)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -1174,7 +1188,6 @@ class BridgeServer(BaseHTTPRequestHandler):
 
             elif action == "switch_channel":
                 channel_idx = max(0, min(3, _as_int(data.get("index", data.get("slot", 0)), 0)))
-                topic_ext = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/extrudeControl"
                 msg = {
                     "type": "extrudeControl",
                     "action": "switchChannel",
@@ -1183,8 +1196,10 @@ class BridgeServer(BaseHTTPRequestHandler):
                     "data": {"index": channel_idx}
                 }
                 if mqtt_client:
+                    topic_ext = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/extrudeControl"
                     mqtt_client.publish(topic_ext, json.dumps(msg))
                     print(f"[Bridge] Published switchChannel to slot {channel_idx + 1} (index {channel_idx})")
+                    threading.Timer(1.5, query_extrude_control).start()
 
             elif action == "start_print_job":
                 filename = data.get("filename", "")
