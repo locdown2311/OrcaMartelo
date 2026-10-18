@@ -126,8 +126,8 @@ public:
         m_is_first_print(true),
         m_print_config(&print_config),
         m_last_wipe_tower_print_z(print_config.z_offset.value),
-        m_sparse_layers_skipped(wipe_tower_sparse_layers_skipped(print_config)),
-        m_sparse_layers_combined(wipe_tower_sparse_layers_combined(print_config))
+        m_sparse_layers_skipped(print_config.wipe_tower_type.value == WipeTowerType::Type3 ? false : wipe_tower_sparse_layers_skipped(print_config)),
+        m_sparse_layers_combined(print_config.wipe_tower_type.value == WipeTowerType::Type3 ? false : wipe_tower_sparse_layers_combined(print_config))
     {
         // Precomputed rather than accumulated while emitting, so that the clearance validator and
         // the emitter cannot disagree about where the compacted tower sits on any given layer.

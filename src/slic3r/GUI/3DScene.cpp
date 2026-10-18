@@ -995,12 +995,13 @@ int GLVolumeCollection::load_wipe_tower_preview(
     std::vector<ColorRGBA> colors;
     GUI::PartPlateList& ppl = GUI::wxGetApp().plater()->get_partplate_list();
     std::vector<int> plate_extruders = ppl.get_plate(plate_idx)->get_extruders(true);
-    TriangleMesh wipe_tower_shell = make_cube(width, depth, height);
     const DynamicPrintConfig &printer_cfg = GUI::wxGetApp().preset_bundle->printers.get_edited_preset().config;
     const bool is_lego = resolve_wipe_tower_type(printer_cfg) == WipeTowerType::Type3;
+    const float stud_r = 2.4f;
+    const float stud_h = 1.8f;
+    float body_h = is_lego ? std::max(0.1f, height - stud_h) : height;
+    TriangleMesh wipe_tower_shell = make_cube(width, depth, body_h);
     if (is_lego) {
-        const float stud_r = 2.4f;
-        const float stud_h = 1.8f;
         const float pitch  = 8.0f;
         int num_x = std::max(1, int(std::round((width + 0.2f) / pitch)));
         int num_y = std::max(1, int(std::round((depth + 0.2f) / pitch)));
@@ -1009,7 +1010,7 @@ int GLVolumeCollection::load_wipe_tower_preview(
         for (int ix = 0; ix < num_x; ++ix) {
             for (int iy = 0; iy < num_y; ++iy) {
                 TriangleMesh stud = make_cylinder(stud_r, stud_h, 2.0 * PI / 36.0);
-                stud.translate(Vec3f(x0 + float(ix) * pitch, y0 + float(iy) * pitch, height));
+                stud.translate(Vec3f(x0 + float(ix) * pitch, y0 + float(iy) * pitch, body_h));
                 wipe_tower_shell.merge(stud);
             }
         }
@@ -1022,8 +1023,13 @@ int GLVolumeCollection::load_wipe_tower_preview(
     if (show_brim) {
         // The brim follows the real first-layer outline: a Type2 cone-wall tower's base bulges
         // past the body box. The wall type and angle are print settings, the planner a printer one.
-        const DynamicPrintConfig &print_cfg   = GUI::wxGetApp().preset_bundle->prints.get_edited_preset().config;
-        const Polygon  outline      = estimate_wipe_tower_first_layer_outline(print_cfg, resolve_wipe_tower_type(printer_cfg), width, depth, height);
+        Polygon outline;
+        if (is_lego) {
+            outline.points = {Point::new_scale(Vec2d(0., 0.)), Point::new_scale(Vec2d(width, 0.)), Point::new_scale(Vec2d(width, depth)), Point::new_scale(Vec2d(0., depth))};
+        } else {
+            const DynamicPrintConfig &print_cfg = GUI::wxGetApp().preset_bundle->prints.get_edited_preset().config;
+            outline = estimate_wipe_tower_first_layer_outline(print_cfg, resolve_wipe_tower_type(printer_cfg), width, depth, height);
+        }
         const Polygons brim_outline = offset(outline, scaled(brim_width));
         brim_slab                   = WipeTower::its_make_rib_brim(brim_outline.empty() ? outline : brim_outline.front(), brim_height);
         wipe_tower_shell.merge(brim_slab);

@@ -5382,7 +5382,7 @@ void Print::_make_wipe_tower()
 
         // Unload the current filament over the purge tower.
         coordf_t layer_height = m_objects.front()->config().layer_height.value;
-        bool generate_final_purge = true;
+        bool generate_final_purge = this->wipe_tower_type() != WipeTowerType::Type3;
         if (m_wipe_tower_data.tool_ordering.back().wipe_tower_partitions > 0) {
             // The wipe tower goes up to the last layer of the print.
             if (wipe_tower.layer_finished()) {
@@ -5407,11 +5407,11 @@ void Print::_make_wipe_tower()
         m_wipe_tower_data.number_of_toolchanges = wipe_tower.get_number_of_toolchanges();
         m_wipe_tower_data.construct_mesh(wipe_tower.width(), wipe_tower.get_depth(),
                                          wipe_tower.get_wipe_tower_height(), wipe_tower.get_brim_width(),
-                                         config().wipe_tower_wall_type.value == WipeTowerWallType::wtwRib,
+                                         this->wipe_tower_type() == WipeTowerType::Type3 ? false : (config().wipe_tower_wall_type.value == WipeTowerWallType::wtwRib),
                                          wipe_tower.get_rib_width(), wipe_tower.get_rib_length(),
-                                         config().wipe_tower_fillet_wall.value,
-                                         config().wipe_tower_wall_type.value == WipeTowerWallType::wtwCone ?
-                                             (float) config().wipe_tower_cone_angle.value : 0.f,
+                                         this->wipe_tower_type() == WipeTowerType::Type3 ? false : config().wipe_tower_fillet_wall.value,
+                                         this->wipe_tower_type() == WipeTowerType::Type3 ? 0.f : (config().wipe_tower_wall_type.value == WipeTowerWallType::wtwCone ?
+                                             (float) config().wipe_tower_cone_angle.value : 0.f),
                                          this->wipe_tower_type() == WipeTowerType::Type3);
         const Vec3d origin                      = Vec3d::Zero();
         // FakeWipeTower::pos is a bed-frame translation applied after rotation

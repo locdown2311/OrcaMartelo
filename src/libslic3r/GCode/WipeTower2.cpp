@@ -1074,8 +1074,18 @@ WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& defau
     m_is_lego(config.wipe_tower_type.value == WipeTowerType::Type3)
 {
     if (m_is_lego) {
+        m_wall_type = (int)WipeTowerWallType::wtwRectangle;
+        m_used_fillet = false;
+        m_rib_width = 0.f;
+        m_rib_length = 0.f;
+        m_extra_rib_length = 0.f;
+        m_use_gap_wall = false;
+        m_sparse_layers_skipped = false;
+        m_sparse_layers_combined = false;
+
         const float pitch = 8.0f;
-        int num_x = std::max(2, int(std::round((m_wipe_tower_width + 0.2f) / pitch)));
+        // Default to a classic 2x4 Lego brick: 4 studs in X (31.8 mm)
+        int num_x = std::max(4, int(std::round((m_wipe_tower_width + 0.2f) / pitch)));
         m_wipe_tower_width = float(num_x) * pitch - 0.2f;
     }
     // Read absolute value of first layer speed, if given as percentage,
@@ -2025,11 +2035,44 @@ WipeTower::ToolChangeResult WipeTower2::finish_layer()
 
     const float stud_height = 1.8f;
     const bool is_lego_stud_layer = m_is_lego && m_wipe_tower_height > 3.6f && (m_wipe_tower_height - m_z_pos <= stud_height);
+    const float roof_thickness = 4.0f * m_layer_height;
     const bool is_lego_roof = m_is_lego && m_wipe_tower_height > 3.6f &&
-                              (m_wipe_tower_height - m_z_pos <= stud_height + 2.0f * m_layer_height) &&
+                              (m_wipe_tower_height - m_z_pos <= stud_height + roof_thickness) &&
                               (m_wipe_tower_height - m_z_pos > stud_height);
 
-    if (!is_lego_stud_layer) {
+    if (is_lego_roof) {
+        // Complete solid top roof for the Lego brick body!
+        // Seal the entire top face with 100% solid rectilinear infill lines.
+        const float x_min = m_perimeter_width;
+        const float x_max = m_wipe_tower_width - m_perimeter_width;
+        const float y_min = m_perimeter_width;
+        const float y_max = m_wipe_tower_depth - m_perimeter_width;
+        const float infill_spacing = std::max(0.05f, m_perimeter_width - m_layer_height * float(1.0 - M_PI / 4.0));
+
+        writer.append(";--------------------\n"
+                      "; LEGO ROOF SOLID INFILL START\n");
+        if (m_num_layer_changes % 2 == 0) {
+            bool right_to_left = false;
+            for (float y = y_min + infill_spacing * 0.5f; y <= y_max - infill_spacing * 0.25f; y += infill_spacing) {
+                float start_x = right_to_left ? x_max : x_min;
+                float end_x   = right_to_left ? x_min : x_max;
+                writer.travel(start_x, y, feedrate);
+                writer.extrude(end_x, y, feedrate);
+                right_to_left = !right_to_left;
+            }
+        } else {
+            bool top_to_bottom = false;
+            for (float x = x_min + infill_spacing * 0.5f; x <= x_max - infill_spacing * 0.25f; x += infill_spacing) {
+                float start_y = top_to_bottom ? y_max : y_min;
+                float end_y   = top_to_bottom ? y_min : y_max;
+                writer.travel(x, start_y, feedrate);
+                writer.extrude(x, end_y, feedrate);
+                top_to_bottom = !top_to_bottom;
+            }
+        }
+        writer.append("; LEGO ROOF SOLID INFILL END\n"
+                      ";--------------------\n");
+    } else if (!is_lego_stud_layer) {
         // inner perimeter of the sparse section, if there is space for it:
         if (fill_box.ru.y() - fill_box.rd.y() > m_perimeter_width - WT_EPSILON)
             writer.rectangle(fill_box.ld, fill_box.rd.x()-fill_box.ld.x(), fill_box.ru.y()-fill_box.rd.y(), feedrate);
@@ -2060,7 +2103,6 @@ WipeTower::ToolChangeResult WipeTower2::finish_layer()
                                                || m_filpar[tch.old_tool].is_soluble;
                                                 });
             solid_infill |= first_layer && m_adhesion;
-            solid_infill |= is_lego_roof;
 
             if (solid_infill) {
                 float sparse_factor = 1.5f; // 1=solid, 2=every other line, etc.
@@ -2103,8 +2145,8 @@ WipeTower::ToolChangeResult WipeTower2::finish_layer()
     Polygon poly;
     if (is_lego_stud_layer) {
         extrude_studs(writer, feedrate);
-        WipeTower::box_coordinates wt_box(Vec2f(0.f, 0.f), m_wipe_tower_width, m_layer_info->depth + m_perimeter_width);
-        poly = generate_support_rib_wall(writer, wt_box, feedrate, first_layer, false, false);
+        WipeTower::box_coordinates wt_box(Vec2f(0.f, 0.f), m_wipe_tower_width, m_wipe_tower_depth);
+        poly = generate_rectange_polygon(wt_box.ld, wt_box.ru);
     } else if (m_wall_type == (int)wtwCone) {
          WipeTower::box_coordinates wt_box(Vec2f(0.f, (m_current_shape == SHAPE_REVERSED ? m_layer_info->toolchanges_depth() : 0.f)),
                                            m_wipe_tower_width, m_layer_info->depth + m_perimeter_width);
@@ -2509,7 +2551,7 @@ void WipeTower2::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> 
     }
 #endif
 
-    if (m_wall_type == (int)wtwRib) {
+    if (!m_is_lego && m_wall_type == (int)wtwRib) {
         // Rib wall: force a square tower like WipeTower::plan_tower_new(), ignoring the
         // configured prime_tower_width (the GUI greys it out in rib mode). The planned depths
         // already include the extra-spacing factors, so sqrt(depth * width) preserves the
@@ -2534,12 +2576,18 @@ void WipeTower2::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> 
             m_rib_length = std::max(m_rib_length, min_depth * (float)std::sqrt(2.f));
     }
 
-    const float diagonal = std::sqrt(m_wipe_tower_depth * m_wipe_tower_depth + m_wipe_tower_width * m_wipe_tower_width);
-    m_rib_length = std::max(m_rib_length, diagonal);
-    m_rib_length += m_extra_rib_length;
-    m_rib_length = std::max(diagonal, m_rib_length); // a negative extra length must not shrink the ribs below the diagonal
-    m_rib_width  = std::min(m_rib_width, std::min(m_wipe_tower_depth, m_wipe_tower_width) /
-                                             2.f); // Ensure that the rib wall of the wipetower are attached to the infill.
+    if (!m_is_lego) {
+        const float diagonal = std::sqrt(m_wipe_tower_depth * m_wipe_tower_depth + m_wipe_tower_width * m_wipe_tower_width);
+        m_rib_length = std::max(m_rib_length, diagonal);
+        m_rib_length += m_extra_rib_length;
+        m_rib_length = std::max(diagonal, m_rib_length); // a negative extra length must not shrink the ribs below the diagonal
+        m_rib_width  = std::min(m_rib_width, std::min(m_wipe_tower_depth, m_wipe_tower_width) /
+                                                 2.f); // Ensure that the rib wall of the wipetower are attached to the infill.
+    } else {
+        m_rib_length = 0.f;
+        m_rib_width = 0.f;
+        m_rib_offset = Vec2f::Zero();
+    }
 
     if (m_use_gap_wall)
         compute_wall_skip_points();
@@ -2567,36 +2615,47 @@ void WipeTower2::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> 
         set_layer(layer.z, layer.height, 0, false/*layer.z == m_plan.front().z*/, layer.z == m_plan.back().z);
         m_internal_rotation += 180.f;
 
-        if (m_layer_info->depth < m_wipe_tower_depth - m_perimeter_width)
+        if (m_is_lego)
+            m_y_shift = 0.f;
+        else if (m_layer_info->depth < m_wipe_tower_depth - m_perimeter_width)
 			m_y_shift = (m_wipe_tower_depth-m_layer_info->depth-m_perimeter_width)/2.f;
 
-        int idx = first_toolchange_to_nonsoluble_nonsupport(layer.tool_changes);
-        WipeTower::ToolChangeResult finish_layer_tcr;
+        const float stud_height = 1.8f;
+        const bool is_lego_stud_layer = m_is_lego && m_wipe_tower_height > 3.6f && (m_wipe_tower_height - m_z_pos <= stud_height);
 
-        if (idx == -1) {
-            // if there is no toolchange switching to non-soluble, finish layer
-            // will be called at the very beginning. That's the last possibility
-            // where a nonsoluble tool can be.
-            finish_layer_tcr = finish_layer();
-        }
+        if (is_lego_stud_layer) {
+            // For Lego studs, ONLY finish_layer() is called to extrude the raised cylindrical studs!
+            // No toolchanges, no purges, no perimeter walls cutting through the studs!
+            layer_result.emplace_back(finish_layer());
+        } else {
+            int idx = first_toolchange_to_nonsoluble_nonsupport(layer.tool_changes);
+            WipeTower::ToolChangeResult finish_layer_tcr;
 
-        for (int i=0; i<int(layer.tool_changes.size()); ++i) {
-            layer_result.emplace_back(tool_change(layer.tool_changes[i].new_tool));
-            if (i == idx) // finish_layer will be called after this toolchange
-                finish_layer_tcr = finish_layer();
-        }
-
-        if (layer_result.empty()) {
-            // there is nothing to merge finish_layer with
-            layer_result.emplace_back(std::move(finish_layer_tcr));
-        }
-        else {
             if (idx == -1) {
-                layer_result[0] = merge_tcr(finish_layer_tcr, layer_result[0]);
-                layer_result[0].force_travel = true;
+                // if there is no toolchange switching to non-soluble, finish layer
+                // will be called at the very beginning. That's the last possibility
+                // where a nonsoluble tool can be.
+                finish_layer_tcr = finish_layer();
             }
-            else
-                layer_result[idx] = merge_tcr(layer_result[idx], finish_layer_tcr);
+
+            for (int i=0; i<int(layer.tool_changes.size()); ++i) {
+                layer_result.emplace_back(tool_change(layer.tool_changes[i].new_tool));
+                if (i == idx) // finish_layer will be called after this toolchange
+                    finish_layer_tcr = finish_layer();
+            }
+
+            if (layer_result.empty()) {
+                // there is nothing to merge finish_layer with
+                layer_result.emplace_back(std::move(finish_layer_tcr));
+            }
+            else {
+                if (idx == -1) {
+                    layer_result[0] = merge_tcr(finish_layer_tcr, layer_result[0]);
+                    layer_result[0].force_travel = true;
+                }
+                else
+                    layer_result[idx] = merge_tcr(layer_result[idx], finish_layer_tcr);
+            }
         }
 
         if (layer.combined_away)
@@ -2826,18 +2885,19 @@ void WipeTower2::extrude_studs(WipeTowerWriter2 &writer, float feedrate)
 {
     const float pitch = 8.0f;
     const float stud_outer_r = 2.4f;
-    const int segments = 16;
+    const int segments = 24;
     int num_x = std::max(1, int(std::round((m_wipe_tower_width + 0.2f) / pitch)));
     int num_y = std::max(1, int(std::round((m_wipe_tower_depth + 0.2f) / pitch)));
     float x0 = (m_wipe_tower_width - float(num_x - 1) * pitch) / 2.0f;
     float y0 = (m_wipe_tower_depth - float(num_y - 1) * pitch) / 2.0f;
+    const float radial_step = std::max(0.05f, m_perimeter_width - m_layer_height * float(1.0 - M_PI / 4.0));
 
     writer.append("; LEGO STUDS START\n");
     for (int ix = 0; ix < num_x; ++ix) {
         for (int iy = 0; iy < num_y; ++iy) {
             Vec2f center(x0 + float(ix) * pitch, y0 + float(iy) * pitch);
             float r = stud_outer_r - m_perimeter_width / 2.f;
-            while (r > 0.1f) {
+            while (r > 0.05f) {
                 Vec2f start = center + Vec2f(r, 0.f);
                 writer.travel(start.x(), start.y(), feedrate);
                 for (int s = 1; s <= segments; ++s) {
@@ -2845,7 +2905,7 @@ void WipeTower2::extrude_studs(WipeTowerWriter2 &writer, float feedrate)
                     Vec2f pt = center + Vec2f(r * std::cos(angle), r * std::sin(angle));
                     writer.extrude(pt.x(), pt.y(), feedrate);
                 }
-                r -= m_perimeter_width;
+                r -= radial_step;
             }
         }
     }
