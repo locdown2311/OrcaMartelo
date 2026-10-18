@@ -2255,7 +2255,13 @@
         }
 
         function syncFilamentsToSlicer() {
-            const available = materialBoxes.flatMap(box => box.slots || []).filter(slot => slot.available !== false);
+            const sortedBoxes = [...materialBoxes].sort((a, b) => {
+                const aExt = (a.source === "external" || a.source === "external_mcb") ? 1 : 0;
+                const bExt = (b.source === "external" || b.source === "external_mcb") ? 1 : 0;
+                if (aExt !== bExt) return aExt - bExt;
+                return (Number(a.id) || 0) - (Number(b.id) || 0);
+            });
+            const available = sortedBoxes.flatMap(box => box.slots || []).filter(slot => slot.available !== false);
             sendToSlicer("sync_filaments_to_slicer", available.length ? available : filaments);
             alert("Filament profiles pushed to OrcaSlicer!");
         }

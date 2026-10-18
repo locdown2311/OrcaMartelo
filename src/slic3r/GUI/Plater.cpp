@@ -6383,6 +6383,45 @@ void Sidebar::sync_anycubic_filaments_from_json(const std::string& filaments_jso
     if (!filaments_array.is_array() || filaments_array.empty())
         return;
 
+    // Partition and sort so ACE slots come first (ordered by slot index),
+    // and external spool comes last (e.g. at position 5).
+    std::vector<nlohmann::json> ace_slots;
+    std::vector<nlohmann::json> external_slots;
+
+    for (const auto& item : filaments_array) {
+        std::string source;
+        if (item.contains("source") && item["source"].is_string())
+            source = item["source"].get<std::string>();
+        int box_id = 0;
+        if (item.contains("box_id") && item["box_id"].is_number_integer())
+            box_id = item["box_id"].get<int>();
+
+        if (source == "external" || source == "external_mcb" || box_id == -1) {
+            external_slots.push_back(item);
+        } else {
+            ace_slots.push_back(item);
+        }
+    }
+
+    auto get_slot_idx = [](const nlohmann::json& item) -> int {
+        if (item.contains("slot") && item["slot"].is_number_integer() && item["slot"].get<int>() >= 0)
+            return item["slot"].get<int>();
+        if (item.contains("index") && item["index"].is_number_integer())
+            return item["index"].get<int>();
+        if (item.contains("box_slot") && item["box_slot"].is_number_integer())
+            return item["box_slot"].get<int>();
+        return 0;
+    };
+    std::sort(ace_slots.begin(), ace_slots.end(), [&](const nlohmann::json& a, const nlohmann::json& b) {
+        return get_slot_idx(a) < get_slot_idx(b);
+    });
+
+    filaments_array = nlohmann::json::array();
+    for (const auto& s : ace_slots)
+        filaments_array.push_back(s);
+    for (const auto& s : external_slots)
+        filaments_array.push_back(s);
+
     auto* bundle = wxGetApp().preset_bundle;
     if (!bundle)
         return;

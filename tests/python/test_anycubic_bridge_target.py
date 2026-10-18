@@ -460,7 +460,7 @@ class MaterialSystemTests(unittest.TestCase):
             {"id": 0, "slots": [{"index": 0, "type": "PLA", "edit_status": 1}]},
             {"id": 1, "slots": [{"index": 0, "type": "PETG", "edit_status": 1}]},
         ]})
-        self.assertEqual([box["source"] for box in daemon.telemetry["material_boxes"]], ["external", "ace", "ace"])
+        self.assertEqual([box["source"] for box in daemon.telemetry["material_boxes"]], ["ace", "ace", "external"])
 
     def test_live_empty_ace_report_clears_stale_box_data(self):
         daemon.apply_multi_color_box_report({"multi_color_box": [{"id": 0, "slots": [{"index": 0, "type": "PLA", "edit_status": 1}]}]})

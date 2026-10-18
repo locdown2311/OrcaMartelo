@@ -222,8 +222,8 @@ def apply_multi_color_box_report(data, code=200, replace=True):
                 "code": _as_int(reported_feed.get("code"), code),
             }
     if telemetry.get("external_spool") is not None and not any(box.get("source") == "external" for box in boxes):
-        boxes = external_boxes + boxes
-    boxes.sort(key=lambda box: (box.get("source") != "external", _as_int(box.get("id"), -1)))
+        boxes = boxes + external_boxes
+    boxes.sort(key=lambda box: (box.get("source") in ("external", "external_mcb"), _as_int(box.get("id"), -1)))
     telemetry["material_boxes"] = boxes
     telemetry["filaments"] = [slot for box in boxes for slot in box.get("slots", [])]
     if replace and not box_list and telemetry.get("external_spool") is not None:
@@ -252,8 +252,8 @@ def apply_external_spool_report(data, code=200):
     # collide with ACE 1 slot 1 (global AMS index 0).
     slot["slot"] = -1
     telemetry["external_spool"] = slot
-    existing = [box for box in telemetry.get("material_boxes", []) if box.get("source") != "external"]
-    existing.insert(0, {"id": -1, "source": "external", "loaded_slot": slot_index, "slots": [slot]})
+    existing = [box for box in telemetry.get("material_boxes", []) if box.get("source") not in ("external", "external_mcb")]
+    existing.append({"id": -1, "source": "external", "loaded_slot": slot_index, "slots": [slot]})
     telemetry["material_boxes"] = existing
     telemetry["filaments"] = [item for box in existing for item in box.get("slots", [])]
     if data.get("status_type") is not None or data.get("current_status") is not None:
