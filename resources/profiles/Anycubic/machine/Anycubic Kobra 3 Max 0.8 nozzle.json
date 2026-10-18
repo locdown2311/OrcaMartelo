@@ -162,7 +162,7 @@
 		"0"
 	],
 	"machine_pause_gcode": "M601",
-	"machine_start_gcode": "G9111 bedTemp=[first_layer_bed_temperature] extruderTemp=[first_layer_temperature[initial_tool]]\nM117\n; print_bed_min = {print_bed_min[0]},{print_bed_min[1]}\n; print_bed_max = {print_bed_max[0]},{print_bed_max[1]}\n; print_bed_size = {print_bed_size[0]},{print_bed_size[1]}\n; first_layer_print_min = {first_layer_print_min[0]},{first_layer_print_min[1]}\n; first_layer_print_max = {first_layer_print_max[0]},{first_layer_print_max[1]}\n; first_layer_print_size = {first_layer_print_size[0]},{first_layer_print_size[1]}",
+	"machine_start_gcode": "G9111 bedTemp=[bed_temperature_initial_layer_single] extruderTemp=[first_layer_temperature[initial_tool]]\nM117\n; print_bed_min = {print_bed_min[0]},{print_bed_min[1]}\n; print_bed_max = {print_bed_max[0]},{print_bed_max[1]}\n; print_bed_size = {print_bed_size[0]},{print_bed_size[1]}\n; first_layer_print_min = {first_layer_print_min[0]},{first_layer_print_min[1]}\n; first_layer_print_max = {first_layer_print_max[0]},{first_layer_print_max[1]}\n; first_layer_print_size = {first_layer_print_size[0]},{first_layer_print_size[1]}",
 	"machine_tool_change_time": "0",
 	"machine_unload_filament_time": "0",
 	"manual_filament_change": "0",

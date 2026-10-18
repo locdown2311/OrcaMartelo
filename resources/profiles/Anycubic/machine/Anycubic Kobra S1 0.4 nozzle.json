@@ -141,7 +141,7 @@
 		"0"
 	],
 	"machine_pause_gcode": "M601",
-	"machine_start_gcode": "G9111 bedTemp=[first_layer_bed_temperature] extruderTemp=[first_layer_temperature[initial_tool]]\nM117",
+	"machine_start_gcode": "G9111 bedTemp=[bed_temperature_initial_layer_single] extruderTemp=[first_layer_temperature[initial_tool]]\nM117",
 	"machine_tool_change_time": "0",
 	"machine_unload_filament_time": "0",
 	"manual_filament_change": "0",
