@@ -6712,7 +6712,10 @@ void DesignPanel::show_offer_menu(const wxPoint& screen_pos)
     // means these strings are translated by OUR catalogue or not at all, which is consistent
     // either way.
     auto tr = [](const char* s) {
-        return wxGetTranslation(wxString::FromUTF8(s), SLIC3R_APP_KEY);
+        wxString r = wxGetTranslation(wxString::FromUTF8(s), SLIC3R_APP_KEY);
+        if (r == wxString::FromUTF8(s) && std::string(SLIC3R_APP_KEY) != "OrcaSlicer")
+            r = wxGetTranslation(wxString::FromUTF8(s), "OrcaSlicer");
+        return r;
     };
     auto label = [&](const OfferVerb& v) {
         wxString s = I18N::translate(v.name, "Design");
@@ -6978,7 +6981,10 @@ void DesignPanel::show_offer_menu(const wxPoint& screen_pos)
         const int i = e.GetMenuId() - base;
         if (i < 0 || i >= int(bound.size()) || bound[i] == nullptr || bound[i]->hint == nullptr)
             return;
-        set_status(StatusKind::Info, wxGetTranslation(wxString::FromUTF8(bound[i]->hint), SLIC3R_APP_KEY));
+        wxString hint_tr = wxGetTranslation(wxString::FromUTF8(bound[i]->hint), SLIC3R_APP_KEY);
+        if (hint_tr == wxString::FromUTF8(bound[i]->hint) && std::string(SLIC3R_APP_KEY) != "OrcaSlicer")
+            hint_tr = wxGetTranslation(wxString::FromUTF8(bound[i]->hint), "OrcaSlicer");
+        set_status(StatusKind::Info, hint_tr);
         m_status->Update();   // the popup owns the loop; without this the line repaints late
     }, base, base + 499);   // 499: the mate section starts at base + 500 (see mate_base)
     menu.Bind(wxEVT_MENU, [this, &bound](wxCommandEvent& e) {

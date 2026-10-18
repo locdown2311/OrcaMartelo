@@ -8433,6 +8433,9 @@ bool GUI_App::load_language(wxString language, bool initial)
                     // The last parameter gets added to the list of detected dictionaries. This is a workaround
                     // for not having the English dictionary. Let's hope wxWidgets of various versions process this call the same way.
                     wxString best_language = wxTranslations::Get()->GetBestTranslation(SLIC3R_APP_KEY, wxLANGUAGE_ENGLISH);
+                    if (best_language.empty() && std::string(SLIC3R_APP_KEY) != "OrcaSlicer") {
+                        best_language = wxTranslations::Get()->GetBestTranslation("OrcaSlicer", wxLANGUAGE_ENGLISH);
+                    }
                     if (!best_language.IsEmpty()) {
                         m_language_info_best = wxLocale::FindLanguageInfo(best_language);
                         BOOST_LOG_TRIVIAL(info) << boost::format("Best translation language detected (may be different from user locales): %1%") %
@@ -8602,6 +8605,9 @@ bool GUI_App::load_language(wxString language, bool initial)
     // to load possibly different dictionary, for example, load Czech dictionary for Slovak language.
     wxTranslations::Get()->SetLanguage(language_dict);
     m_wxLocale->AddCatalog(SLIC3R_APP_KEY);
+    if (std::string(SLIC3R_APP_KEY) != "OrcaSlicer") {
+        m_wxLocale->AddCatalog("OrcaSlicer");
+    }
     m_active_language_code = requested_language_code;
     m_imgui->set_language(into_u8(requested_language_code));
 
