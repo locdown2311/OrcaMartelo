@@ -176,7 +176,11 @@ def _normalize_slot(slot, box_id, source, loaded_slot=-1, slot_offset=0, active_
         brand = "Anycubic"
     else:
         brand = raw_brand or "Anycubic"
-    is_active = (local_index == active_slot and active_slot >= 0) if source not in ("external", "external_mcb") else False
+    is_external = source in ("external", "external_mcb")
+    slot_status = _as_int(slot.get("status"), -1)
+    is_hw_active = (slot_status in (2, 5)) and not is_external
+    is_active = (is_hw_active or (active_slot >= 0 and local_index == active_slot)) if not is_external else False
+    is_loaded = bool(slot.get("loaded")) or (loaded_slot >= 0 and local_index == loaded_slot) or is_hw_active
     return {
         "slot": global_slot,
         "box_id": box_id,
@@ -185,7 +189,7 @@ def _normalize_slot(slot, box_id, source, loaded_slot=-1, slot_offset=0, active_
         "color": rgb_to_hex(*color),
         "type": material,
         "temp": 235 if "PETG" in material.upper() or "+" in material else 210,
-        "loaded": bool(slot.get("loaded")) or local_index == loaded_slot or _as_int(slot.get("status"), -1) == 5,
+        "loaded": is_loaded,
         "is_active": is_active,
         "available": _slot_has_material(slot),
         "brand": brand,
@@ -222,14 +226,40 @@ def apply_multi_color_box_report(data, code=200, replace=True):
         slots = reported.get("slots") or []
         if not isinstance(slots, list):
             slots = []
+
+        hardware_active_slot = -1
+        for s in slots:
+            if not isinstance(s, dict):
+                continue
+            s_idx = _as_int(s.get("index", s.get("box_slot")), -1)
+            s_status = _as_int(s.get("status"), -1)
+            if s_status == 5 or (bool(s.get("loaded")) and s_status != 0):
+                hardware_active_slot = s_idx
+                break
+            elif s_status == 2 and hardware_active_slot < 0:
+                hardware_active_slot = s_idx
+
         loaded_slot = _as_int(reported.get("loaded_slot"), -1)
-        active_channel = telemetry.get("channel_index", -1)
-        if active_channel < 0 and telemetry.get("feed_status", {}).get("slot_index", -1) >= 0:
-            active_channel = telemetry["feed_status"]["slot_index"]
-        if active_channel < 0:
+        if hardware_active_slot >= 0:
+            active_channel = hardware_active_slot
+            loaded_slot = hardware_active_slot
+        elif loaded_slot >= 0:
             active_channel = loaded_slot
-        telemetry["active_slot"] = active_channel
-        telemetry["loaded_slot"] = loaded_slot
+        else:
+            active_channel = telemetry.get("channel_index", -1)
+            feed_status = telemetry.get("feed_status")
+            if active_channel < 0 and isinstance(feed_status, dict):
+                feed_box = _as_int(feed_status.get("box_id"), -99)
+                feed_type = _as_int(feed_status.get("type"), 0)
+                feed_slot = _as_int(feed_status.get("slot_index"), -1)
+                if feed_box == box_id and feed_type in (1, 2) and feed_slot >= 0:
+                    active_channel = feed_slot
+            if active_channel < 0:
+                active_channel = loaded_slot
+
+        if box_id >= 0:
+            telemetry["active_slot"] = active_channel
+            telemetry["loaded_slot"] = loaded_slot
         all_boxes = list(boxes) + [b for b in box_list if isinstance(b, dict)]
         has_ace_box = any(_as_int(box.get("id"), -1) >= 0 for box in all_boxes if isinstance(box, dict))
         has_builtin_rack = any(_as_int(box.get("id"), -1) < 0 and len(box.get("slots") or []) > 1 for box in all_boxes if isinstance(box, dict))
@@ -298,17 +328,20 @@ def apply_external_spool_report(data, code=200):
         return
     previous = telemetry.get("external_spool") or {}
     slot_index = max(0, _as_int(data.get("loaded_slot"), previous.get("box_slot", 0)))
+    status_type = _as_int(data.get("status_type"), 0)
+    current_status = _as_int(data.get("current_status"), 0)
+    is_loaded = bool(data.get("loaded", previous.get("loaded", False)))
     slot = _normalize_slot({
         "index": slot_index,
         "type": data.get("type", previous.get("type", "?")),
         "color": data.get("color", previous.get("color", [175, 175, 175])),
-        "loaded": data.get("loaded", previous.get("loaded", True)),
-        "status": 5 if data.get("loaded", previous.get("loaded", True)) else 4,
+        "loaded": is_loaded,
+        "status": 5 if is_loaded else 4,
         "edit_status": data.get("edit_status", 1 if previous.get("available") else None),
         "brand_name": data.get("brand_name", previous.get("brand")),
         "color_group": data.get("color_group", previous.get("color_group_hex", [])),
         "icon_type": data.get("icon_type", previous.get("icon_type", 0)),
-    }, -1, "external", slot_index)
+    }, -1, "external", slot_index if is_loaded else -1)
     # External is not an AMS channel. Keep a distinct sentinel so it cannot
     # collide with ACE 1 slot 1 (global AMS index 0).
     slot["slot"] = -1
@@ -317,14 +350,16 @@ def apply_external_spool_report(data, code=200):
     existing.append({"id": -1, "source": "external", "loaded_slot": slot_index, "slots": [slot]})
     telemetry["material_boxes"] = existing
     telemetry["filaments"] = [item for box in existing for item in box.get("slots", [])]
-    if data.get("status_type") is not None or data.get("current_status") is not None:
+    if status_type in (1, 2) or current_status in (1, 2):
         telemetry["feed_status"] = {
             "box_id": -1,
             "slot_index": slot_index,
-            "type": _as_int(data.get("status_type"), 0),
-            "current_status": _as_int(data.get("current_status"), 0),
+            "type": status_type,
+            "current_status": current_status,
             "code": _as_int(data.get("code"), code),
         }
+    elif (telemetry.get("feed_status") or {}).get("box_id") == -1:
+        telemetry["feed_status"] = None
 
 
 def fetch_credentials():
@@ -515,12 +550,14 @@ def on_mqtt_message(c, userdata, msg):
             if isinstance(data, dict):
                 # Preserve previous values when a report omits fields: defaulting
                 # current_status to 0 would make an in-progress switch look idle.
-                telemetry["channel_index"] = data.get("index", telemetry.get("channel_index", -1))
+                idx = _as_int(data.get("index"), -1)
+                if idx >= 0:
+                    telemetry["channel_index"] = idx
+                    telemetry["active_slot"] = idx
                 telemetry["channel_status"] = data.get("current_status", telemetry.get("channel_status", 0))
                 telemetry["has_filaments"] = data.get("has_filaments", telemetry.get("has_filaments", 0))
                 telemetry["channel_report_seq"] = telemetry.get("channel_report_seq", 0) + 1
-                if telemetry["channel_index"] >= 0:
-                    telemetry["active_slot"] = telemetry["channel_index"]
+                if telemetry.get("active_slot", -1) >= 0:
                     for b in telemetry.get("material_boxes", []):
                         if isinstance(b, dict):
                             for s in b.get("slots", []):

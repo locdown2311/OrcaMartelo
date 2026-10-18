@@ -3180,11 +3180,14 @@
                 container.innerHTML = '<div class="material-box-empty">No material unit reported. OrcaCubic queries ACE and external spool data directly; KX-Bridge is not required.</div>';
                 return;
             }
+            const hasExplicitActive = newFilaments.some(item => Boolean(item && item.is_active && item.source !== 'external' && item.source !== 'external_mcb'));
             newFilaments.forEach((f, idx) => {
                 const div = document.createElement("div");
                 const slotIdx = Number(f.box_slot ?? f.slot ?? idx);
                 const isExternal = (f.source === 'external' || f.source === 'external_mcb');
-                const isInUse = Boolean(f.is_active || (!isExternal && activeSlotIndex >= 0 && slotIdx === activeSlotIndex));
+                const isInUse = hasExplicitActive
+                    ? Boolean(f.is_active && !isExternal)
+                    : Boolean(!isExternal && activeSlotIndex >= 0 && slotIdx === activeSlotIndex);
                 const isLoaded = Boolean(f.loaded || f.available);
                 const isEmpty = !f.available && (!f.type || f.type === "?");
 
@@ -3432,10 +3435,12 @@
                         activeSlotIndex = Number(data.active_slot);
                     } else if (data.channel_index !== undefined && Number(data.channel_index) >= 0) {
                         activeSlotIndex = Number(data.channel_index);
-                    } else if (data.feed_status && data.feed_status.slot_index !== undefined && Number(data.feed_status.slot_index) >= 0) {
+                    } else if (data.feed_status && Number(data.feed_status.box_id) >= 0 && [1, 2].includes(Number(data.feed_status.type)) && Number(data.feed_status.slot_index) >= 0) {
                         activeSlotIndex = Number(data.feed_status.slot_index);
                     } else if (data.loaded_slot !== undefined && Number(data.loaded_slot) >= 0) {
                         activeSlotIndex = Number(data.loaded_slot);
+                    } else if (data.active_slot !== undefined && Number(data.active_slot) < 0) {
+                        activeSlotIndex = -1;
                     }
 
                     if (Array.isArray(data.material_boxes)) {

@@ -794,6 +794,62 @@ class MaterialSystemTests(unittest.TestCase):
         finally:
             daemon.mqtt_client = previous
 
+    def test_active_filament_slot_stability_with_external_spool(self):
+        # Slot 2 is currently loaded in extruder (status 5)
+        daemon.telemetry["active_slot"] = -1
+        daemon.telemetry["channel_index"] = -1
+        daemon.telemetry["feed_status"] = None
+        daemon.apply_multi_color_box_report({
+            "multi_color_box": [{
+                "id": 0,
+                "loaded_slot": 2,
+                "slots": [
+                    {"index": 0, "type": "PLA", "status": 1, "color": [255, 0, 0]},
+                    {"index": 1, "type": "PLA", "status": 1, "color": [0, 255, 0]},
+                    {"index": 2, "type": "PETG", "status": 5, "color": [0, 0, 255]},
+                    {"index": 3, "type": "PLA", "status": 1, "color": [255, 255, 0]},
+                ]
+            }]
+        })
+        self.assertEqual(daemon.telemetry["active_slot"], 2)
+        slots = [s for s in daemon.telemetry["filaments"] if s.get("source") != "external"]
+        self.assertFalse(slots[0]["is_active"])
+        self.assertFalse(slots[1]["is_active"])
+        self.assertTrue(slots[2]["is_active"])
+        self.assertFalse(slots[3]["is_active"])
+
+        # External spool query reports idle (status_type 0)
+        daemon.apply_external_spool_report({
+            "loaded_slot": 0,
+            "status_type": 0,
+            "current_status": 0,
+            "type": "PLA",
+            "color": [200, 200, 200],
+            "loaded": False
+        })
+        # Feed status should NOT be set to slot 0 for an idle external spool
+        self.assertIsNone(daemon.telemetry.get("feed_status"))
+        self.assertEqual(daemon.telemetry["active_slot"], 2)
+
+        # Subsequent multiColorBox query (which might omit loaded_slot or have loaded_slot: -1)
+        daemon.apply_multi_color_box_report({
+            "multi_color_box": [{
+                "id": 0,
+                "loaded_slot": -1,
+                "slots": [
+                    {"index": 0, "type": "PLA", "status": 1, "color": [255, 0, 0]},
+                    {"index": 1, "type": "PLA", "status": 1, "color": [0, 255, 0]},
+                    {"index": 2, "type": "PETG", "status": 5, "color": [0, 0, 255]},
+                    {"index": 3, "type": "PLA", "status": 1, "color": [255, 255, 0]},
+                ]
+            }]
+        })
+        # Active slot must STILL be 2, without flipping to 0
+        self.assertEqual(daemon.telemetry["active_slot"], 2)
+        ace_slots = [s for s in daemon.telemetry["filaments"] if s.get("source") != "external"]
+        self.assertFalse(ace_slots[0]["is_active"])
+        self.assertTrue(ace_slots[2]["is_active"])
+
 
 if __name__ == "__main__":
     unittest.main()
