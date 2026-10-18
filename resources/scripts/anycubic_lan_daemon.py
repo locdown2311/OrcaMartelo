@@ -177,10 +177,8 @@ def _normalize_slot(slot, box_id, source, loaded_slot=-1, slot_offset=0, active_
     else:
         brand = raw_brand or "Anycubic"
     is_external = source in ("external", "external_mcb")
-    slot_status = _as_int(slot.get("status"), -1)
-    is_hw_active = (slot_status in (2, 5)) and not is_external
-    is_active = (is_hw_active or (active_slot >= 0 and local_index == active_slot)) if not is_external else False
-    is_loaded = bool(slot.get("loaded")) or (loaded_slot >= 0 and local_index == loaded_slot) or is_hw_active
+    is_active = (local_index == active_slot and active_slot >= 0) if not is_external else False
+    is_loaded = bool(slot.get("loaded")) or (loaded_slot >= 0 and local_index == loaded_slot)
     return {
         "slot": global_slot,
         "box_id": box_id,
@@ -227,39 +225,34 @@ def apply_multi_color_box_report(data, code=200, replace=True):
         if not isinstance(slots, list):
             slots = []
 
-        hardware_active_slot = -1
-        for s in slots:
-            if not isinstance(s, dict):
-                continue
-            s_idx = _as_int(s.get("index", s.get("box_slot")), -1)
-            s_status = _as_int(s.get("status"), -1)
-            if s_status == 5 or (bool(s.get("loaded")) and s_status != 0):
-                hardware_active_slot = s_idx
-                break
-            elif s_status == 2 and hardware_active_slot < 0:
-                hardware_active_slot = s_idx
-
         loaded_slot = _as_int(reported.get("loaded_slot"), -1)
-        if hardware_active_slot >= 0:
-            active_channel = hardware_active_slot
-            loaded_slot = hardware_active_slot
+        active_channel = -1
+
+        # Priority 1: channel_index from extrudeControl (authoritative active extruder channel)
+        if telemetry.get("channel_index", -1) >= 0:
+            active_channel = telemetry["channel_index"]
+        # Priority 2: box reported loaded_slot
         elif loaded_slot >= 0:
             active_channel = loaded_slot
+        # Priority 3: current active_slot
+        elif telemetry.get("active_slot", -1) >= 0:
+            active_channel = telemetry["active_slot"]
+        # Priority 4: active feed_status for this box
         else:
-            active_channel = telemetry.get("channel_index", -1)
             feed_status = telemetry.get("feed_status")
-            if active_channel < 0 and isinstance(feed_status, dict):
+            if isinstance(feed_status, dict):
                 feed_box = _as_int(feed_status.get("box_id"), -99)
                 feed_type = _as_int(feed_status.get("type"), 0)
                 feed_slot = _as_int(feed_status.get("slot_index"), -1)
                 if feed_box == box_id and feed_type in (1, 2) and feed_slot >= 0:
                     active_channel = feed_slot
-            if active_channel < 0:
-                active_channel = loaded_slot
 
         if box_id >= 0:
-            telemetry["active_slot"] = active_channel
-            telemetry["loaded_slot"] = loaded_slot
+            if active_channel >= 0:
+                telemetry["active_slot"] = active_channel
+                telemetry["loaded_slot"] = active_channel
+            else:
+                telemetry["loaded_slot"] = loaded_slot
         all_boxes = list(boxes) + [b for b in box_list if isinstance(b, dict)]
         has_ace_box = any(_as_int(box.get("id"), -1) >= 0 for box in all_boxes if isinstance(box, dict))
         has_builtin_rack = any(_as_int(box.get("id"), -1) < 0 and len(box.get("slots") or []) > 1 for box in all_boxes if isinstance(box, dict))

@@ -850,6 +850,32 @@ class MaterialSystemTests(unittest.TestCase):
         self.assertFalse(ace_slots[0]["is_active"])
         self.assertTrue(ace_slots[2]["is_active"])
 
+    def test_single_active_slot_when_all_slots_have_filament(self):
+        # All 4 slots have filament loaded in ACE (status 2). Extruder channel is slot 3 (index 2).
+        daemon.telemetry["active_slot"] = -1
+        daemon.telemetry["channel_index"] = 2
+        daemon.telemetry["feed_status"] = None
+        daemon.apply_multi_color_box_report({
+            "multi_color_box": [{
+                "id": 0,
+                "loaded_slot": -1,
+                "slots": [
+                    {"index": 0, "type": "PETG", "status": 2, "color": [0, 0, 0]},
+                    {"index": 1, "type": "PETG", "status": 2, "color": [0, 100, 0]},
+                    {"index": 2, "type": "ABS", "status": 2, "color": [255, 255, 0]},
+                    {"index": 3, "type": "ABS", "status": 2, "color": [0, 255, 0]},
+                ]
+            }]
+        })
+        self.assertEqual(daemon.telemetry["active_slot"], 2)
+        ace_slots = [s for s in daemon.telemetry["filaments"] if s.get("source") != "external"]
+        self.assertEqual(len(ace_slots), 4)
+        # Exactly one slot is active: slot 3 (index 2)
+        self.assertFalse(ace_slots[0]["is_active"])
+        self.assertFalse(ace_slots[1]["is_active"])
+        self.assertTrue(ace_slots[2]["is_active"])
+        self.assertFalse(ace_slots[3]["is_active"])
+
 
 if __name__ == "__main__":
     unittest.main()
