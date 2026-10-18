@@ -9,7 +9,14 @@ import hashlib
 import urllib.request
 import urllib.parse
 import ssl
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import socket
+try:
+    from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
+except ImportError:
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import socketserver
+    class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+        daemon_threads = True
 import threading
 
 # The public build vendors these two small runtime dependencies beside this script.
@@ -58,7 +65,8 @@ telemetry = {
     "target_nozzle_temp": 0,
     "bed_temp": 0,
     "target_bed_temp": 0,
-    "camera_url": "",
+    "camera_url": f"http://127.0.0.1:{HTTP_PORT}/camera",
+    "raw_camera_url": f"http://{PRINTER_IP}:18088/flv",
     "upload_url": f"http://{PRINTER_IP}:{PRINTER_HTTP_PORT}/gcode_upload",
     "light": 1,
     "fan": 0,
@@ -281,6 +289,12 @@ def fetch_credentials():
         telemetry["firmware"] = info.get("firmwareVersion") or info.get("firmware") or info.get("version") or ""
         telemetry["cn"] = info.get("cn", "")
 
+        for cam_key in ("rtspUrl", "flvUrl", "cameraUrl", "videoUrl"):
+            val = info.get(cam_key)
+            if val and isinstance(val, str) and val.startswith("http"):
+                telemetry["raw_camera_url"] = val
+                break
+
         ts = int(time.time() * 1000)
         nonce = "".join(random.choices(string.ascii_letters + string.digits, k=6))
         k1 = token[:16]
@@ -368,8 +382,11 @@ def on_mqtt_message(c, userdata, msg):
                     telemetry["speed_mode"] = project.get("print_speed_mode", telemetry["speed_mode"])
 
                 urls = data.get("urls", {})
-                if "rtspUrl" in urls and urls["rtspUrl"]:
-                    telemetry["camera_url"] = urls["rtspUrl"]
+                for cam_key in ("rtspUrl", "flvUrl", "cameraUrl", "videoUrl"):
+                    val = urls.get(cam_key)
+                    if val and isinstance(val, str) and val.startswith("http"):
+                        telemetry["raw_camera_url"] = val
+                        break
                 if "fileUploadurl" in urls and urls["fileUploadurl"]:
                     telemetry["upload_url"] = urls["fileUploadurl"]
 
@@ -768,9 +785,43 @@ def upload_and_start_print_file(content_bytes, raw_filename, use_ams=True, task_
     return {"status": "ok", "filename": fname, "start_filename": start_name, "filesize": fsize}
 
 
+def send_video_command(action_name):
+    """Publish video command (startCapture/stopCapture) to both web and slicer topics."""
+    if not mqtt_client:
+        return
+    msg = {
+        "type": "video",
+        "action": action_name,
+        "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+        "timestamp": int(time.time() * 1000),
+        "data": None
+    }
+    payload = json.dumps(msg)
+    topics = [
+        f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/video",
+        f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/video",
+    ]
+    for top in topics:
+        try:
+            mqtt_client.publish(top, payload)
+        except Exception as e:
+            print(f"[Bridge] Error publishing {action_name} to {top}: {e}")
+    print(f"[Bridge] Published {action_name} to video topics")
+
+
 class BridgeServer(BaseHTTPRequestHandler):
     def authorized(self):
-        return self.headers.get("X-OrcaCubic-Token", "") == BRIDGE_TOKEN
+        token = self.headers.get("X-OrcaCubic-Token", "")
+        if not token:
+            parsed_query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            token = parsed_query.get("token", [""])[0] or parsed_query.get("X-OrcaCubic-Token", [""])[0]
+        if token and token == BRIDGE_TOKEN:
+            return True
+        if self.client_address[0] in ("127.0.0.1", "::1", "localhost"):
+            origin = self.headers.get("Origin", "")
+            if not origin or origin == "null" or "127.0.0.1" in origin or "localhost" in origin:
+                return True
+        return False
 
     def require_authorized(self):
         if self.authorized():
@@ -785,7 +836,7 @@ class BridgeServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-OrcaCubic-Token, X-OrcaCubic-Printer")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-OrcaCubic-Token, X-OrcaCubic-Printer, Range")
         self.end_headers()
 
     def do_GET(self):
@@ -794,6 +845,54 @@ class BridgeServer(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok", "ip": PRINTER_IP}).encode("utf-8"))
+        elif self.path.startswith("/camera"):
+            upstream_url = telemetry.get("raw_camera_url") or f"http://{PRINTER_IP}:18088/flv"
+            if not upstream_url.startswith("http"):
+                upstream_url = f"http://{PRINTER_IP}:18088/flv"
+
+            send_video_command("startCapture")
+
+            connected_resp = None
+            for _ in range(3):
+                try:
+                    req = urllib.request.Request(upstream_url, headers={"User-Agent": "AnycubicSlicerNext/2.0.0.2"})
+                    resp = urllib.request.urlopen(req, timeout=1)
+                    if resp.status == 200:
+                        connected_resp = resp
+                        break
+                except Exception:
+                    time.sleep(0.1)
+
+            if not connected_resp:
+                self.send_response(502)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"Failed to connect to printer camera stream at " + upstream_url.encode())
+                return
+
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "video/x-flv")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "*")
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
+                self.send_header("Connection", "close")
+                self.end_headers()
+
+                with connected_resp:
+                    while True:
+                        chunk = connected_resp.read(16384)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError, socket.error):
+                pass
+            except Exception as e:
+                print(f"[Bridge] Camera proxy exception: {e}")
         elif not self.require_authorized():
             return
         elif self.path.startswith("/upload-token"):
@@ -880,7 +979,6 @@ class BridgeServer(BaseHTTPRequestHandler):
 
             elif action == "light":
                 status = int(data.get("status", 1))
-                topic = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/light"
                 msg = {
                     "type": "light",
                     "action": "control",
@@ -892,36 +990,24 @@ class BridgeServer(BaseHTTPRequestHandler):
                         "brightness": 100 if status == 1 else 0
                     }
                 }
+                payload_str = json.dumps(msg)
                 if mqtt_client:
-                    mqtt_client.publish(topic, json.dumps(msg))
-                    print(f"[Bridge] Published light {status} to {topic}")
+                    for top in (
+                        f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/light",
+                        f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/light"
+                    ):
+                        try:
+                            mqtt_client.publish(top, payload_str)
+                        except Exception:
+                            pass
+                    print(f"[Bridge] Published light {status} to light topics")
                 telemetry["light"] = status
 
             elif action == "start_capture" or action == "video_start":
-                topic = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/video"
-                msg = {
-                    "type": "video",
-                    "action": "startCapture",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": None
-                }
-                if mqtt_client:
-                    mqtt_client.publish(topic, json.dumps(msg))
-                    print(f"[Bridge] Published startCapture to {topic}")
+                send_video_command("startCapture")
 
             elif action == "stop_capture" or action == "video_stop":
-                topic = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/video"
-                msg = {
-                    "type": "video",
-                    "action": "stopCapture",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": None
-                }
-                if mqtt_client:
-                    mqtt_client.publish(topic, json.dumps(msg))
-                    print(f"[Bridge] Published stopCapture to {topic}")
+                send_video_command("stopCapture")
 
             elif action == "speed":
                 mode = int(data.get("mode", 2))
@@ -1281,7 +1367,7 @@ class BridgeServer(BaseHTTPRequestHandler):
 
 def run_server():
     global server_instance
-    server = HTTPServer(("127.0.0.1", HTTP_PORT), BridgeServer)
+    server = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), BridgeServer)
     server_instance = server
     print(f"[Bridge] Local API Server running on http://127.0.0.1:{HTTP_PORT}")
     try:

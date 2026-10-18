@@ -21,7 +21,7 @@ class TargetBindingTests(unittest.TestCase):
     def setUpClass(cls):
         daemon.PRINTER_IP = "192.0.2.20"
         daemon.BRIDGE_TOKEN = "test-token"
-        cls.server = daemon.HTTPServer(("127.0.0.1", 0), daemon.BridgeServer)
+        cls.server = daemon.ThreadingHTTPServer(("127.0.0.1", 0), daemon.BridgeServer)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.port = cls.server.server_address[1]
@@ -390,6 +390,15 @@ class TargetBindingTests(unittest.TestCase):
         finally:
             daemon.mqtt_client = old_client
 
+    def test_camera_endpoint_handles_offline_upstream_without_crash(self):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        # Point to unreachable address to simulate camera temporarily offline
+        daemon.telemetry["raw_camera_url"] = "http://127.0.0.1:59999/flv"
+        connection.request("GET", "/camera")
+        resp = connection.getresponse()
+        self.assertEqual(resp.status, 502)
+        connection.close()
+
 
 class MaterialSystemTests(unittest.TestCase):
     def setUp(self):
@@ -562,6 +571,30 @@ class MaterialSystemTests(unittest.TestCase):
         self.assertEqual(len(boxes), 2)
         self.assertEqual(boxes[0]["slots"][0]["type"], "ABS")
         self.assertEqual(boxes[1]["slots"][0]["type"], "PETG")
+
+    def test_camera_telemetry_urls_configured(self):
+        self.assertTrue(daemon.telemetry["camera_url"].endswith("/camera"))
+        self.assertIn("18088/flv", daemon.telemetry["raw_camera_url"])
+
+    def test_send_video_command_publishes_to_both_video_topics(self):
+        class FakeClient:
+            def __init__(self):
+                self.messages = []
+
+            def publish(self, topic, body):
+                self.messages.append((topic, json.loads(body)["action"]))
+
+        previous = daemon.mqtt_client
+        daemon.mqtt_client = FakeClient()
+        try:
+            daemon.send_video_command("startCapture")
+            self.assertEqual(len(daemon.mqtt_client.messages), 2)
+            topics = [m[0] for m in daemon.mqtt_client.messages]
+            self.assertTrue(any("/web/printer/" in t and t.endswith("/video") for t in topics))
+            self.assertTrue(any("/slicer/printer/" in t and t.endswith("/video") for t in topics))
+            self.assertTrue(all(m[1] == "startCapture" for m in daemon.mqtt_client.messages))
+        finally:
+            daemon.mqtt_client = previous
 
 
 if __name__ == "__main__":
