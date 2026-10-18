@@ -3,7 +3,7 @@
 
 #include "bambu_networking.hpp"
 #include "libslic3r/Utils.hpp"
-#include "libslic3r/libslic3r_version.h"
+#include "libslic3r_version.h"
 #include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "GUI_Utils.hpp"
