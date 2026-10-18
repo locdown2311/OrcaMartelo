@@ -67,8 +67,11 @@ telemetry = {
     "target_bed_temp": 0,
     "camera_url": f"http://127.0.0.1:{HTTP_PORT}/camera",
     "raw_camera_url": f"http://{PRINTER_IP}:18088/flv",
+    "custom_camera_url": "",
     "upload_url": f"http://{PRINTER_IP}:{PRINTER_HTTP_PORT}/gcode_upload",
     "light": 1,
+    "nozzle_light": 0,
+    "camera_light": 1,
     "fan": 0,
     "speed_mode": 2,
     "has_multi_color_box": False,
@@ -410,8 +413,18 @@ def on_mqtt_message(c, userdata, msg):
         elif t == "light":
             if data:
                 lights = data.get("lights", [])
-                if lights and len(lights) > 0:
-                    telemetry["light"] = lights[0].get("status", telemetry["light"])
+                for l_item in lights:
+                    l_type = _as_int(l_item.get("type"), 0)
+                    l_status = _as_int(l_item.get("status"), 0)
+                    if l_type == 1:
+                        telemetry["nozzle_light"] = l_status
+                    elif l_type in (2, 3):
+                        telemetry["camera_light"] = l_status
+                        telemetry["light"] = l_status
+                if lights and not any(_as_int(x.get("type"), 0) in (1, 2, 3) for x in lights):
+                    st = _as_int(lights[0].get("status"), telemetry.get("light", 1))
+                    telemetry["light"] = st
+                    telemetry["camera_light"] = st
 
         elif t == "multiColorBox":
             # getInfo is a complete snapshot; command acknowledgements may only
@@ -846,22 +859,49 @@ class BridgeServer(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok", "ip": PRINTER_IP}).encode("utf-8"))
         elif self.path.startswith("/camera"):
-            upstream_url = telemetry.get("raw_camera_url") or f"http://{PRINTER_IP}:18088/flv"
+            parsed_url = urllib.parse.urlparse(self.path)
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            param_url = query_params.get("url", [""])[0]
+
+            upstream_url = (
+                param_url or
+                telemetry.get("custom_camera_url") or
+                telemetry.get("raw_camera_url") or
+                f"http://{PRINTER_IP}:18088/flv"
+            )
             if not upstream_url.startswith("http"):
                 upstream_url = f"http://{PRINTER_IP}:18088/flv"
 
-            send_video_command("startCapture")
+            is_native = "18088" in upstream_url
+            if is_native:
+                send_video_command("startCapture")
 
             connected_resp = None
-            for _ in range(3):
+            # Retry up to 8 times with 0.5s interval (4s total) so the printer has time to launch camera daemon
+            retries = 8 if is_native else 2
+            for _ in range(retries):
                 try:
                     req = urllib.request.Request(upstream_url, headers={"User-Agent": "AnycubicSlicerNext/2.0.0.2"})
-                    resp = urllib.request.urlopen(req, timeout=1)
+                    resp = urllib.request.urlopen(req, timeout=1.5)
                     if resp.status == 200:
                         connected_resp = resp
                         break
                 except Exception:
-                    time.sleep(0.1)
+                    time.sleep(0.5)
+
+            # If native 18088 failed, check if mjpg-streamer or acproxycam is running on ports 8080 or 8000
+            if not connected_resp and is_native and not param_url and not telemetry.get("custom_camera_url"):
+                for fallback_port in (8080, 8000):
+                    try:
+                        fb_url = f"http://{PRINTER_IP}:{fallback_port}/?action=stream"
+                        req = urllib.request.Request(fb_url, headers={"User-Agent": "AnycubicSlicerNext/2.0.0.2"})
+                        resp = urllib.request.urlopen(req, timeout=1.0)
+                        if resp.status == 200:
+                            connected_resp = resp
+                            upstream_url = fb_url
+                            break
+                    except Exception:
+                        pass
 
             if not connected_resp:
                 self.send_response(502)
@@ -871,9 +911,13 @@ class BridgeServer(BaseHTTPRequestHandler):
                 self.wfile.write(b"Failed to connect to printer camera stream at " + upstream_url.encode())
                 return
 
+            content_type = "video/x-flv"
+            if connected_resp and hasattr(connected_resp, "headers"):
+                content_type = connected_resp.headers.get("Content-Type", "video/x-flv")
+
             try:
                 self.send_response(200)
-                self.send_header("Content-Type", "video/x-flv")
+                self.send_header("Content-Type", content_type)
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
                 self.send_header("Access-Control-Allow-Headers", "*")
@@ -883,12 +927,18 @@ class BridgeServer(BaseHTTPRequestHandler):
                 self.send_header("Connection", "close")
                 self.end_headers()
 
+                last_keepalive = time.time()
                 with connected_resp:
                     while True:
                         chunk = connected_resp.read(16384)
                         if not chunk:
                             break
                         self.wfile.write(chunk)
+                        now = time.time()
+                        if now - last_keepalive > 20:
+                            if is_native:
+                                send_video_command("startCapture")
+                            last_keepalive = now
             except (BrokenPipeError, ConnectionResetError, socket.error):
                 pass
             except Exception as e:
@@ -962,7 +1012,7 @@ class BridgeServer(BaseHTTPRequestHandler):
                 threading.Thread(target=server_instance.shutdown, daemon=True).start()
         elif self.path.startswith("/control"):
             action = data.get("action", "")
-            if action and action != "clear_alert" and (not mqtt_client or not telemetry.get("connected")):
+            if action and action not in ("clear_alert", "set_camera_url") and (not mqtt_client or not telemetry.get("connected")):
                 result = {"status": "error", "message": "Printer bridge is not connected", "ip": PRINTER_IP}
                 action = ""
             if action in ["pause", "resume", "stop"]:
@@ -977,17 +1027,27 @@ class BridgeServer(BaseHTTPRequestHandler):
                 if mqtt_client:
                     mqtt_client.publish(topic, json.dumps(msg))
 
-            elif action == "light":
+            elif action in ("light", "nozzle_light", "camera_light"):
+                target = data.get("target", "")
+                if action == "nozzle_light" or target == "nozzle":
+                    light_type = 1
+                elif action == "camera_light" or target == "camera":
+                    light_type = 2
+                else:
+                    light_type = int(data.get("type", 2))
+
                 status = int(data.get("status", 1))
+                brightness = 100 if status == 1 else 0
+
                 msg = {
                     "type": "light",
                     "action": "control",
                     "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
                     "timestamp": int(time.time() * 1000),
                     "data": {
-                        "type": 3,
+                        "type": light_type,
                         "status": status,
-                        "brightness": 100 if status == 1 else 0
+                        "brightness": brightness
                     }
                 }
                 payload_str = json.dumps(msg)
@@ -1000,8 +1060,35 @@ class BridgeServer(BaseHTTPRequestHandler):
                             mqtt_client.publish(top, payload_str)
                         except Exception:
                             pass
-                    print(f"[Bridge] Published light {status} to light topics")
-                telemetry["light"] = status
+                    # If camera light (type 2), also publish type 3 for Kobra X compatibility
+                    if light_type == 2:
+                        try:
+                            msg3 = dict(msg)
+                            msg3["data"] = {"type": 3, "status": status, "brightness": brightness}
+                            mqtt_client.publish(f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/light", json.dumps(msg3))
+                        except Exception:
+                            pass
+                    print(f"[Bridge] Published light (type={light_type}) status={status} to light topics")
+
+                if light_type == 1:
+                    telemetry["nozzle_light"] = status
+                    try:
+                        upload_and_run_gcode(f"M355 S{status}\nSET_PIN PIN=head_light VALUE={status}")
+                    except Exception:
+                        pass
+                else:
+                    telemetry["camera_light"] = status
+                    telemetry["light"] = status
+
+            elif action == "set_camera_url":
+                custom_url = str(data.get("url", "")).strip()
+                telemetry["custom_camera_url"] = custom_url
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok", "custom_camera_url": custom_url}).encode("utf-8"))
+                return
 
             elif action == "start_capture" or action == "video_start":
                 send_video_command("startCapture")

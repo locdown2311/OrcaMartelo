@@ -462,6 +462,7 @@ coordf_t Layer::get_sparse_infill_max_void_area()
             case ipLateralHoneycomb:
             case ip3DHoneycomb:
             case ipArchimedeanChords:
+            case ipSpiderWeb:
                 max_void_area = std::max(max_void_area, spacing * spacing);
                 break;
             case ipGrid:

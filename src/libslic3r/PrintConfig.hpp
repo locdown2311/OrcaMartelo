@@ -131,7 +131,7 @@ enum InfillPattern : int {
     ipCubic, ipAdaptiveCubic, ipQuarterCubic, ipSupportCubic, ipLightning,
     ipHoneycomb, ip3DHoneycomb, ipLateralHoneycomb, ipLateralLattice,
     ipCrossHatch, ipTpmsD, ipTpmsFK, ipGyroid,
-    ipConcentric, ipSpiralInset, ipHilbertCurve, ipArchimedeanChords, ipOctagramSpiral,
+    ipConcentric, ipSpiralInset, ipHilbertCurve, ipArchimedeanChords, ipOctagramSpiral, ipSpiderWeb,
     ipSupportBase, ipConcentricInternal,
     ipCount,
 };
@@ -164,6 +164,7 @@ inline bool is_separable_infill_pattern(InfillPattern pattern)
     case ipHilbertCurve:
     case ipArchimedeanChords:
     case ipOctagramSpiral:
+    case ipSpiderWeb:
         return true;
     default:
         return false;
@@ -188,6 +189,7 @@ inline bool is_smoothable_infill_pattern(InfillPattern pattern, int multiline = 
     case ip3DHoneycomb:
     case ipConcentric:
     case ipCrossHatch:
+    case ipSpiderWeb:
         return true;
     case ipGrid:
     case ipTriangles:

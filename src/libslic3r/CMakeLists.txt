@@ -188,6 +188,8 @@ set(lisbslic3r_sources
     Fill/FillTpmsD.hpp
     Fill/FillTpmsFK.cpp
     Fill/FillTpmsFK.hpp
+    Fill/FillSpiderWeb.cpp
+    Fill/FillSpiderWeb.hpp
     Fill/Lightning/DistanceField.cpp
     Fill/Lightning/DistanceField.hpp
     Fill/Lightning/Generator.cpp

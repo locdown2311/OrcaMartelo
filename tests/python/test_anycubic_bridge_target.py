@@ -1,5 +1,6 @@
 import http.client
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -596,6 +597,80 @@ class MaterialSystemTests(unittest.TestCase):
         finally:
             daemon.mqtt_client = previous
 
+    def test_light_control_nozzle_and_camera(self):
+        class FakeClient:
+            def __init__(self):
+                self.published = []
+
+            def publish(self, topic, body):
+                self.published.append((topic, json.loads(body)))
+
+        previous = daemon.mqtt_client
+        fake = FakeClient()
+        daemon.mqtt_client = fake
+        daemon.telemetry["connected"] = True
+        try:
+            server = daemon.BridgeServer
+            # Test camera light control
+            body_cam = json.dumps({"action": "camera_light", "status": 1}).encode("utf-8")
+            class FakeReqCam:
+                def __init__(self):
+                    self.headers = {"Content-Length": str(len(body_cam)), "X-OrcaCubic-Token": daemon.BRIDGE_TOKEN}
+                    self.rfile = io.BytesIO(body_cam)
+                    self.wfile = io.BytesIO()
+                    self.client_address = ("127.0.0.1", 12345)
+                    self.path = "/control"
+                def require_authorized(self): return True
+                def send_response(self, code): self.code = code
+                def send_header(self, k, v): pass
+                def end_headers(self): pass
+
+            req_cam = FakeReqCam()
+            server.do_POST(req_cam)
+            self.assertEqual(daemon.telemetry["camera_light"], 1)
+            self.assertTrue(any(msg[1]["data"]["type"] == 2 for msg in fake.published))
+
+            # Test nozzle light control
+            fake.published.clear()
+            body_nozzle = json.dumps({"action": "nozzle_light", "status": 1}).encode("utf-8")
+            class FakeReqNozzle:
+                def __init__(self):
+                    self.headers = {"Content-Length": str(len(body_nozzle)), "X-OrcaCubic-Token": daemon.BRIDGE_TOKEN}
+                    self.rfile = io.BytesIO(body_nozzle)
+                    self.wfile = io.BytesIO()
+                    self.client_address = ("127.0.0.1", 12345)
+                    self.path = "/control"
+                def require_authorized(self): return True
+                def send_response(self, code): self.code = code
+                def send_header(self, k, v): pass
+                def end_headers(self): pass
+
+            req_nozzle = FakeReqNozzle()
+            server.do_POST(req_nozzle)
+            self.assertEqual(daemon.telemetry["nozzle_light"], 1)
+            self.assertTrue(any(msg[1]["data"]["type"] == 1 for msg in fake.published))
+        finally:
+            daemon.mqtt_client = previous
+
+    def test_set_camera_url_action(self):
+        body = json.dumps({"action": "set_camera_url", "url": "http://192.168.1.50:8080/stream"}).encode("utf-8")
+        class FakeReq:
+            def __init__(self):
+                self.headers = {"Content-Length": str(len(body)), "X-OrcaCubic-Token": daemon.BRIDGE_TOKEN}
+                self.rfile = io.BytesIO(body)
+                self.wfile = io.BytesIO()
+                self.client_address = ("127.0.0.1", 12345)
+                self.path = "/control"
+            def require_authorized(self): return True
+            def send_response(self, code): self.code = code
+            def send_header(self, k, v): pass
+            def end_headers(self): pass
+
+        req = FakeReq()
+        daemon.BridgeServer.do_POST(req)
+        self.assertEqual(daemon.telemetry["custom_camera_url"], "http://192.168.1.50:8080/stream")
+
 
 if __name__ == "__main__":
     unittest.main()
+

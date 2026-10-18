@@ -1245,6 +1245,38 @@
         </div>
     </div>
 
+    <div id="cam-settings-modal" class="modal-backdrop" style="display:none; z-index:10050;">
+        <div class="modal-card" style="width:min(490px,92vw);">
+            <div class="modal-header"><h3>Camera Stream Settings</h3><button class="modal-close" onclick="closeCamSettingsModal()">✕</button></div>
+            <div class="modal-body">
+                <div class="modal-field">
+                    <label for="cam-preset-select">Stream Mode / Source</label>
+                    <select id="cam-preset-select" class="modal-select" onchange="onCamPresetChange(this.value)">
+                        <option value="auto">Auto: Anycubic Native Camera (FLV Port 18088)</option>
+                        <option value="mjpeg_8080">MJPEG Streamer (Port 8080 - Moonraker / acproxycam)</option>
+                        <option value="custom">Custom Stream URL (MJPEG / FLV / HTTP)</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label for="cam-custom-url-input">Stream URL</label>
+                    <input class="modal-select" id="cam-custom-url-input" placeholder="http://192.168.1.50:8080/?action=stream">
+                </div>
+                <div style="font-size:12px;color:#94a3b8;line-height:1.4;margin-top:6px;">
+                    <b>Tips:</b>
+                    <ul style="margin:4px 0 0 16px;padding:0;">
+                        <li>If using the official USB camera: ensure <i>LAN Mode</i> is enabled in printer settings.</li>
+                        <li>If using Moonraker, Mainsail, or external webcam: enter the MJPEG or stream URL above.</li>
+                    </ul>
+                </div>
+                <div id="cam-settings-status" style="margin-top:8px;font-size:12px;display:none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeCamSettingsModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveCamSettings()">Save & Connect</button>
+            </div>
+        </div>
+    </div>
+
     <div class="device-shell">
         <aside class="printer-sidebar" aria-label="Configured printers">
             <div class="printer-tabs"><button class="printer-tab" type="button" disabled>Cloud Printer</button><button class="printer-tab active" type="button">LAN Printer</button></div>
@@ -1317,9 +1349,13 @@
                     <span class="control-value" id="bed-value-wrap"><b id="cur-bed">0</b><em>/</em><span id="target-bed">0</span><small>°C</small></span>
                     <span class="inline-editor" id="bed-inline-editor" hidden><input id="bed-inline-input" type="number" min="0" max="120"><small>°C</small></span>
                 </button>
-                <button class="control-tile light-control" onclick="toggleLight()" title="Turn the printer's camera/chamber LED on or off.">
+                <button class="control-tile light-control" id="btn-tile-cam-light" onclick="toggleCameraLight()" title="Turn the printer's camera/chamber LED on or off.">
                     <span class="control-label"><img src="img/icon-light.efdd1de5.svg">Camera Light</span>
-                    <span class="switch-line"><span id="control-light-state">Off</span><span id="control-light-switch" class="toggle-switch"></span></span>
+                    <span class="switch-line"><span id="control-camera-light-state">Off</span><span id="control-camera-light-switch" class="toggle-switch"></span></span>
+                </button>
+                <button class="control-tile light-control" id="btn-tile-nozzle-light" onclick="toggleNozzleLight()" title="Turn the printer's nozzle/toolhead LED on or off.">
+                    <span class="control-label"><img src="img/icon-nozzle.7a827791.svg">Nozzle Light</span>
+                    <span class="switch-line"><span id="control-nozzle-light-state">Off</span><span id="control-nozzle-light-switch" class="toggle-switch"></span></span>
                 </button>
                 <button class="control-tile" onclick="promptSetFan()" title="Set the model cooling fan speed from 0% to 100%.">
                     <span class="control-label"><img src="img/icon-fan.02d8a4a3.svg">Model Fan</span>
@@ -1358,15 +1394,27 @@
 
         <!-- Row 2 / Column 1: Camera -->
         <section class="card wb3-camera">
-            <div class="card-header"><h2>Camera</h2><span class="tag" id="camera-status-tag">Stopped</span></div>
+            <div class="card-header">
+                <h2>Camera</h2>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <span class="tag" id="camera-status-tag">Stopped</span>
+                    <button class="icon-button" style="padding:2px 8px;font-size:11px;" onclick="toggleCamSettingsModal()" title="Camera Stream Settings">⚙️</button>
+                </div>
+            </div>
             <div class="camera-container" id="cam-box">
                 <video id="cam-video" autoplay muted playsinline></video>
+                <img id="cam-img" style="display:none;width:100%;height:100%;object-fit:contain;" alt="Camera Stream">
                 <div class="camera-placeholder" id="cam-placeholder"><img src="img/video-monitor.aa65df82.png"><span>Camera stream stopped</span></div>
                 <div class="camera-top-controls">
-                    <button class="icon-button" id="btn-light" onclick="toggleLight()" title="Turn the printer's camera/chamber LED on or off.">Light Off</button>
+                    <button class="icon-button" id="btn-cam-light" onclick="toggleCameraLight()" title="Turn the printer's camera/chamber LED on or off.">Cam Light Off</button>
+                    <button class="icon-button" id="btn-nozzle-light" onclick="toggleNozzleLight()" title="Turn the printer's nozzle/toolhead LED on or off.">Nozzle Light Off</button>
                     <button class="icon-button" id="btn-cam-stream" onclick="toggleCameraStream()" title="Start or stop the live camera stream.">Start Stream</button>
                 </div>
-                <div class="camera-controls"><button onclick="openCamFull()" title="Open the raw camera feed in a separate window.">Full screen</button><button onclick="startCameraStream()" title="Restart the camera stream connection.">Reconnect</button></div>
+                <div class="camera-controls">
+                    <button onclick="openCamFull()" title="Open the raw camera feed in a separate window.">Full screen</button>
+                    <button onclick="startCameraStream()" title="Restart the camera stream connection.">Reconnect</button>
+                    <button onclick="toggleCamSettingsModal()" title="Configure camera stream URL or mode">⚙️ Stream Settings</button>
+                </div>
             </div>
         </section>
 
@@ -1912,10 +1960,17 @@
         let filaments = [];
         let currentSpeedMode = 2;
         let lightStatus = 1;
+        let cameraLightStatus = 0;
+        let nozzleLightStatus = 0;
         let jogStep = 10;
         let currentPrinterState = "idle";
         let flvPlayer = null;
         let activeCameraUrl = "http://127.0.0.1:18988/camera";
+        const _initCamPreset = localStorage.getItem("orca_ac_cam_preset") || "auto";
+        const _initCustomCam = localStorage.getItem("orca_ac_custom_cam_url") || "";
+        if ((_initCamPreset === "custom" || _initCamPreset === "mjpeg_8080") && _initCustomCam) {
+            activeCameraUrl = _initCustomCam;
+        }
         let alertDismissed = false;
         let lastSeenAlert = "";
 
@@ -1962,10 +2017,16 @@
                 console.error("start_capture error:", e);
             }
 
-            const streamUrl = activeCameraUrl || "http://127.0.0.1:18988/camera";
+            const savedPreset = localStorage.getItem("orca_ac_cam_preset") || "auto";
+            const savedCustom = localStorage.getItem("orca_ac_custom_cam_url") || "";
+            let streamUrl = activeCameraUrl || "http://127.0.0.1:18988/camera";
+            if ((savedPreset === "custom" || savedPreset === "mjpeg_8080") && savedCustom) {
+                streamUrl = savedCustom;
+            }
+
             setTimeout(() => {
                 if (!userStoppedCamera) {
-                    initFlvVideo(streamUrl);
+                    initCameraStream(streamUrl);
                 }
             }, 600);
         }
@@ -1996,6 +2057,11 @@
             if (videoElement) {
                 videoElement.style.display = "none";
             }
+            const imgElement = document.getElementById("cam-img");
+            if (imgElement) {
+                imgElement.src = "";
+                imgElement.style.display = "none";
+            }
             document.getElementById("cam-placeholder").style.display = "flex";
 
             try {
@@ -2009,11 +2075,81 @@
             }
         }
 
+        function isMjpegUrl(url) {
+            if (!url) return false;
+            const u = url.toLowerCase();
+            return u.includes("action=stream") || u.includes(".mjpg") || u.includes(".mjpeg") || u.includes(":8080") || u.includes("/webcam");
+        }
+
+        function initCameraStream(url) {
+            if (userStoppedCamera) return;
+            const targetUrl = url || activeCameraUrl || "http://127.0.0.1:18988/camera";
+            activeCameraUrl = targetUrl;
+            if (isMjpegUrl(targetUrl)) {
+                initMjpegVideo(targetUrl);
+            } else {
+                initFlvVideo(targetUrl);
+            }
+        }
+
+        function initMjpegVideo(url) {
+            if (userStoppedCamera) return;
+            if (flvPlayer) {
+                try {
+                    flvPlayer.pause();
+                    flvPlayer.unload();
+                    flvPlayer.detachMediaElement();
+                    flvPlayer.destroy();
+                } catch(e) {}
+                flvPlayer = null;
+            }
+            const videoElement = document.getElementById("cam-video");
+            const imgElement = document.getElementById("cam-img");
+            if (videoElement) videoElement.style.display = "none";
+            if (!imgElement) return;
+
+            imgElement.onload = () => {
+                document.getElementById("cam-placeholder").style.display = "none";
+                imgElement.style.display = "block";
+                isCameraStreaming = true;
+                const btn = document.getElementById("btn-cam-stream");
+                if (btn) {
+                    btn.innerText = "⏹ Stop Stream";
+                    btn.classList.add("btn-danger");
+                }
+                const tag = document.getElementById("camera-status-tag");
+                if (tag) tag.innerText = "Live";
+            };
+
+            imgElement.onerror = () => {
+                console.warn("MJPEG load error:", url);
+                isCameraStreaming = false;
+                const btn = document.getElementById("btn-cam-stream");
+                if (btn) {
+                    btn.innerText = "▶ Start Stream";
+                    btn.classList.remove("btn-danger");
+                }
+                const tag = document.getElementById("camera-status-tag");
+                if (tag) tag.innerText = "Stopped";
+                const placeholderSpan = document.querySelector("#cam-placeholder span");
+                if (placeholderSpan) placeholderSpan.innerText = "MJPEG stream offline. Check URL or reconnect.";
+                document.getElementById("cam-placeholder").style.display = "flex";
+                imgElement.style.display = "none";
+            };
+
+            imgElement.src = url;
+        }
+
         function initFlvVideo(url) {
             if (userStoppedCamera) return;
             if (!url) url = "http://127.0.0.1:18988/camera";
             activeCameraUrl = url;
             const videoElement = document.getElementById("cam-video");
+            const imgElement = document.getElementById("cam-img");
+            if (imgElement) {
+                imgElement.src = "";
+                imgElement.style.display = "none";
+            }
             if (!videoElement) return;
 
             if (typeof flvjs !== "undefined" && flvjs.isSupported()) {
@@ -2084,12 +2220,14 @@
 
         function openCamFull() {
             const vid = document.getElementById("cam-video");
-            if (vid && isCameraStreaming) {
-                if (vid.requestFullscreen) {
-                    vid.requestFullscreen();
+            const img = document.getElementById("cam-img");
+            const activeEl = (vid && vid.style.display !== "none") ? vid : img;
+            if (activeEl && isCameraStreaming) {
+                if (activeEl.requestFullscreen) {
+                    activeEl.requestFullscreen();
                     return;
-                } else if (vid.webkitRequestFullscreen) {
-                    vid.webkitRequestFullscreen();
+                } else if (activeEl.webkitRequestFullscreen) {
+                    activeEl.webkitRequestFullscreen();
                     return;
                 }
             }
@@ -2098,36 +2236,184 @@
             }
         }
 
-        function updateLightUI(status) {
-            lightStatus = Number(status) === 1 ? 1 : 0;
-            const isOn = lightStatus === 1;
-            const btnLight = document.getElementById("btn-light");
-            const controlState = document.getElementById("control-light-state");
-            const controlSwitch = document.getElementById("control-light-switch");
-            if (btnLight) btnLight.innerText = isOn ? "Light On" : "Light Off";
-            if (controlState) controlState.innerText = isOn ? "On" : "Off";
-            if (controlSwitch) {
-                controlSwitch.classList.toggle("on", isOn);
-                controlSwitch.setAttribute("aria-checked", isOn ? "true" : "false");
+        function toggleCamSettingsModal() {
+            const modal = document.getElementById("cam-settings-modal");
+            if (!modal) return;
+            if (modal.style.display === "flex") {
+                closeCamSettingsModal();
+            } else {
+                openCamSettingsModal();
             }
         }
 
-        async function toggleLight() {
-            const previousStatus = Number(lightStatus) === 1 ? 1 : 0;
-            const nextStatus = previousStatus === 1 ? 0 : 1;
-            updateLightUI(nextStatus);
+        function openCamSettingsModal() {
+            const modal = document.getElementById("cam-settings-modal");
+            if (!modal) return;
+            modal.style.display = "flex";
+            const input = document.getElementById("cam-custom-url-input");
+            const select = document.getElementById("cam-preset-select");
+            const savedUrl = localStorage.getItem("orca_ac_custom_cam_url") || "";
+            const savedPreset = localStorage.getItem("orca_ac_cam_preset") || "auto";
+            if (select) select.value = savedPreset;
+            if (input) input.value = savedUrl;
+            onCamPresetChange(savedPreset);
+        }
+
+        function closeCamSettingsModal() {
+            const modal = document.getElementById("cam-settings-modal");
+            if (modal) modal.style.display = "none";
+            const status = document.getElementById("cam-settings-status");
+            if (status) status.style.display = "none";
+        }
+
+        function onCamPresetChange(val) {
+            const input = document.getElementById("cam-custom-url-input");
+            if (!input) return;
+            if (val === "auto") {
+                input.placeholder = "Auto: http://127.0.0.1:18988/camera";
+                input.disabled = true;
+            } else if (val === "mjpeg_8080") {
+                const ip = printerIP || "192.168.1.X";
+                input.placeholder = "http://" + ip + ":8080/?action=stream";
+                input.disabled = false;
+                if (!input.value) input.value = "http://" + ip + ":8080/?action=stream";
+            } else {
+                input.placeholder = "http://192.168.1.X:8080/?action=stream or flv URL";
+                input.disabled = false;
+            }
+        }
+
+        async function saveCamSettings() {
+            const select = document.getElementById("cam-preset-select");
+            const input = document.getElementById("cam-custom-url-input");
+            const status = document.getElementById("cam-settings-status");
+            const preset = select ? select.value : "auto";
+            let customUrl = input ? input.value.trim() : "";
+            if (preset === "auto") {
+                customUrl = "";
+            } else if (preset === "mjpeg_8080" && !customUrl) {
+                customUrl = "http://" + (printerIP || "127.0.0.1") + ":8080/?action=stream";
+            }
+            localStorage.setItem("orca_ac_cam_preset", preset);
+            localStorage.setItem("orca_ac_custom_cam_url", customUrl);
+
+            if (status) {
+                status.innerText = "Saving settings...";
+                status.style.display = "block";
+                status.style.color = "#00d2ff";
+            }
+
+            try {
+                await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "set_camera_url", camera_url: customUrl })
+                });
+            } catch(e) {
+                console.warn("set_camera_url backend notify:", e);
+            }
+
+            activeCameraUrl = customUrl || "http://127.0.0.1:18988/camera";
+
+            if (status) {
+                status.innerText = "Saved!";
+                status.style.color = "#45d483";
+            }
+
+            setTimeout(async () => {
+                closeCamSettingsModal();
+                if (isCameraStreaming) {
+                    await stopCameraStream();
+                }
+                await startCameraStream();
+            }, 600);
+        }
+
+        function updateLightUI(data) {
+            if (data === undefined || data === null) return;
+            if (typeof data === "object") {
+                if (data.camera_light !== undefined) {
+                    cameraLightStatus = Number(data.camera_light) === 1 ? 1 : 0;
+                } else if (data.light !== undefined) {
+                    cameraLightStatus = Number(data.light) === 1 ? 1 : 0;
+                }
+                if (data.nozzle_light !== undefined) {
+                    nozzleLightStatus = Number(data.nozzle_light) === 1 ? 1 : 0;
+                }
+            } else {
+                cameraLightStatus = Number(data) === 1 ? 1 : 0;
+                lightStatus = cameraLightStatus;
+            }
+
+            const isCamOn = cameraLightStatus === 1;
+            const btnCamLight = document.getElementById("btn-cam-light");
+            const controlCamState = document.getElementById("control-camera-light-state");
+            const controlCamSwitch = document.getElementById("control-camera-light-switch");
+            if (btnCamLight) {
+                btnCamLight.innerText = isCamOn ? "Cam Light On" : "Cam Light Off";
+                btnCamLight.classList.toggle("active", isCamOn);
+            }
+            if (controlCamState) controlCamState.innerText = isCamOn ? "On" : "Off";
+            if (controlCamSwitch) {
+                controlCamSwitch.classList.toggle("on", isCamOn);
+                controlCamSwitch.setAttribute("aria-checked", isCamOn ? "true" : "false");
+            }
+
+            const isNozzleOn = nozzleLightStatus === 1;
+            const btnNozzleLight = document.getElementById("btn-nozzle-light");
+            const controlNozzleState = document.getElementById("control-nozzle-light-state");
+            const controlNozzleSwitch = document.getElementById("control-nozzle-light-switch");
+            if (btnNozzleLight) {
+                btnNozzleLight.innerText = isNozzleOn ? "Nozzle Light On" : "Nozzle Light Off";
+                btnNozzleLight.classList.toggle("active", isNozzleOn);
+            }
+            if (controlNozzleState) controlNozzleState.innerText = isNozzleOn ? "On" : "Off";
+            if (controlNozzleSwitch) {
+                controlNozzleSwitch.classList.toggle("on", isNozzleOn);
+                controlNozzleSwitch.setAttribute("aria-checked", isNozzleOn ? "true" : "false");
+            }
+        }
+
+        async function toggleCameraLight() {
+            const nextStatus = cameraLightStatus === 1 ? 0 : 1;
+            cameraLightStatus = nextStatus;
+            updateLightUI({ camera_light: nextStatus, nozzle_light: nozzleLightStatus });
             try {
                 const response = await fetch("http://127.0.0.1:18988/control", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ action: "light", status: nextStatus })
+                    body: JSON.stringify({ action: "camera_light", status: nextStatus })
                 });
                 const data = await response.json();
-                if (!response.ok || data.status !== "ok") throw new Error(data.message || "Light update failed");
+                if (!response.ok || data.status !== "ok") throw new Error(data.message || "Camera light failed");
             } catch(e) {
-                updateLightUI(previousStatus);
-                console.error("Error toggling light:", e);
+                console.error("Error toggling camera light:", e);
+                cameraLightStatus = nextStatus === 1 ? 0 : 1;
+                updateLightUI({ camera_light: cameraLightStatus, nozzle_light: nozzleLightStatus });
             }
+        }
+
+        async function toggleNozzleLight() {
+            const nextStatus = nozzleLightStatus === 1 ? 0 : 1;
+            nozzleLightStatus = nextStatus;
+            updateLightUI({ camera_light: cameraLightStatus, nozzle_light: nextStatus });
+            try {
+                const response = await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "nozzle_light", status: nextStatus })
+                });
+                const data = await response.json();
+                if (!response.ok || data.status !== "ok") throw new Error(data.message || "Nozzle light failed");
+            } catch(e) {
+                console.error("Error toggling nozzle light:", e);
+                nozzleLightStatus = nextStatus === 1 ? 0 : 1;
+                updateLightUI({ camera_light: cameraLightStatus, nozzle_light: nozzleLightStatus });
+            }
+        }
+
+        function toggleLight() {
+            toggleCameraLight();
         }
 
         async function setSpeed(mode) {
@@ -2690,8 +2976,12 @@
                 const fanValue = document.getElementById("control-fan-value");
                 if (fanValue) fanValue.innerText = Math.round(modelFanPct) + "%";
             }
-            if (data.light !== undefined) {
-                updateLightUI(data.light);
+            if (data.light !== undefined || data.nozzle_light !== undefined || data.camera_light !== undefined) {
+                updateLightUI({
+                    light: data.light,
+                    nozzle_light: data.nozzle_light,
+                    camera_light: data.camera_light
+                });
             }
             if (configuredPrinters.length) {
                 const row = document.querySelector('.printer-list-item.monitored .printer-list-status');
@@ -2734,9 +3024,15 @@
                     }
 
                     if (data.camera_url && data.camera_url.startsWith("http")) {
-                        activeCameraUrl = data.camera_url;
-                        if (!flvPlayer && !userStoppedCamera) {
-                            initFlvVideo(data.camera_url);
+                        const savedPreset = localStorage.getItem("orca_ac_cam_preset") || "auto";
+                        const savedCustom = localStorage.getItem("orca_ac_custom_cam_url") || "";
+                        if (savedPreset !== "custom" && savedPreset !== "mjpeg_8080") {
+                            activeCameraUrl = data.camera_url;
+                        } else if (savedCustom) {
+                            activeCameraUrl = savedCustom;
+                        }
+                        if (!flvPlayer && !isCameraStreaming && !userStoppedCamera) {
+                            initCameraStream(activeCameraUrl);
                         }
                     }
                     if (Array.isArray(data.material_boxes)) {
@@ -2780,6 +3076,8 @@
                         speed_mode: data.speed_mode,
                         fan: data.fan,
                         light: data.light,
+                        nozzle_light: data.nozzle_light,
+                        camera_light: data.camera_light,
                         axis_error: data.axis_error || ""
                     });
                 }

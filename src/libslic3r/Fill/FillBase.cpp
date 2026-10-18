@@ -43,6 +43,7 @@
 // BBS: new infill pattern header
 #include "FillConcentricInternal.hpp"
 #include "FillCrossHatch.hpp"
+#include "FillSpiderWeb.hpp"
 #include "libslic3r/Polyline.hpp"
 #include "libslic3r/ShortestPath.hpp"
 #include "libslic3r/Line.hpp"
@@ -83,6 +84,7 @@ Fill* Fill::new_from_type(const InfillPattern type)
     case ipArchimedeanChords:   return new FillArchimedeanChords();
     case ipHilbertCurve:        return new FillHilbertCurve();
     case ipOctagramSpiral:      return new FillOctagramSpiral();
+    case ipSpiderWeb:           return new FillSpiderWeb();
     case ipAdaptiveCubic:       return new FillAdaptive::Filler();
     case ipSupportCubic:        return new FillAdaptive::Filler();
     case ipSupportBase:         return new FillSupportBase();  // simply line fill
