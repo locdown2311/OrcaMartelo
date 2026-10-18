@@ -211,6 +211,7 @@
 	"support_air_filtration": "0",
 	"support_chamber_temp_control": "0",
 	"support_multi_bed_types": "1",
+	"default_bed_type": "Textured PEI Plate",
 	"template_custom_gcode": "",
 	"time_cost": "0",
 	"time_lapse_gcode": "",
