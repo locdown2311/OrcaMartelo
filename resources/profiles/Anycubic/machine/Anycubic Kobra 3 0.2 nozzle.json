@@ -152,7 +152,7 @@
 		"0"
 	],
 	"machine_pause_gcode": "M601",
-	"machine_start_gcode": "G9111 bedTemp=[bed_temperature_initial_layer_single] extruderTemp=[first_layer_temperature[initial_tool]]\nM117\nM900 K0.051",
+	"machine_start_gcode": "M140 S[bed_temperature_initial_layer_single] ; preheat bed\nM190 S[bed_temperature_initial_layer_single] ; wait for bed temp before leveling\nG9111 bedTemp=[bed_temperature_initial_layer_single] extruderTemp=[first_layer_temperature[initial_tool]]\nM117\nM900 K0.051",
 	"machine_unload_filament_time": "0",
 	"manual_filament_change": "0",
 	"max_layer_height": [

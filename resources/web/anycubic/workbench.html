@@ -1552,7 +1552,7 @@
             <div class="control-presets">
                 <button onclick="preheat(205,60)" title="Preheat nozzle to 205°C and heatbed to 60°C for PLA.">PLA <b>205/60</b></button>
                 <button onclick="preheat(235,75)" title="Preheat nozzle to 235°C and heatbed to 75°C for PETG.">PETG <b>235/75</b></button>
-                <button onclick="preheat(255,90)" title="Preheat nozzle to 255°C and heatbed to 90°C for ABS.">ABS <b>255/90</b></button>
+                <button onclick="preheat(255,105)" title="Preheat nozzle to 255°C and heatbed to 105°C for ABS.">ABS <b>255/105</b></button>
             </div>
         </section>
 
@@ -3118,8 +3118,15 @@
         async function preheat(nozzle, bed) {
             document.getElementById("target-nozzle").innerText = nozzle;
             document.getElementById("target-bed").innerText = bed;
-            await setTargetTemp('nozzle', nozzle);
-            await setTargetTemp('bed', bed);
+            try {
+                await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "temp", heater: "both", nozzle: nozzle, bed: bed })
+                });
+            } catch(e) {
+                console.error("Preheat failed:", e);
+            }
         }
 
         // --- Extrusion Controls ---

@@ -1470,31 +1470,57 @@ class BridgeServer(BaseHTTPRequestHandler):
             elif action == "temp":
                 heater = data.get("heater", "nozzle")
                 val = int(data.get("value", 0))
-                topic_temp = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/tempature"
+                settings = {}
                 if heater == "nozzle":
-                    t_type = 0
-                    bed_val = 0
-                    nozzle_val = val
+                    settings["target_nozzle_temp"] = val
                     telemetry["target_nozzle_temp"] = val
-                else:
-                    t_type = 1
-                    bed_val = val
-                    nozzle_val = 0
+                elif heater == "bed":
+                    settings["target_hotbed_temp"] = val
                     telemetry["target_bed_temp"] = val
+                elif heater in ("both", "all"):
+                    nozzle_val = int(data.get("nozzle", val))
+                    bed_val = int(data.get("bed", val))
+                    settings["target_nozzle_temp"] = nozzle_val
+                    settings["target_hotbed_temp"] = bed_val
+                    telemetry["target_nozzle_temp"] = nozzle_val
+                    telemetry["target_bed_temp"] = bed_val
+
+                # Primary Kobra 3 protocol: type print, action update, settings target_hotbed_temp / target_nozzle_temp
                 msg = {
+                    "type": "print",
+                    "action": "update",
+                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+                    "timestamp": int(time.time() * 1000),
+                    "data": {
+                        "taskid": "-1",
+                        "settings": settings
+                    }
+                }
+                payload_str = json.dumps(msg)
+                for topic_role in ("slicer", "web"):
+                    top = f"anycubic/anycubicCloud/v1/{topic_role}/printer/{model_id}/{device_id}/print"
+                    if mqtt_client:
+                        mqtt_client.publish(top, payload_str)
+
+                # Legacy fallback for older firmware models
+                legacy_msg = {
                     "type": "tempature",
                     "action": "set",
                     "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
                     "timestamp": int(time.time() * 1000),
                     "data": {
-                        "type": t_type,
-                        "target_hotbed_temp": bed_val,
-                        "target_nozzle_temp": nozzle_val
+                        "type": 0 if heater == "nozzle" else 1,
+                        "target_hotbed_temp": settings.get("target_hotbed_temp", 0),
+                        "target_nozzle_temp": settings.get("target_nozzle_temp", 0)
                     }
                 }
-                if mqtt_client:
-                    mqtt_client.publish(topic_temp, json.dumps(msg))
-                    print(f"[Bridge] Published set tempature {heater}={val} to {topic_temp}")
+                legacy_str = json.dumps(legacy_msg)
+                for topic_role in ("slicer", "web"):
+                    top_legacy = f"anycubic/anycubicCloud/v1/{topic_role}/printer/{model_id}/{device_id}/tempature"
+                    if mqtt_client:
+                        mqtt_client.publish(top_legacy, legacy_str)
+
+                print(f"[Bridge] Published set temperature {heater}={val} (settings={settings})")
 
             elif action == "extrude":
                 direction = data.get("dir", "extrude")
