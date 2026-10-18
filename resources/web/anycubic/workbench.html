@@ -1332,6 +1332,44 @@
                 </div>
                 <div class="material-box-tabs" id="material-box-tabs"></div>
                 <div class="slots-container" id="slots-container"></div>
+                <!-- ACE Pro Dryer & Filament Backup Controls -->
+                <div class="ace-controls-panel" id="ace-controls-panel" style="margin-top: 8px; background: rgba(0,0,0,0.22); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span style="font-weight: 700; font-size: 11px; color: var(--text-main);">🔥 ACE Dryer</span>
+                            <span id="ace-temp-badge" style="font-size: 9px; padding: 1px 6px; background: #262c3b; color: #00d2ff; border-radius: 4px; font-weight: 600;">Box: --°C</span>
+                            <span id="ace-drying-badge" style="font-size: 9px; padding: 1px 6px; background: #262c3b; color: var(--text-muted); border-radius: 4px; font-weight: 600;">Idle</span>
+                        </div>
+                        <label style="display: flex; align-items: center; gap: 4px; font-size: 10px; cursor: pointer; color: var(--text-main); user-select: none;" title="Filament Backup: automatically switches to another spool with matching material when a slot runs out.">
+                            <input type="checkbox" id="ace-backup-toggle" onchange="toggleAceBackup(this.checked)" style="cursor: pointer; accent-color: #00d2ff;">
+                            <span style="font-weight: 600;">Backup</span>
+                        </label>
+                    </div>
+                    <div id="ace-dryer-row" style="display: flex; align-items: center; gap: 6px;">
+                        <div style="display: flex; align-items: center; gap: 3px;">
+                            <label style="font-size: 9px; color: var(--text-muted);">Temp:</label>
+                            <select id="ace-target-temp" style="background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; font-size: 10px; padding: 2px 4px;">
+                                <option value="45">45°C (PLA)</option>
+                                <option value="50" selected>50°C (PETG)</option>
+                                <option value="55">55°C (ABS/TPU)</option>
+                            </select>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 3px;">
+                            <label style="font-size: 9px; color: var(--text-muted);">Time:</label>
+                            <select id="ace-duration" style="background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; font-size: 10px; padding: 2px 4px;">
+                                <option value="2">2h</option>
+                                <option value="4" selected>4h</option>
+                                <option value="6">6h</option>
+                                <option value="8">8h</option>
+                                <option value="12">12h</option>
+                            </select>
+                        </div>
+                        <button id="btn-toggle-drying" class="btn" onclick="toggleAceDrying()" style="margin-left: auto; padding: 3px 10px; font-size: 10px; font-weight: 600; border-radius: 4px; background: #1677ff; color: #fff; border: none; cursor: pointer;">
+                            Start Drying
+                        </button>
+                    </div>
+                    <div id="ace-drying-status-text" style="font-size: 9px; color: #f59e0b; margin-top: 4px; display: none;"></div>
+                </div>
             </div>
         </section>
 
@@ -2670,6 +2708,157 @@
             }
             const box = activeMaterialBox();
             updateFilamentUI(box ? box.slots || [] : []);
+            const acePanel = document.getElementById("ace-controls-panel");
+            if (acePanel) {
+                const hasAce = (box && (box.source === "ace" || (box.id >= 0 && box.source !== "external" && box.source !== "rack")))
+                            || materialBoxes.some(b => b.source === "ace" || (b.id >= 0 && b.source !== "external" && b.source !== "rack"));
+                acePanel.style.display = hasAce ? "block" : "none";
+                if (box) {
+                    updateAceDryingUI(box.drying_status, box.temp, box.auto_feed);
+                }
+            }
+        }
+
+        let currentAceDryingState = false;
+
+        function updateAceDryingUI(dryingData, boxTemp, autoFeed) {
+            const tempBadge = document.getElementById("ace-temp-badge");
+            if (tempBadge) {
+                if (boxTemp !== undefined && boxTemp !== null && Number(boxTemp) > 0) {
+                    tempBadge.innerText = `Box: ${Number(boxTemp)}°C`;
+                } else {
+                    tempBadge.innerText = "Box: --°C";
+                }
+            }
+
+            const backupToggle = document.getElementById("ace-backup-toggle");
+            if (backupToggle && autoFeed !== undefined && autoFeed !== null) {
+                backupToggle.checked = Boolean(Number(autoFeed));
+            }
+
+            const dryingBadge = document.getElementById("ace-drying-badge");
+            const btnDrying = document.getElementById("btn-toggle-drying");
+            const statusText = document.getElementById("ace-drying-status-text");
+
+            const isDrying = Boolean(dryingData && (dryingData.status === 1 || dryingData.status === true));
+            currentAceDryingState = isDrying;
+
+            if (dryingBadge) {
+                if (isDrying) {
+                    dryingBadge.innerText = "Drying";
+                    dryingBadge.style.background = "#f59e0b22";
+                    dryingBadge.style.color = "#f59e0b";
+                    dryingBadge.style.border = "1px solid #f59e0b88";
+                } else {
+                    dryingBadge.innerText = "Idle";
+                    dryingBadge.style.background = "#262c3b";
+                    dryingBadge.style.color = "var(--text-muted)";
+                    dryingBadge.style.border = "none";
+                }
+            }
+
+            if (btnDrying) {
+                if (isDrying) {
+                    btnDrying.innerText = "Stop Drying";
+                    btnDrying.style.background = "#ef4444";
+                } else {
+                    btnDrying.innerText = "Start Drying";
+                    btnDrying.style.background = "#1677ff";
+                }
+            }
+
+            if (statusText) {
+                if (isDrying && dryingData) {
+                    const remainMin = Number(dryingData.remain_time || 0);
+                    const hrs = Math.floor(remainMin / 60);
+                    const mins = remainMin % 60;
+                    const timeStr = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+                    const target = dryingData.target_temp || "--";
+                    statusText.style.display = "block";
+                    statusText.innerText = `⏳ Drying at ${target}°C — ${timeStr} remaining`;
+                } else {
+                    statusText.style.display = "none";
+                }
+            }
+        }
+
+        async function toggleAceDrying() {
+            const btn = document.getElementById("btn-toggle-drying");
+            const nextStatus = currentAceDryingState ? 0 : 1;
+            const tempSelect = document.getElementById("ace-target-temp");
+            const durSelect = document.getElementById("ace-duration");
+            const targetTemp = tempSelect ? parseInt(tempSelect.value, 10) : 50;
+            const durationHours = durSelect ? parseInt(durSelect.value, 10) : 4;
+            const durationMinutes = durationHours * 60;
+
+            const box = activeMaterialBox();
+            const boxId = (box && box.id >= 0) ? Number(box.id) : 0;
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerText = nextStatus ? "Starting…" : "Stopping…";
+            }
+
+            try {
+                const response = await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "set_ace_drying",
+                        box_id: boxId,
+                        status: nextStatus,
+                        target_temp: targetTemp,
+                        duration: durationMinutes
+                    })
+                });
+                const data = await response.json();
+                if (data.status === "ok") {
+                    currentAceDryingState = Boolean(nextStatus);
+                    updateAceDryingUI(
+                        { status: nextStatus, target_temp: targetTemp, duration: durationMinutes, remain_time: nextStatus ? durationMinutes : 0 },
+                        null,
+                        null
+                    );
+                } else {
+                    alert("ACE drying control failed: " + (data.message || "Unknown error"));
+                }
+            } catch (e) {
+                console.error("Failed to toggle ACE drying:", e);
+                alert("Failed to communicate with bridge daemon: " + e.message);
+            } finally {
+                if (btn) btn.disabled = false;
+                setTimeout(pollTelemetry, 600);
+            }
+        }
+
+        async function toggleAceBackup(enabled) {
+            const box = activeMaterialBox();
+            const boxId = (box && box.id >= 0) ? Number(box.id) : 0;
+            const autoFeed = enabled ? 1 : 0;
+
+            try {
+                const response = await fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "set_ace_auto_feed",
+                        box_id: boxId,
+                        auto_feed: autoFeed
+                    })
+                });
+                const data = await response.json();
+                if (data.status !== "ok") {
+                    alert("ACE filament backup update failed: " + (data.message || "Unknown error"));
+                    const toggle = document.getElementById("ace-backup-toggle");
+                    if (toggle) toggle.checked = !enabled;
+                }
+            } catch (e) {
+                console.error("Failed to update ACE filament backup:", e);
+                const toggle = document.getElementById("ace-backup-toggle");
+                if (toggle) toggle.checked = !enabled;
+            } finally {
+                setTimeout(pollTelemetry, 600);
+            }
         }
 
         async function syncFromSlicerToPrinter() {
@@ -3085,6 +3274,12 @@
                         camera_light: data.camera_light,
                         axis_error: data.axis_error || ""
                     });
+
+                    const activeBox = activeMaterialBox();
+                    const dryingData = (activeBox && activeBox.drying_status) || data.ace_drying || null;
+                    const boxTemp = (activeBox && activeBox.temp !== undefined && activeBox.temp !== null) ? activeBox.temp : (data.ace_temp !== undefined ? data.ace_temp : null);
+                    const autoFeed = (activeBox && activeBox.auto_feed !== undefined && activeBox.auto_feed !== null) ? activeBox.auto_feed : (data.ace_auto_feed !== undefined ? data.ace_auto_feed : null);
+                    updateAceDryingUI(dryingData, boxTemp, autoFeed);
                 }
             } catch (err) {}
         }

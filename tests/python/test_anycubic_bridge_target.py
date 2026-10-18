@@ -670,6 +670,130 @@ class MaterialSystemTests(unittest.TestCase):
         daemon.BridgeServer.do_POST(req)
         self.assertEqual(daemon.telemetry["custom_camera_url"], "http://192.168.1.50:8080/stream")
 
+    def test_ace_drying_and_backup_telemetry_reporting(self):
+        daemon.apply_multi_color_box_report({
+            "multi_color_box": [{
+                "id": 0,
+                "model_id": 40001,
+                "loaded_slot": 1,
+                "temp": 48,
+                "auto_feed": 1,
+                "drying_status": {
+                    "status": 1,
+                    "target_temp": 50,
+                    "duration": 240,
+                    "remain_time": 180,
+                },
+                "slots": [
+                    {"index": 0, "type": "PLA", "color": [255, 255, 255]},
+                ]
+            }]
+        })
+        self.assertEqual(daemon.telemetry["ace_temp"], 48)
+        self.assertEqual(daemon.telemetry["ace_auto_feed"], 1)
+        self.assertEqual(daemon.telemetry["ace_drying"], {
+            "status": 1,
+            "target_temp": 50,
+            "duration": 240,
+            "remain_time": 180,
+        })
+        self.assertTrue(len(daemon.telemetry["material_boxes"]) > 0)
+        box = daemon.telemetry["material_boxes"][0]
+        self.assertEqual(box["temp"], 48)
+        self.assertEqual(box["auto_feed"], 1)
+        self.assertEqual(box["drying_status"]["status"], 1)
+        self.assertEqual(box["drying_status"]["target_temp"], 50)
+
+    def test_set_ace_drying_control_action(self):
+        class FakeClient:
+            def __init__(self):
+                self.published = []
+
+            def publish(self, topic, body):
+                self.published.append((topic, json.loads(body)))
+
+        previous = daemon.mqtt_client
+        fake = FakeClient()
+        daemon.mqtt_client = fake
+        daemon.telemetry["connected"] = True
+        try:
+            body = json.dumps({
+                "action": "set_ace_drying",
+                "box_id": 0,
+                "status": 1,
+                "target_temp": 50,
+                "duration": 4
+            }).encode("utf-8")
+
+            class FakeReq:
+                def __init__(self):
+                    self.headers = {"Content-Length": str(len(body)), "X-OrcaCubic-Token": daemon.BRIDGE_TOKEN}
+                    self.rfile = io.BytesIO(body)
+                    self.wfile = io.BytesIO()
+                    self.client_address = ("127.0.0.1", 12345)
+                    self.path = "/control"
+                def require_authorized(self): return True
+                def send_response(self, code): self.code = code
+                def send_header(self, k, v): pass
+                def end_headers(self): pass
+
+            req = FakeReq()
+            daemon.BridgeServer.do_POST(req)
+            self.assertEqual(daemon.telemetry["ace_drying"]["status"], 1)
+            self.assertEqual(daemon.telemetry["ace_drying"]["target_temp"], 50)
+            self.assertEqual(daemon.telemetry["ace_drying"]["duration"], 240)
+            self.assertTrue(any(
+                msg[1].get("action") == "setDry" and
+                msg[1].get("type") == "multiColorBox" and
+                msg[1]["data"]["multi_color_box"][0]["drying_status"]["target_temp"] == 50
+                for msg in fake.published
+            ))
+        finally:
+            daemon.mqtt_client = previous
+
+    def test_set_ace_auto_feed_control_action(self):
+        class FakeClient:
+            def __init__(self):
+                self.published = []
+
+            def publish(self, topic, body):
+                self.published.append((topic, json.loads(body)))
+
+        previous = daemon.mqtt_client
+        fake = FakeClient()
+        daemon.mqtt_client = fake
+        daemon.telemetry["connected"] = True
+        try:
+            body = json.dumps({
+                "action": "set_ace_auto_feed",
+                "box_id": 0,
+                "auto_feed": 1
+            }).encode("utf-8")
+
+            class FakeReq:
+                def __init__(self):
+                    self.headers = {"Content-Length": str(len(body)), "X-OrcaCubic-Token": daemon.BRIDGE_TOKEN}
+                    self.rfile = io.BytesIO(body)
+                    self.wfile = io.BytesIO()
+                    self.client_address = ("127.0.0.1", 12345)
+                    self.path = "/control"
+                def require_authorized(self): return True
+                def send_response(self, code): self.code = code
+                def send_header(self, k, v): pass
+                def end_headers(self): pass
+
+            req = FakeReq()
+            daemon.BridgeServer.do_POST(req)
+            self.assertEqual(daemon.telemetry["ace_auto_feed"], 1)
+            self.assertTrue(any(
+                msg[1].get("action") == "setAutoFeed" and
+                msg[1].get("type") == "multiColorBox" and
+                msg[1]["data"]["multi_color_box"][0]["auto_feed"] == 1
+                for msg in fake.published
+            ))
+        finally:
+            daemon.mqtt_client = previous
+
 
 if __name__ == "__main__":
     unittest.main()

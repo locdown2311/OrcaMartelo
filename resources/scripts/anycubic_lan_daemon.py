@@ -217,13 +217,31 @@ def apply_multi_color_box_report(data, code=200, replace=True):
             slots = _merge_reported_slots(previous.get("slots", []), slots)
             boxes.remove(previous)
         normalized_slots = [_normalize_slot(slot, box_id, source, loaded_slot, slot_offset) for slot in sorted(slots, key=lambda slot: _as_int(slot.get("index", slot.get("box_slot", 0))))]
+        drying_status_raw = reported.get("drying_status") or {}
+        box_temp = _as_int(reported.get("temp", reported.get("cur_temp", 0)), 0)
+        auto_feed = _as_int(reported.get("auto_feed", 0), 0)
+        drying_info = {
+            "status": _as_int(drying_status_raw.get("status", 0), 0),
+            "target_temp": _as_int(drying_status_raw.get("target_temp", 0), 0),
+            "duration": _as_int(drying_status_raw.get("duration", 0), 0),
+            "remain_time": _as_int(drying_status_raw.get("remain_time", 0), 0),
+        }
         boxes.append({
             "id": box_id,
             "source": source,
             "model_id": reported.get("model_id"),
             "loaded_slot": loaded_slot,
+            "temp": box_temp,
+            "auto_feed": auto_feed,
+            "drying_status": drying_info,
             "slots": normalized_slots,
         })
+        if box_id >= 0:
+            telemetry["ace_drying"] = drying_info
+            telemetry["ace_auto_feed"] = auto_feed
+            telemetry["ace_temp"] = box_temp
+            if reported.get("humidity") is not None:
+                telemetry["ace_humidity"] = _as_int(reported.get("humidity"), 0)
         reported_feed = reported.get("feed_status")
         if reported_feed:
             telemetry["feed_status"] = {
@@ -1390,6 +1408,70 @@ class BridgeServer(BaseHTTPRequestHandler):
                     print(f"[Bridge] Extrude executed: {direction} {dist}mm")
                 except Exception as e:
                     result = {"status": "error", "message": str(e)}
+
+            elif action == "set_ace_drying":
+                box_id = int(data.get("box_id", 0))
+                status = 1 if data.get("status", 1) else 0
+                target_temp = int(data.get("target_temp", 50))
+                raw_duration = int(data.get("duration", 240))
+                duration = raw_duration * 60 if raw_duration <= 24 else raw_duration
+                topic_dry = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/multiColorBox"
+                topic_dry_slicer = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/multiColorBox"
+                msg = {
+                    "type": "multiColorBox",
+                    "action": "setDry",
+                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+                    "timestamp": int(time.time() * 1000),
+                    "data": {
+                        "multi_color_box": [{
+                            "id": box_id,
+                            "drying_status": {
+                                "status": status,
+                                "target_temp": target_temp,
+                                "duration": duration,
+                                "remain_time": duration if status else 0
+                            }
+                        }]
+                    }
+                }
+                if mqtt_client:
+                    payload_str = json.dumps(msg)
+                    mqtt_client.publish(topic_dry, payload_str)
+                    mqtt_client.publish(topic_dry_slicer, payload_str)
+                    print(f"[Bridge] Published setDry for box {box_id}: status={status}, temp={target_temp}C, duration={duration}m")
+                telemetry["ace_drying"] = {
+                    "box_id": box_id,
+                    "status": status,
+                    "target_temp": target_temp,
+                    "duration": duration,
+                    "remain_time": duration if status else 0
+                }
+                result = {"status": "ok", "box_id": box_id, "drying_status": telemetry["ace_drying"], "ip": PRINTER_IP}
+
+            elif action == "set_ace_auto_feed":
+                box_id = int(data.get("box_id", 0))
+                auto_feed = 1 if data.get("auto_feed", 1) else 0
+                topic_auto = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/multiColorBox"
+                topic_auto_slicer = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/multiColorBox"
+                msg = {
+                    "type": "multiColorBox",
+                    "action": "setAutoFeed",
+                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+                    "timestamp": int(time.time() * 1000),
+                    "data": {
+                        "multi_color_box": [{
+                            "id": box_id,
+                            "auto_feed": auto_feed
+                        }]
+                    }
+                }
+                if mqtt_client:
+                    payload_str = json.dumps(msg)
+                    mqtt_client.publish(topic_auto, payload_str)
+                    mqtt_client.publish(topic_auto_slicer, payload_str)
+                    print(f"[Bridge] Published setAutoFeed for box {box_id}: auto_feed={auto_feed}")
+                telemetry["ace_auto_feed"] = auto_feed
+                result = {"status": "ok", "box_id": box_id, "auto_feed": auto_feed, "ip": PRINTER_IP}
 
         elif self.path.endswith("/mach_mqtt/publish"):
             topic = data.get("topic", "")
