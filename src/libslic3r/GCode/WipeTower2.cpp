@@ -2620,42 +2620,33 @@ void WipeTower2::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> 
         else if (m_layer_info->depth < m_wipe_tower_depth - m_perimeter_width)
 			m_y_shift = (m_wipe_tower_depth-m_layer_info->depth-m_perimeter_width)/2.f;
 
-        const float stud_height = 1.8f;
-        const bool is_lego_stud_layer = m_is_lego && m_wipe_tower_height > 3.6f && (m_wipe_tower_height - m_z_pos <= stud_height);
+        int idx = first_toolchange_to_nonsoluble_nonsupport(layer.tool_changes);
+        WipeTower::ToolChangeResult finish_layer_tcr;
 
-        if (is_lego_stud_layer) {
-            // For Lego studs, ONLY finish_layer() is called to extrude the raised cylindrical studs!
-            // No toolchanges, no purges, no perimeter walls cutting through the studs!
-            layer_result.emplace_back(finish_layer());
-        } else {
-            int idx = first_toolchange_to_nonsoluble_nonsupport(layer.tool_changes);
-            WipeTower::ToolChangeResult finish_layer_tcr;
+        if (idx == -1) {
+            // if there is no toolchange switching to non-soluble, finish layer
+            // will be called at the very beginning. That's the last possibility
+            // where a nonsoluble tool can be.
+            finish_layer_tcr = finish_layer();
+        }
 
-            if (idx == -1) {
-                // if there is no toolchange switching to non-soluble, finish layer
-                // will be called at the very beginning. That's the last possibility
-                // where a nonsoluble tool can be.
+        for (int i=0; i<int(layer.tool_changes.size()); ++i) {
+            layer_result.emplace_back(tool_change(layer.tool_changes[i].new_tool));
+            if (i == idx) // finish_layer will be called after this toolchange
                 finish_layer_tcr = finish_layer();
-            }
+        }
 
-            for (int i=0; i<int(layer.tool_changes.size()); ++i) {
-                layer_result.emplace_back(tool_change(layer.tool_changes[i].new_tool));
-                if (i == idx) // finish_layer will be called after this toolchange
-                    finish_layer_tcr = finish_layer();
+        if (layer_result.empty()) {
+            // there is nothing to merge finish_layer with
+            layer_result.emplace_back(std::move(finish_layer_tcr));
+        }
+        else {
+            if (idx == -1) {
+                layer_result[0] = merge_tcr(finish_layer_tcr, layer_result[0]);
+                layer_result[0].force_travel = true;
             }
-
-            if (layer_result.empty()) {
-                // there is nothing to merge finish_layer with
-                layer_result.emplace_back(std::move(finish_layer_tcr));
-            }
-            else {
-                if (idx == -1) {
-                    layer_result[0] = merge_tcr(finish_layer_tcr, layer_result[0]);
-                    layer_result[0].force_travel = true;
-                }
-                else
-                    layer_result[idx] = merge_tcr(layer_result[idx], finish_layer_tcr);
-            }
+            else
+                layer_result[idx] = merge_tcr(layer_result[idx], finish_layer_tcr);
         }
 
         if (layer.combined_away)
