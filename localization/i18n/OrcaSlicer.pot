@@ -16575,10 +16575,16 @@ msgstr ""
 msgid "Some amount of material in extruder is pulled back to avoid ooze during long travel. Set zero to disable retraction."
 msgstr ""
 
+msgid "Long retract before cut"
+msgstr ""
+
 msgid "Long retraction when cut (beta)"
 msgstr ""
 
 msgid "Experimental feature: Retracting and cutting off the filament at a longer distance during changes to minimize purge. While this reduces flush significantly, it may also raise the risk of nozzle clogs or other printing problems."
+msgstr ""
+
+msgid "Retraction distance before cut"
 msgstr ""
 
 msgid "Retraction distance when cut"

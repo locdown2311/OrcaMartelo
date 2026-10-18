@@ -228,6 +228,14 @@ double Extruder::retract_restart_extra() const
 
 double Extruder::retract_length_toolchange() const
 {
+    if (m_config->long_retractions_when_cut.get_at(m_config_index) &&
+        m_config->retraction_distances_when_cut.get_at(m_config_index) > 0) {
+        const std::string& cfg = m_config->change_filament_gcode.value;
+        if (cfg.find("retraction_distance_when_cut") == std::string::npos &&
+            cfg.find("retraction_distances_when_cut") == std::string::npos) {
+            return m_config->retraction_distances_when_cut.get_at(m_config_index);
+        }
+    }
     return m_config->retract_length_toolchange.get_at(m_config_index);
 }
 

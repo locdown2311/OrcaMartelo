@@ -6063,21 +6063,24 @@ void PrintConfigDef::init_fff_params()
 
     def = this->add("enable_long_retraction_when_cut",coInt);
     def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionInt {0});
+    def->set_default_value(new ConfigOptionInt {1});
 
     def = this->add("long_retractions_when_cut", coBools);
-    def->label = L("Long retraction when cut (beta)");
+    def->label = L("Long retract before cut");
+    def->full_label = L("Long retract before cut");
     def->tooltip = L("Experimental feature: Retracting and cutting off the filament at a longer distance during changes to minimize purge. "
-                     "While this reduces flush significantly, it may also raise the risk of nozzle clogs or other printing problems.");
-    def->mode = comDevelop;
+                     "While this reduces flush significantly, setting it too high may raise the risk of nozzle clogs or other printing problems.");
+    def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBools {false});
 
     def = this->add("retraction_distances_when_cut",coFloats);
     def->label = L("Retraction distance when cut");
+    def->full_label = L("Retraction distance before cut");
     def->tooltip = L("Experimental feature: Retraction length before cutting off during filament change.");
-    def->mode = comDevelop;
-    def->min = 10;
-    def->max = 18;
+    def->sidetext = L("mm");
+    def->mode = comAdvanced;
+    def->min = 0;
+    def->max = 100;
     def->set_default_value(new ConfigOptionFloats {18});
 
     def = this->add("long_retractions_when_ec", coBools);

@@ -17976,14 +17976,20 @@ msgstr "Distância de retração"
 msgid "Some amount of material in extruder is pulled back to avoid ooze during long travel. Set zero to disable retraction."
 msgstr "Alguma quantidade de material na extrusora é puxada para dentro para evitar vazamento durante deslocamentos longos. Defina zero para desativar a retração."
 
+msgid "Long retract before cut"
+msgstr "Retração longa antes do corte"
+
 msgid "Long retraction when cut (beta)"
-msgstr "Retração longa quando cortado (beta)"
+msgstr "Retração longa antes do corte (beta)"
 
 msgid "Experimental feature: Retracting and cutting off the filament at a longer distance during changes to minimize purge. While this reduces flush significantly, it may also raise the risk of nozzle clogs or other printing problems."
-msgstr "Funcionalidade experimental: Retrair e cortar o filamento a uma distância mais longa durante mudanças para minimizar a purga. Isto reduz significativamente a purga, pode também aumentar o risco de bolhas no bico ou de outros problemas de impressão."
+msgstr "Funcionalidade experimental: Retrair e cortar o filamento a uma distância mais longa durante mudanças para minimizar a purga. Isto reduz significativamente a purga, pode também aumentar o risco de entupimento no bico ou outros problemas de impressão."
+
+msgid "Retraction distance before cut"
+msgstr "Distância de retração antes do corte"
 
 msgid "Retraction distance when cut"
-msgstr "Distância de retração ao cortar"
+msgstr "Distância de retração antes do corte"
 
 msgid "Experimental feature: Retraction length before cutting off during filament change."
 msgstr "Funcionalidade experimental: Comprimento de retração antes de cortar durante a mudança de filamento."
