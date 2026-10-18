@@ -3862,8 +3862,8 @@ void Sidebar::update_all_preset_comboboxes()
         else
             p->m_bpButton_ams_filament->Hide();
 
-        if (sidebar && sidebar->p->m_btn_sync_ace)
-            sidebar->p->m_btn_sync_ace->Show(is_anycubic);
+        if (p->m_btn_sync_ace)
+            p->m_btn_sync_ace->Show(is_anycubic);
 
         // Orca: with "Support 3MF as gcode" (use_3mf) the local export is a .gcode.3mf bundle, so when no
         // printer host/IP is configured the default action is "Export plate sliced file" (mirrors the
