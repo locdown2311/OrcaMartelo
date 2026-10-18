@@ -999,17 +999,17 @@ int GLVolumeCollection::load_wipe_tower_preview(
     const DynamicPrintConfig &printer_cfg = GUI::wxGetApp().preset_bundle->printers.get_edited_preset().config;
     const bool is_lego = resolve_wipe_tower_type(printer_cfg) == WipeTowerType::Type3;
     if (is_lego) {
-        const double stud_r = 2.4;
-        const double stud_h = 1.8;
-        const double pitch  = 8.0;
-        int num_x = std::max(1, int(std::round((width + 0.2) / pitch)));
-        int num_y = std::max(1, int(std::round((depth + 0.2) / pitch)));
-        float x0 = (width - (num_x - 1) * pitch) / 2.0f;
-        float y0 = (depth - (num_y - 1) * pitch) / 2.0f;
+        const float stud_r = 2.4f;
+        const float stud_h = 1.8f;
+        const float pitch  = 8.0f;
+        int num_x = std::max(1, int(std::round((width + 0.2f) / pitch)));
+        int num_y = std::max(1, int(std::round((depth + 0.2f) / pitch)));
+        float x0 = (width - float(num_x - 1) * pitch) / 2.0f;
+        float y0 = (depth - float(num_y - 1) * pitch) / 2.0f;
         for (int ix = 0; ix < num_x; ++ix) {
             for (int iy = 0; iy < num_y; ++iy) {
                 TriangleMesh stud = make_cylinder(stud_r, stud_h, 2.0 * PI / 36.0);
-                stud.translate({x0 + ix * pitch, y0 + iy * pitch, height});
+                stud.translate(Vec3f(x0 + float(ix) * pitch, y0 + float(iy) * pitch, height));
                 wipe_tower_shell.merge(stud);
             }
         }
@@ -1046,19 +1046,19 @@ int GLVolumeCollection::load_wipe_tower_preview(
     v.model_per_colors.resize(colors.size());
     for (size_t i = 0; i < slab_count; i++) {
         TriangleMesh color_part = make_cube(width, depth / slab_count, height);
-        color_part.translate({ 0.f, depth * i / slab_count, 0. });
+        color_part.translate(Vec3f(0.f, float(depth * i / slab_count), 0.f));
         if (is_lego && i == slab_count - 1) {
-            const double stud_r = 2.4;
-            const double stud_h = 1.8;
-            const double pitch  = 8.0;
-            int num_x = std::max(1, int(std::round((width + 0.2) / pitch)));
-            int num_y = std::max(1, int(std::round((depth + 0.2) / pitch)));
-            float x0 = (width - (num_x - 1) * pitch) / 2.0f;
-            float y0 = (depth - (num_y - 1) * pitch) / 2.0f;
+            const float stud_r = 2.4f;
+            const float stud_h = 1.8f;
+            const float pitch  = 8.0f;
+            int num_x = std::max(1, int(std::round((width + 0.2f) / pitch)));
+            int num_y = std::max(1, int(std::round((depth + 0.2f) / pitch)));
+            float x0 = (width - float(num_x - 1) * pitch) / 2.0f;
+            float y0 = (depth - float(num_y - 1) * pitch) / 2.0f;
             for (int ix = 0; ix < num_x; ++ix) {
                 for (int iy = 0; iy < num_y; ++iy) {
                     TriangleMesh stud = make_cylinder(stud_r, stud_h, 2.0 * PI / 36.0);
-                    stud.translate({x0 + ix * pitch, y0 + iy * pitch, height});
+                    stud.translate(Vec3f(x0 + float(ix) * pitch, y0 + float(iy) * pitch, height));
                     color_part.merge(stud);
                 }
             }

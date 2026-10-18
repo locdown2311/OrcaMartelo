@@ -1074,9 +1074,9 @@ WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& defau
     m_is_lego(config.wipe_tower_type.value == WipeTowerType::Type3)
 {
     if (m_is_lego) {
-        const double pitch = 8.0;
-        int num_x = std::max(2, int(std::round((m_wipe_tower_width + 0.2) / pitch)));
-        m_wipe_tower_width = float(num_x * pitch - 0.2);
+        const float pitch = 8.0f;
+        int num_x = std::max(2, int(std::round((m_wipe_tower_width + 0.2f) / pitch)));
+        m_wipe_tower_width = float(num_x) * pitch - 0.2f;
     }
     // Read absolute value of first layer speed, if given as percentage,
     // it is taken over following default. Speeds from config are not
@@ -2354,9 +2354,9 @@ void WipeTower2::plan_tower()
 		}
 	}
     if (m_is_lego) {
-        const double pitch = 8.0;
-        int num_y = std::max(2, int(std::ceil((m_wipe_tower_depth + 0.2f) / float(pitch))));
-        m_wipe_tower_depth = float(num_y * pitch - 0.2);
+        const float pitch = 8.0f;
+        int num_y = std::max(2, int(std::ceil((m_wipe_tower_depth + 0.2f) / pitch)));
+        m_wipe_tower_depth = float(num_y) * pitch - 0.2f;
         for (auto& layer : m_plan) {
             layer.depth = m_wipe_tower_depth;
         }
@@ -2824,18 +2824,18 @@ Polygon WipeTower2::generate_support_cone_wall(
 
 void WipeTower2::extrude_studs(WipeTowerWriter2 &writer, float feedrate)
 {
-    const double pitch = 8.0;
+    const float pitch = 8.0f;
     const float stud_outer_r = 2.4f;
     const int segments = 16;
-    int num_x = std::max(1, int(std::round((m_wipe_tower_width + 0.2) / pitch)));
-    int num_y = std::max(1, int(std::round((m_wipe_tower_depth + 0.2) / pitch)));
-    float x0 = (m_wipe_tower_width - (num_x - 1) * pitch) / 2.0f;
-    float y0 = (m_wipe_tower_depth - (num_y - 1) * pitch) / 2.0f;
+    int num_x = std::max(1, int(std::round((m_wipe_tower_width + 0.2f) / pitch)));
+    int num_y = std::max(1, int(std::round((m_wipe_tower_depth + 0.2f) / pitch)));
+    float x0 = (m_wipe_tower_width - float(num_x - 1) * pitch) / 2.0f;
+    float y0 = (m_wipe_tower_depth - float(num_y - 1) * pitch) / 2.0f;
 
     writer.append("; LEGO STUDS START\n");
     for (int ix = 0; ix < num_x; ++ix) {
         for (int iy = 0; iy < num_y; ++iy) {
-            Vec2f center(x0 + ix * pitch, y0 + iy * pitch);
+            Vec2f center(x0 + float(ix) * pitch, y0 + float(iy) * pitch);
             float r = stud_outer_r - m_perimeter_width / 2.f;
             while (r > 0.1f) {
                 Vec2f start = center + Vec2f(r, 0.f);

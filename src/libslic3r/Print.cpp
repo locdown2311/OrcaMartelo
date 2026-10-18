@@ -7020,17 +7020,17 @@ void WipeTowerData::construct_mesh(float width, float depth, float height, float
     if (width < EPSILON || depth < EPSILON || height < EPSILON) return;
     if (is_lego) {
         indexed_triangle_set brick_its = its_make_cube(width, depth, height);
-        const double stud_r = 2.4;
-        const double stud_h = 1.8;
-        const double pitch  = 8.0;
-        int num_x = std::max(1, int(std::round((width + 0.2) / pitch)));
-        int num_y = std::max(1, int(std::round((depth + 0.2) / pitch)));
-        float x0 = (width - (num_x - 1) * pitch) / 2.0f;
-        float y0 = (depth - (num_y - 1) * pitch) / 2.0f;
+        const float stud_r = 2.4f;
+        const float stud_h = 1.8f;
+        const float pitch  = 8.0f;
+        int num_x = std::max(1, int(std::round((width + 0.2f) / pitch)));
+        int num_y = std::max(1, int(std::round((depth + 0.2f) / pitch)));
+        float x0 = (width - float(num_x - 1) * pitch) / 2.0f;
+        float y0 = (depth - float(num_y - 1) * pitch) / 2.0f;
         for (int ix = 0; ix < num_x; ++ix) {
             for (int iy = 0; iy < num_y; ++iy) {
-                float sx = x0 + ix * pitch;
-                float sy = y0 + iy * pitch;
+                float sx = x0 + float(ix) * pitch;
+                float sy = y0 + float(iy) * pitch;
                 indexed_triangle_set stud_its = its_make_cylinder(stud_r, stud_h, 2.0 * PI / 36.0);
                 for (auto &v : stud_its.vertices) {
                     v += Vec3f(sx, sy, height);
