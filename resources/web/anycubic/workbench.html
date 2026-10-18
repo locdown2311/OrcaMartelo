@@ -348,22 +348,159 @@
             gap: 10px;
         }
 
+        .slots-container.with-ace-toolbar {
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+        }
+
         .slot-card {
             background: var(--bg-card);
             border: 1px solid var(--border);
             border-radius: var(--radius-md);
-            padding: 12px;
+            padding: 12px 8px 10px 8px;
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             position: relative;
-            transition: all 0.15s ease;
+            transition: all 0.2s ease;
+        }
+
+        .slot-card.loaded {
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .slot-card.in-use {
+            border-color: #10b981 !important;
+            background: linear-gradient(180deg, rgba(16, 185, 129, 0.14) 0%, rgba(16, 185, 129, 0.03) 100%) !important;
+            box-shadow: 0 0 14px rgba(16, 185, 129, 0.35) !important;
+        }
+
+        .slot-card.in-use .slot-color-circle {
+            border-color: #10b981;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.55);
+        }
+
+        .slot-card.empty {
+            opacity: 0.45;
+            border-style: dashed;
+        }
+
+        .slot-card.empty:hover {
+            opacity: 0.8;
         }
 
         .slot-card.active {
             border-color: var(--primary);
             box-shadow: 0 0 10px var(--primary-glow);
+        }
+
+        .slot-status-pill {
+            position: absolute;
+            top: 5px;
+            right: 6px;
+            font-size: 8px;
+            font-weight: 800;
+            letter-spacing: 0.3px;
+            padding: 1px 5px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            text-transform: uppercase;
+        }
+
+        .slot-status-pill.in-use {
+            background: rgba(16, 185, 129, 0.22);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.5);
+        }
+
+        .pulse-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: #10b981;
+            animation: pulse-glow 1.4s infinite;
+        }
+
+        @keyframes pulse-glow {
+            0% { transform: scale(0.9); opacity: 0.7; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { transform: scale(1.2); opacity: 1; box-shadow: 0 0 0 4px rgba(16, 185, 129, 0); }
+            100% { transform: scale(0.9); opacity: 0.7; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        .slot-dry-tag {
+            font-size: 9px;
+            font-weight: 700;
+            color: #f59e0b;
+            background: rgba(245, 158, 11, 0.15);
+            border: 1px solid rgba(245, 158, 11, 0.35);
+            border-radius: 3px;
+            padding: 1px 4px;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            margin-top: 1px;
+        }
+
+        .ace-header-pill {
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+
+        .ace-header-pill.temp {
+            background: rgba(0, 210, 255, 0.12);
+            color: #00d2ff;
+            border: 1px solid rgba(0, 210, 255, 0.25);
+        }
+
+        .ace-header-pill.drying {
+            background: #262c3b;
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+
+        .ace-backup-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            color: var(--text-main);
+            padding: 2px 7px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            user-select: none;
+            transition: all .15s ease;
+        }
+
+        .ace-backup-btn:hover {
+            border-color: var(--border-highlight);
+            color: #fff;
+        }
+
+        .ace-backup-btn input[type="checkbox"] {
+            cursor: pointer;
+            accent-color: #00d2ff;
+            margin: 0;
+        }
+
+        .ace-integrated-toolbar {
+            background: rgba(0, 0, 0, 0.24);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 6px 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-top: 8px;
         }
 
         .slot-badge {
@@ -380,8 +517,9 @@
             height: 34px;
             border-radius: 50%;
             border: 2px solid rgba(255,255,255,0.25);
-            margin-top: 6px;
+            margin-top: 4px;
             box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            transition: all 0.2s ease;
         }
 
         .slot-material {
@@ -1327,27 +1465,30 @@
             </div>
             <div class="embedded-consumables">
                 <div class="embedded-consumables-head">
-                    <h3>Material</h3>
-                    <div class="card-actions"><button onclick="syncFromSlicerToPrinter()" title="Read the active filament types and colors from the slicer and write them to the printer's ACE slots.">From Slicer</button><button onclick="syncFilamentsToSlicer()" title="Read the printer's current ACE slot materials and colors and apply them to the slicer.">To Slicer</button></div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <h3>Material</h3>
+                        <span id="ace-temp-badge" class="ace-header-pill temp" title="ACE Chamber Temperature">Box: --°C</span>
+                        <span id="ace-drying-badge" class="ace-header-pill drying" title="ACE Dryer Status">Idle</span>
+                    </div>
+                    <div class="card-actions">
+                        <label class="ace-backup-btn" title="Filament Backup: automatically switches to another spool with matching material when a slot runs out.">
+                            <input type="checkbox" id="ace-backup-toggle" onchange="toggleAceBackup(this.checked)">
+                            <span>Backup</span>
+                        </label>
+                        <button onclick="syncFromSlicerToPrinter()" title="Read the active filament types and colors from the slicer and write them to the printer's ACE slots.">From Slicer</button>
+                        <button onclick="syncFilamentsToSlicer()" title="Read the printer's current ACE slot materials and colors and apply them to the slicer.">To Slicer</button>
+                    </div>
                 </div>
                 <div class="material-box-tabs" id="material-box-tabs"></div>
                 <div class="slots-container" id="slots-container"></div>
-                <!-- ACE Pro Dryer & Filament Backup Controls -->
-                <div class="ace-controls-panel" id="ace-controls-panel" style="margin-top: 8px; background: rgba(0,0,0,0.22); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
-                        <div style="display: flex; align-items: center; gap: 6px;">
-                            <span style="font-weight: 700; font-size: 11px; color: var(--text-main);">🔥 ACE Dryer</span>
-                            <span id="ace-temp-badge" style="font-size: 9px; padding: 1px 6px; background: #262c3b; color: #00d2ff; border-radius: 4px; font-weight: 600;">Box: --°C</span>
-                            <span id="ace-drying-badge" style="font-size: 9px; padding: 1px 6px; background: #262c3b; color: var(--text-muted); border-radius: 4px; font-weight: 600;">Idle</span>
-                        </div>
-                        <label style="display: flex; align-items: center; gap: 4px; font-size: 10px; cursor: pointer; color: var(--text-main); user-select: none;" title="Filament Backup: automatically switches to another spool with matching material when a slot runs out.">
-                            <input type="checkbox" id="ace-backup-toggle" onchange="toggleAceBackup(this.checked)" style="cursor: pointer; accent-color: #00d2ff;">
-                            <span style="font-weight: 600;">Backup</span>
-                        </label>
-                    </div>
-                    <div id="ace-dryer-row" style="display: flex; align-items: center; gap: 6px;">
+                <!-- ACE Pro Dryer Controls (seamless integrated toolbar attached directly to slots) -->
+                <div class="ace-controls-panel ace-integrated-toolbar" id="ace-controls-panel">
+                    <div id="ace-dryer-row" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <span style="font-weight: 700; font-size: 11px; color: var(--text-main); display: inline-flex; align-items: center; gap: 4px;">
+                            <span>🔥</span> Dryer:
+                        </span>
                         <div style="display: flex; align-items: center; gap: 3px;">
-                            <label style="font-size: 9px; color: var(--text-muted);">Temp:</label>
+                            <label style="font-size: 10px; color: var(--text-muted);">Temp:</label>
                             <select id="ace-target-temp" style="background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; font-size: 10px; padding: 2px 4px;">
                                 <option value="45">45°C (PLA)</option>
                                 <option value="50" selected>50°C (PETG)</option>
@@ -1355,7 +1496,7 @@
                             </select>
                         </div>
                         <div style="display: flex; align-items: center; gap: 3px;">
-                            <label style="font-size: 9px; color: var(--text-muted);">Time:</label>
+                            <label style="font-size: 10px; color: var(--text-muted);">Time:</label>
                             <select id="ace-duration" style="background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; font-size: 10px; padding: 2px 4px;">
                                 <option value="2">2h</option>
                                 <option value="4" selected>4h</option>
@@ -1364,11 +1505,11 @@
                                 <option value="12">12h</option>
                             </select>
                         </div>
-                        <button id="btn-toggle-drying" class="btn" onclick="toggleAceDrying()" style="margin-left: auto; padding: 3px 10px; font-size: 10px; font-weight: 600; border-radius: 4px; background: #1677ff; color: #fff; border: none; cursor: pointer;">
+                        <button id="btn-toggle-drying" class="btn btn-primary" onclick="toggleAceDrying()" style="padding: 2px 10px; font-size: 10px; font-weight: 600; border-radius: 4px; min-height: 22px;">
                             Start Drying
                         </button>
                     </div>
-                    <div id="ace-drying-status-text" style="font-size: 9px; color: #f59e0b; margin-top: 4px; display: none;"></div>
+                    <div id="ace-drying-status-text" style="font-size: 10px; font-weight: 600; color: #f59e0b; white-space: nowrap; display: none;"></div>
                 </div>
             </div>
         </section>
@@ -2709,10 +2850,14 @@
             const box = activeMaterialBox();
             updateFilamentUI(box ? box.slots || [] : []);
             const acePanel = document.getElementById("ace-controls-panel");
+            const slotsContainer = document.getElementById("slots-container");
             if (acePanel) {
                 const hasAce = (box && (box.source === "ace" || (box.id >= 0 && box.source !== "external" && box.source !== "rack")))
                             || materialBoxes.some(b => b.source === "ace" || (b.id >= 0 && b.source !== "external" && b.source !== "rack"));
-                acePanel.style.display = hasAce ? "block" : "none";
+                acePanel.style.display = hasAce ? "flex" : "none";
+                if (slotsContainer) {
+                    slotsContainer.classList.toggle("with-ace-toolbar", hasAce);
+                }
                 if (box) {
                     updateAceDryingUI(box.drying_status, box.temp, box.auto_feed);
                 }
@@ -2720,12 +2865,15 @@
         }
 
         let currentAceDryingState = false;
+        let currentAceDryingTemp = 50;
+        let activeSlotIndex = -1;
 
         function updateAceDryingUI(dryingData, boxTemp, autoFeed) {
             const tempBadge = document.getElementById("ace-temp-badge");
             if (tempBadge) {
                 if (boxTemp !== undefined && boxTemp !== null && Number(boxTemp) > 0) {
                     tempBadge.innerText = `Box: ${Number(boxTemp)}°C`;
+                    tempBadge.style.display = "inline-block";
                 } else {
                     tempBadge.innerText = "Box: --°C";
                 }
@@ -2740,30 +2888,38 @@
             const btnDrying = document.getElementById("btn-toggle-drying");
             const statusText = document.getElementById("ace-drying-status-text");
 
+            const wasDrying = currentAceDryingState;
             const isDrying = Boolean(dryingData && (dryingData.status === 1 || dryingData.status === true));
             currentAceDryingState = isDrying;
+            if (dryingData && dryingData.target_temp) {
+                currentAceDryingTemp = Number(dryingData.target_temp);
+            }
 
             if (dryingBadge) {
                 if (isDrying) {
-                    dryingBadge.innerText = "Drying";
+                    dryingBadge.innerText = `Drying (${currentAceDryingTemp}°C)`;
+                    dryingBadge.className = "ace-header-pill drying";
                     dryingBadge.style.background = "#f59e0b22";
                     dryingBadge.style.color = "#f59e0b";
                     dryingBadge.style.border = "1px solid #f59e0b88";
                 } else {
                     dryingBadge.innerText = "Idle";
+                    dryingBadge.className = "ace-header-pill";
                     dryingBadge.style.background = "#262c3b";
                     dryingBadge.style.color = "var(--text-muted)";
-                    dryingBadge.style.border = "none";
+                    dryingBadge.style.border = "1px solid var(--border)";
                 }
             }
 
             if (btnDrying) {
                 if (isDrying) {
                     btnDrying.innerText = "Stop Drying";
+                    btnDrying.className = "btn btn-danger";
                     btnDrying.style.background = "#ef4444";
                 } else {
                     btnDrying.innerText = "Start Drying";
-                    btnDrying.style.background = "#1677ff";
+                    btnDrying.className = "btn btn-primary";
+                    btnDrying.style.background = "";
                 }
             }
 
@@ -2773,12 +2929,17 @@
                     const hrs = Math.floor(remainMin / 60);
                     const mins = remainMin % 60;
                     const timeStr = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
-                    const target = dryingData.target_temp || "--";
+                    const target = dryingData.target_temp || currentAceDryingTemp || "--";
                     statusText.style.display = "block";
                     statusText.innerText = `⏳ Drying at ${target}°C — ${timeStr} remaining`;
                 } else {
                     statusText.style.display = "none";
                 }
+            }
+
+            if (wasDrying !== isDrying) {
+                const box = activeMaterialBox();
+                updateFilamentUI(box ? box.slots || [] : filaments);
             }
         }
 
@@ -3021,9 +3182,15 @@
             }
             newFilaments.forEach((f, idx) => {
                 const div = document.createElement("div");
-                div.className = "slot-card" + (f.loaded ? " active" : "");
+                const slotIdx = Number(f.box_slot ?? f.slot ?? idx);
+                const isExternal = (f.source === 'external' || f.source === 'external_mcb');
+                const isInUse = Boolean(f.is_active || (!isExternal && activeSlotIndex >= 0 && slotIdx === activeSlotIndex));
+                const isLoaded = Boolean(f.loaded || f.available);
+                const isEmpty = !f.available && (!f.type || f.type === "?");
+
+                div.className = "slot-card" + (isInUse ? " in-use" : (isLoaded ? " loaded" : (isEmpty ? " empty" : "")));
                 div.id = "slot-" + idx;
-                div.title = "Click to edit material and color";
+                div.title = isInUse ? "Currently feeding into extruder (Click to edit material and color)" : "Click to edit material and color";
                 div.onclick = () => openSlotEditModal(idx);
                 let colorStyle = f.color || '#00d2ff';
                 const group = Array.isArray(f.color_group_hex) ? f.color_group_hex : [];
@@ -3039,11 +3206,21 @@
                 else if (brandText.toLowerCase() === "generic") brandText = "Generic";
                 else if (brandText.toLowerCase() === "anycubic") brandText = "Anycubic";
 
+                const inUseBadge = isInUse
+                    ? `<span class="slot-status-pill in-use"><span class="pulse-dot"></span>IN USE</span>`
+                    : ``;
+
+                const dryBadge = (currentAceDryingState && !isExternal)
+                    ? `<span class="slot-dry-tag">♨ ${currentAceDryingTemp || 50}°C</span>`
+                    : ``;
+
                 div.innerHTML = `
-                    <span class="slot-badge">${f.source === 'external' ? 'EXT' : Number(f.box_slot ?? idx) + 1}</span>
+                    <span class="slot-badge">${isExternal ? 'EXT' : (slotIdx + 1)}</span>
+                    ${inUseBadge}
                     <div class="slot-color-circle" style="background: ${colorStyle};"></div>
                     <div class="slot-brand" style="font-size: 11px; color: #f59e0b; margin-top: 3px; max-width: 68px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;">${brandText}</div>
-                    <div class="slot-material" style="font-weight: 700; font-size: 13px; line-height: 1.1;">${f.type || 'PLA'}</div>
+                    <div class="slot-material" style="font-weight: 700; font-size: 13px; line-height: 1.1;">${f.type || (isEmpty ? 'Empty' : 'PLA')}</div>
+                    ${dryBadge}
                     <div class="slot-edit-hint">Edit</div>
                 `;
                 container.appendChild(div);
@@ -3110,8 +3287,30 @@
             if (data.job_name) {
                 document.getElementById("job-name").innerText = data.job_name;
             }
-            if (data.curr_layer !== undefined && data.total_layers !== undefined) {
-                document.getElementById("stat-layer").innerText = data.curr_layer + " / " + data.total_layers;
+            if (data.curr_layer !== undefined || data.total_layers !== undefined) {
+                const currLayer = Math.max(0, parseInt(data.curr_layer || 0, 10));
+                let totalLayers = Math.max(0, parseInt(data.total_layers || 0, 10));
+                const progress = parseFloat(data.progress || 0);
+
+                if (totalLayers <= 0 && progress > 0 && currLayer > 0) {
+                    const estimated = Math.round(currLayer / (progress / 100));
+                    if (estimated >= currLayer) {
+                        totalLayers = estimated;
+                    }
+                }
+
+                const statLayerEl = document.getElementById("stat-layer");
+                if (statLayerEl) {
+                    if (totalLayers > 0) {
+                        statLayerEl.innerText = currLayer + " / " + totalLayers;
+                    } else if (hasActiveJob && currLayer > 0) {
+                        statLayerEl.innerText = currLayer + " / --";
+                    } else if (hasActiveJob) {
+                        statLayerEl.innerText = "0 / --";
+                    } else {
+                        statLayerEl.innerText = "0 / 0";
+                    }
+                }
             }
             if (data.print_time !== undefined) {
                 document.getElementById("stat-elapsed").innerText = data.print_time + "m";
@@ -3229,6 +3428,16 @@
                             initCameraStream(activeCameraUrl);
                         }
                     }
+                    if (data.active_slot !== undefined && Number(data.active_slot) >= 0) {
+                        activeSlotIndex = Number(data.active_slot);
+                    } else if (data.channel_index !== undefined && Number(data.channel_index) >= 0) {
+                        activeSlotIndex = Number(data.channel_index);
+                    } else if (data.feed_status && data.feed_status.slot_index !== undefined && Number(data.feed_status.slot_index) >= 0) {
+                        activeSlotIndex = Number(data.feed_status.slot_index);
+                    } else if (data.loaded_slot !== undefined && Number(data.loaded_slot) >= 0) {
+                        activeSlotIndex = Number(data.loaded_slot);
+                    }
+
                     if (Array.isArray(data.material_boxes)) {
                         materialBoxes = data.material_boxes.filter(box => box && Array.isArray(box.slots));
                         updateMaterialBoxes([], Array.isArray(data.filaments) ? data.filaments : []);

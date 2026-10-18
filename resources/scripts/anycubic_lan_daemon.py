@@ -85,8 +85,30 @@ telemetry = {
     "channel_index": -1,
     "channel_status": 0,
     "has_filaments": 0,
-    "channel_report_seq": 0
+    "channel_report_seq": 0,
+    "active_slot": -1,
+    "loaded_slot": -1
 }
+
+def _parse_total_layers_from_bytes(content_bytes):
+    try:
+        sample = content_bytes[:1048576]
+        if len(content_bytes) > 2097152:
+            sample += content_bytes[-1048576:]
+        sample_str = sample.decode("utf-8", errors="ignore")
+        import re
+        m = re.search(r";\s*total layer number:\s*(\d+)", sample_str, re.IGNORECASE)
+        if not m:
+            m = re.search(r";\s*total_layers\s*=\s*(\d+)", sample_str, re.IGNORECASE)
+        if not m:
+            m = re.search(r";\s*total_layer_count\s*=\s*(\d+)", sample_str, re.IGNORECASE)
+        if not m:
+            m = re.search(r"TOTAL_LAYER=(\d+)", sample_str)
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return 0
 
 mqtt_client = None
 creds = {}
@@ -131,7 +153,7 @@ def _slot_has_material(slot):
     return material not in ("", "?")
 
 
-def _normalize_slot(slot, box_id, source, loaded_slot=-1, slot_offset=0):
+def _normalize_slot(slot, box_id, source, loaded_slot=-1, slot_offset=0, active_slot=-1):
     local_index = max(0, _as_int(slot.get("index", slot.get("box_slot")), 0))
     raw_color = slot.get("color", [175, 175, 175])
     if isinstance(raw_color, str) and raw_color.startswith("#") and len(raw_color) >= 7:
@@ -154,6 +176,7 @@ def _normalize_slot(slot, box_id, source, loaded_slot=-1, slot_offset=0):
         brand = "Anycubic"
     else:
         brand = raw_brand or "Anycubic"
+    is_active = (local_index == active_slot and active_slot >= 0) if source not in ("external", "external_mcb") else False
     return {
         "slot": global_slot,
         "box_id": box_id,
@@ -163,6 +186,7 @@ def _normalize_slot(slot, box_id, source, loaded_slot=-1, slot_offset=0):
         "type": material,
         "temp": 235 if "PETG" in material.upper() or "+" in material else 210,
         "loaded": bool(slot.get("loaded")) or local_index == loaded_slot or _as_int(slot.get("status"), -1) == 5,
+        "is_active": is_active,
         "available": _slot_has_material(slot),
         "brand": brand,
         "icon_type": icon_type,
@@ -199,6 +223,13 @@ def apply_multi_color_box_report(data, code=200, replace=True):
         if not isinstance(slots, list):
             slots = []
         loaded_slot = _as_int(reported.get("loaded_slot"), -1)
+        active_channel = telemetry.get("channel_index", -1)
+        if active_channel < 0 and telemetry.get("feed_status", {}).get("slot_index", -1) >= 0:
+            active_channel = telemetry["feed_status"]["slot_index"]
+        if active_channel < 0:
+            active_channel = loaded_slot
+        telemetry["active_slot"] = active_channel
+        telemetry["loaded_slot"] = loaded_slot
         all_boxes = list(boxes) + [b for b in box_list if isinstance(b, dict)]
         has_ace_box = any(_as_int(box.get("id"), -1) >= 0 for box in all_boxes if isinstance(box, dict))
         has_builtin_rack = any(_as_int(box.get("id"), -1) < 0 and len(box.get("slots") or []) > 1 for box in all_boxes if isinstance(box, dict))
@@ -216,7 +247,7 @@ def apply_multi_color_box_report(data, code=200, replace=True):
                 source = previous["source"]
             slots = _merge_reported_slots(previous.get("slots", []), slots)
             boxes.remove(previous)
-        normalized_slots = [_normalize_slot(slot, box_id, source, loaded_slot, slot_offset) for slot in sorted(slots, key=lambda slot: _as_int(slot.get("index", slot.get("box_slot", 0))))]
+        normalized_slots = [_normalize_slot(slot, box_id, source, loaded_slot, slot_offset, active_channel) for slot in sorted(slots, key=lambda slot: _as_int(slot.get("index", slot.get("box_slot", 0))))]
         drying_status_raw = reported.get("drying_status") or {}
         box_temp = _as_int(reported.get("temp", reported.get("cur_temp", 0)), 0)
         auto_feed = _as_int(reported.get("auto_feed", 0), 0)
@@ -395,13 +426,29 @@ def on_mqtt_message(c, userdata, msg):
                     telemetry["bed_temp"] = temp.get("curr_hotbed_temp", telemetry["bed_temp"])
                     telemetry["target_bed_temp"] = temp.get("target_hotbed_temp", telemetry["target_bed_temp"])
 
-                project = data.get("project", {})
+                project = data.get("project", {}) if isinstance(data, dict) else {}
                 if project:
                     telemetry["state"] = project.get("state", telemetry["state"])
                     telemetry["progress"] = project.get("progress", telemetry["progress"])
                     telemetry["job_name"] = project.get("filename", telemetry["job_name"])
-                    telemetry["curr_layer"] = project.get("curr_layer", telemetry["curr_layer"])
-                    telemetry["total_layers"] = project.get("total_layers", telemetry["total_layers"])
+                    rep_curr = project.get("curr_layer")
+                    if rep_curr is None:
+                        rep_curr = project.get("cur_layer", project.get("current_layer", data.get("curr_layer") if isinstance(data, dict) else None))
+                    if rep_curr is not None:
+                        telemetry["curr_layer"] = _as_int(rep_curr, telemetry["curr_layer"])
+                    rep_total = (
+                        project.get("total_layers")
+                        or project.get("total_layer")
+                        or project.get("total_layer_num")
+                        or project.get("totalLayer")
+                        or project.get("totalLayers")
+                        or project.get("layer_num")
+                        or (data.get("total_layers") if isinstance(data, dict) else None)
+                        or (data.get("total_layer") if isinstance(data, dict) else None)
+                        or (data.get("total_layer_num") if isinstance(data, dict) else None)
+                    )
+                    if rep_total is not None and _as_int(rep_total, 0) > 0:
+                        telemetry["total_layers"] = _as_int(rep_total)
                     telemetry["remain_time"] = project.get("remain_time", telemetry["remain_time"])
                     telemetry["print_time"] = project.get("print_time", telemetry["print_time"])
                     telemetry["speed_mode"] = project.get("print_speed_mode", telemetry["speed_mode"])
@@ -472,6 +519,18 @@ def on_mqtt_message(c, userdata, msg):
                 telemetry["channel_status"] = data.get("current_status", telemetry.get("channel_status", 0))
                 telemetry["has_filaments"] = data.get("has_filaments", telemetry.get("has_filaments", 0))
                 telemetry["channel_report_seq"] = telemetry.get("channel_report_seq", 0) + 1
+                if telemetry["channel_index"] >= 0:
+                    telemetry["active_slot"] = telemetry["channel_index"]
+                    for b in telemetry.get("material_boxes", []):
+                        if isinstance(b, dict):
+                            for s in b.get("slots", []):
+                                if isinstance(s, dict):
+                                    slot_idx = _as_int(s.get("index", s.get("box_slot", s.get("slot", -1))), -1)
+                                    s["is_active"] = (slot_idx == telemetry["active_slot"] and s.get("source") not in ("external", "external_mcb"))
+                    for s in telemetry.get("filaments", []):
+                        if isinstance(s, dict):
+                            slot_idx = _as_int(s.get("index", s.get("box_slot", s.get("slot", -1))), -1)
+                            s["is_active"] = (slot_idx == telemetry["active_slot"] and s.get("source") not in ("external", "external_mcb"))
             elif payload.get("action") == "switchChannel" and code != 200:
                 # Switch explicitly rejected by firmware; surface via last_error.
                 telemetry["channel_switch_failed"] = int(time.time())
@@ -788,6 +847,11 @@ def upload_and_start_print_file(content_bytes, raw_filename, use_ams=True, task_
         pass
 
     time.sleep(0.5)
+
+    parsed_layers = _parse_total_layers_from_bytes(content_bytes)
+    if parsed_layers > 0:
+        telemetry["total_layers"] = parsed_layers
+        telemetry["curr_layer"] = 0
 
     ams_mapping = _default_ams_mapping(use_ams)
     ts = task_settings or {}
@@ -1292,6 +1356,11 @@ class BridgeServer(BaseHTTPRequestHandler):
                             }
                         }
                     }
+                    total_layers = _as_int(data.get("total_layers", 0), 0)
+                    if total_layers > 0:
+                        telemetry["total_layers"] = total_layers
+                        telemetry["curr_layer"] = 0
+
                     mqtt_client.publish(topic_print, json.dumps(msg))
                     print(f"[Bridge] Published print:start for {filename} with use_ams={use_ams} ams_mapping={json.dumps(ams_mapping)}")
                 else:
