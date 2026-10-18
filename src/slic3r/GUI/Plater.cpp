@@ -960,6 +960,7 @@ struct Sidebar::priv
     ScalableButton* m_filament_icon = nullptr;
     Button * m_purge_mode_btn = nullptr;
     Button * m_flushing_volume_btn = nullptr;
+    Button * m_btn_sync_ace = nullptr;
     TextInput* m_search_item = nullptr;
     StaticBox* m_search_bar = nullptr;
     Search::SearchObjectDialog* dia = nullptr;
@@ -3279,6 +3280,7 @@ Sidebar::Sidebar(Plater *parent)
         int exclude_pt = p->m_bpButton_set_filament->GetPosition().x; // maximum fixed item
         if      (p->m_purge_mode_btn->IsShown())        exclude_pt = p->m_purge_mode_btn->GetPosition().x;
         else if (p->m_flushing_volume_btn->IsShown())   exclude_pt = p->m_flushing_volume_btn->GetPosition().x;
+        else if (p->m_btn_sync_ace && p->m_btn_sync_ace->IsShown()) exclude_pt = p->m_btn_sync_ace->GetPosition().x;
         else if (p->m_bpButton_add_filament->IsShown()) exclude_pt = p->m_bpButton_add_filament->GetPosition().x - FromDIP(30); // reserve spacing for delete button
         else if (ams_btn->IsShown())                    exclude_pt = ams_btn->GetPosition().x;
         if (e.GetPosition().x > exclude_pt)
@@ -3348,6 +3350,15 @@ Sidebar::Sidebar(Plater *parent)
 
     bSizer39->Add(p->m_flushing_volume_btn, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(4));
     bSizer39->Hide(p->m_flushing_volume_btn); // ORCA Ensure button is hidden on launch while 1 filament exist
+
+    p->m_btn_sync_ace = new Button(p->m_panel_filament_title, _L("Sync ACE"));
+    p->m_btn_sync_ace->SetStyle(ButtonStyle::Confirm, ButtonType::Compact);
+    p->m_btn_sync_ace->SetToolTip(_L("Synchronize filament list from Anycubic ACE"));
+    p->m_btn_sync_ace->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
+        sync_ams_list(true);
+    });
+    bSizer39->Add(p->m_btn_sync_ace, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(4));
+    bSizer39->Hide(p->m_btn_sync_ace);
 
     ScalableButton* add_btn = new ScalableButton(p->m_panel_filament_title, wxID_ANY, "add_filament");
     add_btn->SetToolTip(_L("Add one filament"));
@@ -3830,12 +3841,29 @@ void Sidebar::update_all_preset_comboboxes()
         // ORCA: hide the physical-printer connection button when printer agents are enabled
         p->m_printer_connect->Show(!use_printer_agents);
 
+        bool is_anycubic = false;
+        const auto& cur_printer = preset_bundle.printers.get_edited_preset();
+        if (cur_printer.config.has("host_type")) {
+            auto opt = cur_printer.config.option("host_type");
+            if (opt && opt->getInt() == static_cast<int>(htAnycubic))
+                is_anycubic = true;
+        }
+        if (!is_anycubic) {
+            std::string pname = cur_printer.name;
+            boost::to_lower(pname);
+            if (pname.find("anycubic") != std::string::npos || pname.find("kobra") != std::string::npos)
+                is_anycubic = true;
+        }
+
         // ORCA: show/hide sync-ams button based on filament sync mode
         auto agent = wxGetApp().getAgent();
-        if (agent && agent->get_filament_sync_mode() != FilamentSyncMode::none)
+        if (is_anycubic || (agent && agent->get_filament_sync_mode() != FilamentSyncMode::none))
             p->m_bpButton_ams_filament->Show();
         else
             p->m_bpButton_ams_filament->Hide();
+
+        if (sidebar && sidebar->p->m_btn_sync_ace)
+            sidebar->p->m_btn_sync_ace->Show(is_anycubic);
 
         // Orca: with "Support 3MF as gcode" (use_3mf) the local export is a .gcode.3mf bundle, so when no
         // printer host/IP is configured the default action is "Export plate sliced file" (mirrors the
@@ -5540,6 +5568,7 @@ void Sidebar::msw_rescale()
     p->m_bpButton_set_filament->msw_rescale();
     p->m_purge_mode_btn->Rescale();
     p->m_flushing_volume_btn->Rescale();
+    if (p->m_btn_sync_ace) p->m_btn_sync_ace->Rescale();
     set_flushing_volume_warning(is_flush_config_modified()); // ORCA reapply appearance
 
     //BBS
@@ -5626,6 +5655,7 @@ void Sidebar::sys_color_changed()
     p->m_bpButton_set_filament->msw_rescale();
     p->m_purge_mode_btn->Rescale();
     p->m_flushing_volume_btn->Rescale();
+    if (p->m_btn_sync_ace) p->m_btn_sync_ace->Rescale();
     set_flushing_volume_warning(is_flush_config_modified()); // ORCA reapply appearance
 
     // BBS
@@ -6499,25 +6529,60 @@ void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
     }
 
     if (is_anycubic) {
+        // Ensure bridge is active if printer host is configured
+        if (wxGetApp().preset_bundle) {
+            const auto& cur_printer = wxGetApp().preset_bundle->printers.get_edited_preset();
+            if (cur_printer.config.has("print_host")) {
+                std::string host = cur_printer.config.opt_string("print_host");
+                if (!host.empty())
+                    activate_anycubic_lan_bridge(host);
+            }
+        }
+
         // Fetch filaments directly from local daemon
         std::string status_body;
         auto http = Http::get("http://127.0.0.1:18988/status");
         http.header("X-OrcaCubic-Token", anycubic_lan_bridge_token())
-            .timeout_connect(1)
-            .timeout_max(2)
+            .timeout_connect(2)
+            .timeout_max(4)
             .on_complete([&status_body](std::string body, unsigned status) {
                 if (status == 200) status_body = std::move(body);
             })
             .perform_sync();
 
+        bool synced = false;
         if (!status_body.empty()) {
             try {
                 auto j = nlohmann::json::parse(status_body);
-                if (j.contains("filaments") && j["filaments"].is_array()) {
+                if (j.contains("filaments") && j["filaments"].is_array() && !j["filaments"].empty()) {
                     sync_anycubic_filaments_from_json(j["filaments"].dump());
+                    synced = true;
+                } else if (j.contains("material_boxes") && j["material_boxes"].is_array()) {
+                    nlohmann::json all_slots = nlohmann::json::array();
+                    for (const auto& box : j["material_boxes"]) {
+                        if (box.contains("slots") && box["slots"].is_array()) {
+                            for (const auto& slot : box["slots"]) {
+                                all_slots.push_back(slot);
+                            }
+                        }
+                    }
+                    if (!all_slots.empty()) {
+                        sync_anycubic_filaments_from_json(all_slots.dump());
+                        synced = true;
+                    }
                 }
             } catch (const std::exception& e) {
                 BOOST_LOG_TRIVIAL(error) << "[Sidebar::sync_ams_list] Error parsing filaments: " << e.what();
+            }
+        }
+
+        if (synced) {
+            if (wxGetApp().plater() && wxGetApp().plater()->get_notification_manager()) {
+                wxGetApp().plater()->get_notification_manager()->push_notification(_u8L("Filament profiles successfully synchronized from Anycubic ACE!"));
+            }
+        } else {
+            if (wxGetApp().plater() && wxGetApp().plater()->get_notification_manager()) {
+                wxGetApp().plater()->get_notification_manager()->push_notification(_u8L("Could not get filaments from ACE. Please ensure the printer is connected in the Device tab."));
             }
         }
         // Always return for Anycubic to prevent falling through to Bambu AMS code!
@@ -6800,6 +6865,24 @@ void Sidebar::show_SEMM_buttons()
     p->m_bpButton_add_filament->Show(single_or_bbl);
     p->m_bpButton_del_filament->Show(is_multi);
     p->m_flushing_volume_btn->Show(  is_multi);
+
+    bool is_anycubic = false;
+    if (wxGetApp().preset_bundle) {
+        const auto& cur_printer = wxGetApp().preset_bundle->printers.get_edited_preset();
+        if (cur_printer.config.has("host_type")) {
+            auto opt = cur_printer.config.option("host_type");
+            if (opt && opt->getInt() == static_cast<int>(htAnycubic))
+                is_anycubic = true;
+        }
+        if (!is_anycubic) {
+            std::string pname = cur_printer.name;
+            boost::to_lower(pname);
+            if (pname.find("anycubic") != std::string::npos || pname.find("kobra") != std::string::npos)
+                is_anycubic = true;
+        }
+    }
+    if (p->m_btn_sync_ace)
+        p->m_btn_sync_ace->Show(is_anycubic);
 
     if (is_multi) {
         for (auto &c : p->combos_filament)

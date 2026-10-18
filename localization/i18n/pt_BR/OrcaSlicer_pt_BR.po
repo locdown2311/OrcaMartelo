@@ -8760,6 +8760,18 @@ msgstr "Remover o último filamento"
 msgid "Synchronize filament list from AMS"
 msgstr "Sincronizar lista de filamentos do AMS"
 
+msgid "Sync ACE"
+msgstr "Sincronizar ACE"
+
+msgid "Synchronize filament list from Anycubic ACE"
+msgstr "Sincronizar filamentos com Anycubic ACE"
+
+msgid "Filament profiles successfully synchronized from Anycubic ACE!"
+msgstr "Perfis de filamento sincronizados com sucesso do Anycubic ACE!"
+
+msgid "Could not get filaments from ACE. Please ensure the printer is connected in the Device tab."
+msgstr "Não foi possível obter filamentos do ACE. Verifique se a impressora está conectada na aba Dispositivo."
+
 msgid "Set filaments to use"
 msgstr "Definir filamentos para usar"
 
