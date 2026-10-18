@@ -271,7 +271,8 @@ CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(NoiseType)
 
 static t_config_enum_values s_keys_map_WipeTowerType {
     { "type1",          int(WipeTowerType::Type1) },
-    { "type2",          int(WipeTowerType::Type2) }
+    { "type2",          int(WipeTowerType::Type2) },
+    { "type3",          int(WipeTowerType::Type3) }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(WipeTowerType)
 
@@ -7077,12 +7078,14 @@ void PrintConfigDef::init_fff_params()
 
     def = this->add("wipe_tower_type", coEnum);
     def->label = L("Wipe tower type");
-    def->tooltip = L("Choose the wipe tower implementation for multi-material prints. Type 1 is recommended for Bambu and Qidi printers with a filament cutter. Type 2 offers better compatibility with multi-tool and MMU printers and provide overall better compatibility.");
+    def->tooltip = L("Choose the wipe tower implementation for multi-material prints. Type 1 is recommended for Bambu and Qidi printers with a filament cutter. Type 2 offers better compatibility with multi-tool and MMU printers and provide overall better compatibility. Type 3 prints a functional Lego brick prime tower, purging filament into its interior infill.");
     def->enum_keys_map = &ConfigOptionEnum<WipeTowerType>::get_enum_values();
     def->enum_values.emplace_back("type1");
     def->enum_values.emplace_back("type2");
+    def->enum_values.emplace_back("type3");
     def->enum_labels.emplace_back(L("Type 1"));
     def->enum_labels.emplace_back(L("Type 2"));
+    def->enum_labels.emplace_back(L("Type 3 (Lego Brick)"));
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<WipeTowerType>(WipeTowerType::Type2));
 

@@ -6575,7 +6575,7 @@ void TabPrinter::toggle_options()
         const bool is_belt_printer = m_config->opt_bool("belt_printer");
         toggle_line("enable_belt_purge_tower", is_belt_printer);
 
-        const bool supports_wipe_tower_2 = !is_BBL_printer && m_config->opt_enum<WipeTowerType>("wipe_tower_type") == WipeTowerType::Type2;
+        const bool supports_wipe_tower_2 = !is_BBL_printer && (m_config->opt_enum<WipeTowerType>("wipe_tower_type") == WipeTowerType::Type2 || m_config->opt_enum<WipeTowerType>("wipe_tower_type") == WipeTowerType::Type3);
         toggle_line("wipe_tower_type", !is_BBL_printer && !is_belt_printer);
         // SoftFever: hide specific settings for BBL printer
         for (auto el : {

@@ -343,8 +343,21 @@ TEST_CASE("A Bambu Lab printer always gets the Type1 planner", "[WipeTowerEstima
     CHECK(resolve_wipe_tower_type(config) == WipeTowerType::Type1);
     config.set_key_value("printer_model", new ConfigOptionString("Voron 2.4"));
     CHECK(resolve_wipe_tower_type(config) == WipeTowerType::Type2);
+    config.set_deserialize_strict("wipe_tower_type", "type3");
+    CHECK(resolve_wipe_tower_type(config) == WipeTowerType::Type3);
     config.erase("wipe_tower_type");
     CHECK(resolve_wipe_tower_type(config) == WipeTowerType::Type2);
+}
+
+TEST_CASE("Type 3 Lego Brick footprint snaps to Lego pitch", "[WipeTowerEstimate]") {
+    DynamicPrintConfig config = make_config();
+    config.set_deserialize_strict("wipe_tower_type", "type3");
+    config.set_key_value("prime_tower_width", new ConfigOptionFloat(35.));
+    const WipeTowerFootprint fp = estimate(config, 2, 0.2, 5., WipeTowerType::Type3);
+    // 35mm snaps to 4 studs: 4 * 8.0 - 0.2 = 31.8mm
+    CHECK_THAT(fp.width, WithinAbs(31.8, 1e-4));
+    // Depth is at least 2 studs: 2 * 8.0 - 0.2 = 15.8mm
+    CHECK(fp.depth >= 15.8 - 1e-4);
 }
 
 TEST_CASE("A dual nozzle purges every filament plus the filament change", "[WipeTowerEstimate]") {

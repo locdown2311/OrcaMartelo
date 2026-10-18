@@ -125,6 +125,7 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeT
         layer_height = std::min(layer_height, first_layer_height);
 
     const bool   type1            = tower_type == WipeTowerType::Type1;
+    const bool   is_lego          = tower_type == WipeTowerType::Type3;
     const double width            = opt_float("prime_tower_width");
     const double prime_volume     = opt_float("prime_volume");
     // Type1 spaces its purge lines by prime_tower_infill_gap, Type2 by wipe_tower_extra_spacing.
@@ -198,7 +199,19 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeT
     // With nothing to purge, plan_tower_new sizes the tower for wrapping detection or the
     // stability minimum; WipeTower2 only knows the latter.
     const double idle_depth = (type1 && wrapping && !smooth_timelapse) ? WipeTower::get_wrapping_detection_depth() : min_depth;
-    if (rib_wall) {
+    if (is_lego) {
+        const double pitch = 8.0;
+        double configured_w = width;
+        if (configured_w < 10.0) configured_w = 31.8;
+        int num_x = std::max(2, int(std::round((configured_w + 0.2) / pitch)));
+        double lego_w = num_x * pitch - 0.2;
+        double depth = volume / (layer_height * lego_w);
+        if (!semm_flush)
+            depth *= extra_spacing;
+        int num_y = std::max(2, int(std::ceil((depth + 0.2) / pitch)));
+        footprint.width = lego_w;
+        footprint.depth = num_y * pitch - 0.2;
+    } else if (rib_wall) {
         // Both planners square the tower to the purge area and extend the ribs, not the body,
         // below the stability minimum.
         double side;

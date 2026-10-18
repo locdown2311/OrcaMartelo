@@ -113,6 +113,7 @@ enum class NoiseType {
 enum class WipeTowerType {
     Type1,
     Type2,
+    Type3,
 };
 
 enum PrintHostType {

@@ -1070,8 +1070,14 @@ WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& defau
     m_use_gap_wall(use_gap_wall(config)),
     m_enable_tower_interface_features(config.enable_tower_interface_features.value),
     m_enable_tower_interface_cooldown_during_tower(config.enable_tower_interface_cooldown_during_tower.value),
-    m_wait_for_temp_on_wipe_tower(wait_for_temp_enabled(config))
+    m_wait_for_temp_on_wipe_tower(wait_for_temp_enabled(config)),
+    m_is_lego(config.wipe_tower_type.value == WipeTowerType::Type3)
 {
+    if (m_is_lego) {
+        const double pitch = 8.0;
+        int num_x = std::max(2, int(std::round((m_wipe_tower_width + 0.2) / pitch)));
+        m_wipe_tower_width = float(num_x * pitch - 0.2);
+    }
     // Read absolute value of first layer speed, if given as percentage,
     // it is taken over following default. Speeds from config are not
     // easily accessible here.
@@ -2017,76 +2023,89 @@ WipeTower::ToolChangeResult WipeTower2::finish_layer()
 
     bool toolchanges_on_layer = m_layer_info->toolchanges_depth() > WT_EPSILON;
 
-    // inner perimeter of the sparse section, if there is space for it:
-    if (fill_box.ru.y() - fill_box.rd.y() > m_perimeter_width - WT_EPSILON)
-        writer.rectangle(fill_box.ld, fill_box.rd.x()-fill_box.ld.x(), fill_box.ru.y()-fill_box.rd.y(), feedrate);
+    const float stud_height = 1.8f;
+    const bool is_lego_stud_layer = m_is_lego && m_wipe_tower_height > 3.6f && (m_wipe_tower_height - m_z_pos <= stud_height);
+    const bool is_lego_roof = m_is_lego && m_wipe_tower_height > 3.6f &&
+                              (m_wipe_tower_height - m_z_pos <= stud_height + 2.0f * m_layer_height) &&
+                              (m_wipe_tower_height - m_z_pos > stud_height);
 
-    // we are in one of the corners, travel to ld along the perimeter:
-    if (writer.x() > fill_box.ld.x()+EPSILON) writer.travel(fill_box.ld.x(),writer.y());
-    if (writer.y() > fill_box.ld.y()+EPSILON) writer.travel(writer.x(),fill_box.ld.y());
+    if (!is_lego_stud_layer) {
+        // inner perimeter of the sparse section, if there is space for it:
+        if (fill_box.ru.y() - fill_box.rd.y() > m_perimeter_width - WT_EPSILON)
+            writer.rectangle(fill_box.ld, fill_box.rd.x()-fill_box.ld.x(), fill_box.ru.y()-fill_box.rd.y(), feedrate);
 
-    // Extrude infill to support the material to be printed above.
-    const float dy = (fill_box.lu.y() - fill_box.ld.y() - m_perimeter_width);
-    float left = fill_box.lu.x() + 2*m_perimeter_width;
-    float right = fill_box.ru.x() - 2 * m_perimeter_width;
-    if (dy > m_perimeter_width)
-    {
-        writer.travel(fill_box.ld + Vec2f(m_perimeter_width * 2, 0.f))
-            .append(";--------------------\n"
-                    "; CP EMPTY GRID START\n")
-            .comment_with_value(" layer #", m_num_layer_changes + 1);
+        // we are in one of the corners, travel to ld along the perimeter:
+        if (writer.x() > fill_box.ld.x()+EPSILON) writer.travel(fill_box.ld.x(),writer.y());
+        if (writer.y() > fill_box.ld.y()+EPSILON) writer.travel(writer.x(),fill_box.ld.y());
 
-        // Is there a soluble filament wiped/rammed at the next layer?
-        // If so, the infill should not be sparse.
-        bool solid_infill = m_layer_info+1 == m_plan.end()
-                          ? false
-                          : std::any_of((m_layer_info+1)->tool_changes.begin(),
-                                        (m_layer_info+1)->tool_changes.end(),
-                                            [this](const WipeTowerInfo::ToolChange& tch) {
-                                       return m_filpar[tch.new_tool].is_soluble
-                                           || m_filpar[tch.old_tool].is_soluble;
-                                            });
-        solid_infill |= first_layer && m_adhesion;
+        // Extrude infill to support the material to be printed above.
+        const float dy = (fill_box.lu.y() - fill_box.ld.y() - m_perimeter_width);
+        float left = fill_box.lu.x() + 2*m_perimeter_width;
+        float right = fill_box.ru.x() - 2 * m_perimeter_width;
+        if (dy > m_perimeter_width)
+        {
+            writer.travel(fill_box.ld + Vec2f(m_perimeter_width * 2, 0.f))
+                .append(";--------------------\n"
+                        "; CP EMPTY GRID START\n")
+                .comment_with_value(" layer #", m_num_layer_changes + 1);
 
-        if (solid_infill) {
-            float sparse_factor = 1.5f; // 1=solid, 2=every other line, etc.
-            if (first_layer) { // the infill should touch perimeters
-                left  -= m_perimeter_width;
-                right += m_perimeter_width;
-                sparse_factor = 1.f;
+            // Is there a soluble filament wiped/rammed at the next layer?
+            // If so, the infill should not be sparse.
+            bool solid_infill = m_layer_info+1 == m_plan.end()
+                              ? false
+                              : std::any_of((m_layer_info+1)->tool_changes.begin(),
+                                            (m_layer_info+1)->tool_changes.end(),
+                                                [this](const WipeTowerInfo::ToolChange& tch) {
+                                           return m_filpar[tch.new_tool].is_soluble
+                                               || m_filpar[tch.old_tool].is_soluble;
+                                                });
+            solid_infill |= first_layer && m_adhesion;
+            solid_infill |= is_lego_roof;
+
+            if (solid_infill) {
+                float sparse_factor = 1.5f; // 1=solid, 2=every other line, etc.
+                if (first_layer) { // the infill should touch perimeters
+                    left  -= m_perimeter_width;
+                    right += m_perimeter_width;
+                    sparse_factor = 1.f;
+                }
+                float y = fill_box.ld.y() + m_perimeter_width;
+                int n = dy / (m_perimeter_width * sparse_factor);
+                float spacing = (dy-m_perimeter_width)/(n-1);
+                int i=0;
+                for (i=0; i<n; ++i) {
+                    writer.extrude(writer.x(), y, feedrate)
+                          .extrude(i%2 ? left : right, y);
+                    y = y + spacing;
+                }
+                writer.extrude(writer.x(), fill_box.lu.y());
+            } else {
+                // Extrude an inverse U at the left of the region and the sparse infill.
+                writer.extrude(fill_box.lu + Vec2f(m_perimeter_width * 2, 0.f), feedrate);
+
+                const int n = 1+int((right-left)/m_bridging);
+                const float dx = (right-left)/n;
+                for (int i=1;i<=n;++i) {
+                    float x=left+dx*i;
+                    writer.travel(x,writer.y());
+                    writer.extrude(x,i%2 ? fill_box.rd.y() : fill_box.ru.y());
+                }
             }
-            float y = fill_box.ld.y() + m_perimeter_width;
-            int n = dy / (m_perimeter_width * sparse_factor);
-            float spacing = (dy-m_perimeter_width)/(n-1);
-            int i=0;
-            for (i=0; i<n; ++i) {
-                writer.extrude(writer.x(), y, feedrate)
-                      .extrude(i%2 ? left : right, y);
-                y = y + spacing;
-            }
-            writer.extrude(writer.x(), fill_box.lu.y());
-        } else {
-            // Extrude an inverse U at the left of the region and the sparse infill.
-            writer.extrude(fill_box.lu + Vec2f(m_perimeter_width * 2, 0.f), feedrate);
 
-            const int n = 1+int((right-left)/m_bridging);
-            const float dx = (right-left)/n;
-            for (int i=1;i<=n;++i) {
-                float x=left+dx*i;
-                writer.travel(x,writer.y());
-                writer.extrude(x,i%2 ? fill_box.rd.y() : fill_box.ru.y());
-            }
+            writer.append("; CP EMPTY GRID END\n"
+                          ";------------------\n\n\n\n\n\n\n");
         }
-
-        writer.append("; CP EMPTY GRID END\n"
-                      ";------------------\n\n\n\n\n\n\n");
     }
 
     const float spacing = m_perimeter_width - m_layer_height*float(1.-M_PI_4);
     feedrate = first_layer ? m_first_layer_speed * 60.f : std::min(m_wipe_tower_max_purge_speed * 60.f, m_perimeter_speed * 60.f);
 
     Polygon poly;
-    if (m_wall_type == (int)wtwCone) {
+    if (is_lego_stud_layer) {
+        extrude_studs(writer, feedrate);
+        WipeTower::box_coordinates wt_box(Vec2f(0.f, 0.f), m_wipe_tower_width, m_layer_info->depth + m_perimeter_width);
+        poly = generate_support_rib_wall(writer, wt_box, feedrate, first_layer, false, false);
+    } else if (m_wall_type == (int)wtwCone) {
          WipeTower::box_coordinates wt_box(Vec2f(0.f, (m_current_shape == SHAPE_REVERSED ? m_layer_info->toolchanges_depth() : 0.f)),
                                            m_wipe_tower_width, m_layer_info->depth + m_perimeter_width);
         // outer contour (always)
@@ -2334,6 +2353,14 @@ void WipeTower2::plan_tower()
 				m_plan[i].depth = this_layer_depth;
 		}
 	}
+    if (m_is_lego) {
+        const double pitch = 8.0;
+        int num_y = std::max(2, int(std::ceil((m_wipe_tower_depth + 0.2f) / float(pitch))));
+        m_wipe_tower_depth = float(num_y * pitch - 0.2);
+        for (auto& layer : m_plan) {
+            layer.depth = m_wipe_tower_depth;
+        }
+    }
 }
 
 void WipeTower2::save_on_last_wipe()
@@ -2793,5 +2820,35 @@ Polygon WipeTower2::generate_support_cone_wall(
     }
     writer.extrude(pts[start_i].first, feedrate);
     return poly;
+}
+
+void WipeTower2::extrude_studs(WipeTowerWriter2 &writer, float feedrate)
+{
+    const double pitch = 8.0;
+    const float stud_outer_r = 2.4f;
+    const int segments = 16;
+    int num_x = std::max(1, int(std::round((m_wipe_tower_width + 0.2) / pitch)));
+    int num_y = std::max(1, int(std::round((m_wipe_tower_depth + 0.2) / pitch)));
+    float x0 = (m_wipe_tower_width - (num_x - 1) * pitch) / 2.0f;
+    float y0 = (m_wipe_tower_depth - (num_y - 1) * pitch) / 2.0f;
+
+    writer.append("; LEGO STUDS START\n");
+    for (int ix = 0; ix < num_x; ++ix) {
+        for (int iy = 0; iy < num_y; ++iy) {
+            Vec2f center(x0 + ix * pitch, y0 + iy * pitch);
+            float r = stud_outer_r - m_perimeter_width / 2.f;
+            while (r > 0.1f) {
+                Vec2f start = center + Vec2f(r, 0.f);
+                writer.travel(start.x(), start.y(), feedrate);
+                for (int s = 1; s <= segments; ++s) {
+                    float angle = float(s) * 2.f * float(M_PI) / float(segments);
+                    Vec2f pt = center + Vec2f(r * std::cos(angle), r * std::sin(angle));
+                    writer.extrude(pt.x(), pt.y(), feedrate);
+                }
+                r -= m_perimeter_width;
+            }
+        }
+    }
+    writer.append("; LEGO STUDS END\n");
 }
 } // namespace Slic3r

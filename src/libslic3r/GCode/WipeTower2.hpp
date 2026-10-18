@@ -227,6 +227,7 @@ private:
 	bool   m_semm               = true; // Are we using a single extruder multimaterial printer?
 	bool   m_enable_filament_ramming = true;
 	bool   m_is_mk4mmu3         = false;
+    bool   m_is_lego            = false;
     int    m_wipe_tower_filament = 0;   // 1-based config value, 0 means auto
     Vec2f  m_wipe_tower_pos; 			// Left front corner of the wipe tower in mm.
 	float  m_wipe_tower_width; 			// Width of the wipe tower.
@@ -446,6 +447,8 @@ private:
 		float spacing);
 
     Polygon generate_rib_polygon(const WipeTower::box_coordinates& wt_box);
+
+    void extrude_studs(WipeTowerWriter2 &writer, float feedrate);
 
     void compute_wall_skip_points();
 

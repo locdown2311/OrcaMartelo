@@ -1413,7 +1413,7 @@ void Print::validate_compacted_wipe_tower_clearance() const
     const Vec2d              wt_translate(m_config.wipe_tower_x.get_at(m_plate_index) + m_origin(0),
                                           m_config.wipe_tower_y.get_at(m_plate_index) + m_origin(1));
     const Vec2d              rib_off        = m_wipe_tower_data.rib_offset.cast<double>();
-    const bool               rib_off_rotates = this->wipe_tower_type() == WipeTowerType::Type2;
+    const bool               rib_off_rotates = this->wipe_tower_type() == WipeTowerType::Type2 || this->wipe_tower_type() == WipeTowerType::Type3;
     auto to_bed = [&wt_rot, &wt_translate, &rib_off, rib_off_rotates](const Vec2d &pt) {
         return rib_off_rotates ? Vec2d(wt_rot * (pt + rib_off) + wt_translate) : Vec2d(wt_rot * pt + wt_translate + rib_off);
     };
@@ -5049,7 +5049,7 @@ void Print::_make_wipe_tower()
     // BBS
     const unsigned int number_of_extruders = (unsigned int)(m_config.filament_colour.values.size());
 
-    const bool is_wipe_tower_type2 = this->wipe_tower_type() == WipeTowerType::Type2;
+    const bool is_wipe_tower_type2 = this->wipe_tower_type() == WipeTowerType::Type2 || this->wipe_tower_type() == WipeTowerType::Type3;
     // Let the ToolOrdering class know there will be initial priming extrusions at the start of the print.
     m_wipe_tower_data.tool_ordering = ToolOrdering(*this, (unsigned int) -1, is_wipe_tower_type2);
     m_wipe_tower_data.tool_ordering.sort_and_build_data(*this, (unsigned int)-1, is_wipe_tower_type2);
@@ -5411,7 +5411,8 @@ void Print::_make_wipe_tower()
                                          wipe_tower.get_rib_width(), wipe_tower.get_rib_length(),
                                          config().wipe_tower_fillet_wall.value,
                                          config().wipe_tower_wall_type.value == WipeTowerWallType::wtwCone ?
-                                             (float) config().wipe_tower_cone_angle.value : 0.f);
+                                             (float) config().wipe_tower_cone_angle.value : 0.f,
+                                         this->wipe_tower_type() == WipeTowerType::Type3);
         const Vec3d origin                      = Vec3d::Zero();
         // FakeWipeTower::pos is a bed-frame translation applied after rotation
         // (getFakeExtrusionPathsFromWipeTower2 rotates about the local origin), so the
@@ -7012,12 +7013,37 @@ ExtrusionLayers FakeWipeTower::getTrueExtrusionLayersFromWipeTower() const
     }
     return wtels;
 }
-void WipeTowerData::construct_mesh(float width, float depth, float height, float brim_width, bool is_rib_wipe_tower, float rib_width, float rib_length,bool fillet_wall, float cone_angle)
+void WipeTowerData::construct_mesh(float width, float depth, float height, float brim_width, bool is_rib_wipe_tower, float rib_width, float rib_length,bool fillet_wall, float cone_angle, bool is_lego)
 {
     wipe_tower_mesh_data = WipeTowerMeshData{};
     float first_layer_height=0.08; //brim height
     if (width < EPSILON || depth < EPSILON || height < EPSILON) return;
-    if (cone_angle > EPSILON && (!is_rib_wipe_tower || rib_length < EPSILON)) {
+    if (is_lego) {
+        indexed_triangle_set brick_its = its_make_cube(width, depth, height);
+        const double stud_r = 2.4;
+        const double stud_h = 1.8;
+        const double pitch  = 8.0;
+        int num_x = std::max(1, int(std::round((width + 0.2) / pitch)));
+        int num_y = std::max(1, int(std::round((depth + 0.2) / pitch)));
+        float x0 = (width - (num_x - 1) * pitch) / 2.0f;
+        float y0 = (depth - (num_y - 1) * pitch) / 2.0f;
+        for (int ix = 0; ix < num_x; ++ix) {
+            for (int iy = 0; iy < num_y; ++iy) {
+                float sx = x0 + ix * pitch;
+                float sy = y0 + iy * pitch;
+                indexed_triangle_set stud_its = its_make_cylinder(stud_r, stud_h, 2.0 * PI / 36.0);
+                for (auto &v : stud_its.vertices) {
+                    v += Vec3f(sx, sy, height);
+                }
+                its_merge(brick_its, stud_its);
+            }
+        }
+        wipe_tower_mesh_data->real_wipe_tower_mesh = TriangleMesh(brick_its);
+        wipe_tower_mesh_data->real_brim_mesh       = make_cube(width + 2 * brim_width, depth + 2 * brim_width, first_layer_height);
+        wipe_tower_mesh_data->real_brim_mesh.translate({-brim_width, -brim_width, 0});
+        wipe_tower_mesh_data->bottom = {scaled(Vec2f{-brim_width, -brim_width}), scaled(Vec2f{width + brim_width, -brim_width}),
+                                        scaled(Vec2f{width + brim_width, depth + brim_width}), scaled(Vec2f{-brim_width, depth + brim_width})};
+    } else if (cone_angle > EPSILON && (!is_rib_wipe_tower || rib_length < EPSILON)) {
         // Cone tower: the base bulges past the body box; this bottom polygon feeds the
         // containment checks, so it must carry the bulge and the brim (cone not lofted).
         wipe_tower_mesh_data->real_wipe_tower_mesh = make_cube(width, depth, height);

@@ -996,6 +996,24 @@ int GLVolumeCollection::load_wipe_tower_preview(
     GUI::PartPlateList& ppl = GUI::wxGetApp().plater()->get_partplate_list();
     std::vector<int> plate_extruders = ppl.get_plate(plate_idx)->get_extruders(true);
     TriangleMesh wipe_tower_shell = make_cube(width, depth, height);
+    const DynamicPrintConfig &printer_cfg = GUI::wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    const bool is_lego = resolve_wipe_tower_type(printer_cfg) == WipeTowerType::Type3;
+    if (is_lego) {
+        const double stud_r = 2.4;
+        const double stud_h = 1.8;
+        const double pitch  = 8.0;
+        int num_x = std::max(1, int(std::round((width + 0.2) / pitch)));
+        int num_y = std::max(1, int(std::round((depth + 0.2) / pitch)));
+        float x0 = (width - (num_x - 1) * pitch) / 2.0f;
+        float y0 = (depth - (num_y - 1) * pitch) / 2.0f;
+        for (int ix = 0; ix < num_x; ++ix) {
+            for (int iy = 0; iy < num_y; ++iy) {
+                TriangleMesh stud = make_cylinder(stud_r, stud_h, 2.0 * PI / 36.0);
+                stud.translate({x0 + ix * pitch, y0 + iy * pitch, height});
+                wipe_tower_shell.merge(stud);
+            }
+        }
+    }
     // The brim is part of the printed footprint: draw it and fold it into the shell so the
     // outside-bed shader and the drag clamp react to the true first-layer extent.
     const bool   show_brim   = brim_width > 0.f;
@@ -1005,7 +1023,6 @@ int GLVolumeCollection::load_wipe_tower_preview(
         // The brim follows the real first-layer outline: a Type2 cone-wall tower's base bulges
         // past the body box. The wall type and angle are print settings, the planner a printer one.
         const DynamicPrintConfig &print_cfg   = GUI::wxGetApp().preset_bundle->prints.get_edited_preset().config;
-        const DynamicPrintConfig &printer_cfg = GUI::wxGetApp().preset_bundle->printers.get_edited_preset().config;
         const Polygon  outline      = estimate_wipe_tower_first_layer_outline(print_cfg, resolve_wipe_tower_type(printer_cfg), width, depth, height);
         const Polygons brim_outline = offset(outline, scaled(brim_width));
         brim_slab                   = WipeTower::its_make_rib_brim(brim_outline.empty() ? outline : brim_outline.front(), brim_height);
@@ -1030,6 +1047,22 @@ int GLVolumeCollection::load_wipe_tower_preview(
     for (size_t i = 0; i < slab_count; i++) {
         TriangleMesh color_part = make_cube(width, depth / slab_count, height);
         color_part.translate({ 0.f, depth * i / slab_count, 0. });
+        if (is_lego && i == slab_count - 1) {
+            const double stud_r = 2.4;
+            const double stud_h = 1.8;
+            const double pitch  = 8.0;
+            int num_x = std::max(1, int(std::round((width + 0.2) / pitch)));
+            int num_y = std::max(1, int(std::round((depth + 0.2) / pitch)));
+            float x0 = (width - (num_x - 1) * pitch) / 2.0f;
+            float y0 = (depth - (num_y - 1) * pitch) / 2.0f;
+            for (int ix = 0; ix < num_x; ++ix) {
+                for (int iy = 0; iy < num_y; ++iy) {
+                    TriangleMesh stud = make_cylinder(stud_r, stud_h, 2.0 * PI / 36.0);
+                    stud.translate({x0 + ix * pitch, y0 + iy * pitch, height});
+                    color_part.merge(stud);
+                }
+            }
+        }
         v.model_per_colors[i].init_from(color_part);
     }
     if (show_brim && !colors.empty())

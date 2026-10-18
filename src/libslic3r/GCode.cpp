@@ -1968,7 +1968,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
     std::string WipeTowerIntegration::prime(GCode &gcodegen)
     {
         std::string gcode;
-        if (gcodegen.wipe_tower_type() == WipeTowerType::Type2) {
+        if (gcodegen.wipe_tower_type() == WipeTowerType::Type2 || gcodegen.wipe_tower_type() == WipeTowerType::Type3) {
             for (const WipeTower::ToolChangeResult &tcr : m_priming) {
                 if (!tcr.extrusions.empty())
                     gcode += append_tcr2(gcodegen, tcr, tcr.new_tool);
@@ -1984,7 +1984,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         assert(m_layer_idx >= 0);
         if (m_layer_idx >= (int) m_tool_changes.size())
             return gcode;
-        if (gcodegen.wipe_tower_type() == WipeTowerType::Type2) {
+        if (gcodegen.wipe_tower_type() == WipeTowerType::Type2 || gcodegen.wipe_tower_type() == WipeTowerType::Type3) {
             if (gcodegen.writer().need_toolchange(extruder_id) || finish_layer) {
                 if (m_layer_idx < (int) m_tool_changes.size()) {
                     if (!(size_t(m_tool_change_idx) < m_tool_changes[m_layer_idx].size()))
@@ -2067,7 +2067,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
     std::string WipeTowerIntegration::finalize(GCode &gcodegen)
     {
         std::string gcode;
-        if (gcodegen.wipe_tower_type() == WipeTowerType::Type2 && !m_final_purge.gcode.empty()) {
+        if ((gcodegen.wipe_tower_type() == WipeTowerType::Type2 || gcodegen.wipe_tower_type() == WipeTowerType::Type3) && !m_final_purge.gcode.empty()) {
             if (std::abs(gcodegen.writer().get_position().z() - m_final_purge.print_z) > EPSILON)
                 gcode += gcodegen.change_layer(m_final_purge.print_z);
             gcode += append_tcr2(gcodegen, m_final_purge, -1);
@@ -3536,7 +3536,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             throw Slic3r::SlicingError(_(L("No object can be printed. It may be too small.")));
         has_wipe_tower = print.has_wipe_tower() && tool_ordering.has_wipe_tower();
         // Orca: support all extruder priming
-        initial_extruder_id = (wipe_tower_type == WipeTowerType::Type2 && has_wipe_tower && !print.config().single_extruder_multi_material_priming) ?
+        initial_extruder_id = ((wipe_tower_type == WipeTowerType::Type2 || wipe_tower_type == WipeTowerType::Type3) && has_wipe_tower && !print.config().single_extruder_multi_material_priming) ?
             // The priming towers will be skipped.
             tool_ordering.all_extruders().back() :
             // Don't skip the priming towers.
@@ -3695,7 +3695,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     this->placeholder_parser().set("wipe_tower_center_pos_x", new ConfigOptionFloat(wipe_tower_center.x()));
     this->placeholder_parser().set("wipe_tower_center_pos_y", new ConfigOptionFloat(wipe_tower_center.y()));
     this->placeholder_parser().set("wipe_tower_center_pos_valid", new ConfigOptionBool(wipe_tower_center_valid));
-    this->placeholder_parser().set("has_single_extruder_multi_material_priming", wipe_tower_type == WipeTowerType::Type2 && has_wipe_tower && print.config().single_extruder_multi_material_priming);
+    this->placeholder_parser().set("has_single_extruder_multi_material_priming", (wipe_tower_type == WipeTowerType::Type2 || wipe_tower_type == WipeTowerType::Type3) && has_wipe_tower && print.config().single_extruder_multi_material_priming);
     this->placeholder_parser().set("total_toolchanges", DoExport::resolve_total_toolchanges(print.wipe_tower_data(), print.tool_ordering()));
     this->placeholder_parser().set("num_extruders", int(print.config().nozzle_diameter.values.size()));
     this->placeholder_parser().set("retract_length", new ConfigOptionFloats(print.config().retraction_length));
@@ -4379,7 +4379,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     }
 
     // Orca: support extruder priming
-    if (wipe_tower_type != WipeTowerType::Type2 || ! (has_wipe_tower && print.config().single_extruder_multi_material_priming))
+    if ((wipe_tower_type != WipeTowerType::Type2 && wipe_tower_type != WipeTowerType::Type3) || ! (has_wipe_tower && print.config().single_extruder_multi_material_priming))
     {
         // Set initial extruder only after custom start G-code.
         // Ugly hack: Do not set the initial extruder if the extruder is primed using the MMU priming towers at the edge of the print bed.
@@ -4604,7 +4604,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                 //BBS
                 file.write(m_writer.travel_to_z(initial_layer_print_height + m_config.z_offset.value, "Move to the first layer height"));
 
-                if (wipe_tower_type == WipeTowerType::Type2 && print.config().single_extruder_multi_material_priming) {
+                if ((wipe_tower_type == WipeTowerType::Type2 || wipe_tower_type == WipeTowerType::Type3) && print.config().single_extruder_multi_material_priming) {
                     file.write(m_wipe_tower->prime(*this));
                     // Verify, whether the print overaps the priming extrusions.
                     BoundingBoxf bbox_print(get_print_extrusions_extents(print));
