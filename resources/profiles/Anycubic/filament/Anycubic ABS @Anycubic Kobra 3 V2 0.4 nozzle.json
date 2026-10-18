@@ -202,19 +202,19 @@
 		"100"
 	],
 	"hot_plate_temp": [
-		"90"
+		"100"
 	],
 	"hot_plate_temp_initial_layer": [
-		"90"
+		"105"
 	],
 	"nozzle_temperature_initial_layer": [
 		"250"
 	],
 	"nozzle_temperature_range_high": [
-		"230"
+		"270"
 	],
 	"nozzle_temperature_range_low": [
-		"190"
+		"230"
 	],
 	"overhang_fan_speed": [
 		"15"
@@ -244,12 +244,12 @@
 		"-1"
 	],
 	"temperature_vitrification": [
-		"60"
+		"100"
 	],
 	"textured_plate_temp": [
-		"90"
+		"100"
 	],
 	"textured_plate_temp_initial_layer": [
-		"90"
+		"105"
 	]
 }

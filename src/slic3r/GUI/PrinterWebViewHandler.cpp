@@ -12,6 +12,7 @@
 #include "slic3r/Utils/PrintHost.hpp"
 #include "slic3r/Utils/AnycubicLink.hpp"
 #include "libslic3r/Preset.hpp"
+#include "libslic3r/PrintConfig.hpp"
 
 #include <nlohmann/json.hpp>
 #include <array>
@@ -695,7 +696,8 @@ private:
 
         BOOST_LOG_TRIVIAL(info) << "[AnycubicPrinterWebViewHandler] sync_filaments_to_webview enter";
 
-        auto full_cfg = wxGetApp().preset_bundle->full_config();
+        auto* bundle = wxGetApp().preset_bundle;
+        auto full_cfg = bundle->full_config();
         const auto* colors             = full_cfg.option<ConfigOptionStrings>("filament_colour");
         const auto* types              = full_cfg.option<ConfigOptionStrings>("filament_type");
         const auto* vendors            = full_cfg.option<ConfigOptionStrings>("filament_vendor");
@@ -704,8 +706,38 @@ private:
         const auto* nozzle_temps_init  = full_cfg.option<ConfigOptionInts>("nozzle_temperature_initial_layer");
         const auto* nozzle_range_lows  = full_cfg.option<ConfigOptionInts>("nozzle_temperature_range_low");
         const auto* nozzle_range_highs = full_cfg.option<ConfigOptionInts>("nozzle_temperature_range_high");
-        const auto* bed_temps          = full_cfg.option<ConfigOptionInts>("bed_temperature");
-        const auto* bed_temps_init     = full_cfg.option<ConfigOptionInts>("bed_temperature_initial_layer");
+
+        // Bed temperatures in OrcaSlicer presets are per-plate-type; resolve the active plate's bed type.
+        BedType bed_type = btDefault;
+        if (bundle->project_config.has("curr_bed_type")) {
+            bed_type = bundle->project_config.opt_enum<BedType>("curr_bed_type");
+        }
+        if (bed_type == btDefault || bed_type >= btCount) {
+            bed_type = bundle->printers.get_edited_preset().get_default_bed_type(bundle);
+        }
+        if (bed_type == btDefault || bed_type >= btCount) {
+            bed_type = btPTE; // Default to Textured PEI Plate
+        }
+
+        const std::string bed_temp_key = get_bed_temp_key(bed_type);
+        const std::string bed_temp_init_key = get_bed_temp_1st_layer_key(bed_type);
+        const auto* bed_temps      = !bed_temp_key.empty() ? full_cfg.option<ConfigOptionInts>(bed_temp_key) : nullptr;
+        const auto* bed_temps_init = !bed_temp_init_key.empty() ? full_cfg.option<ConfigOptionInts>(bed_temp_init_key) : nullptr;
+
+        if (!bed_temps) {
+            bed_temps = full_cfg.option<ConfigOptionInts>("textured_plate_temp");
+            if (!bed_temps)
+                bed_temps = full_cfg.option<ConfigOptionInts>("hot_plate_temp");
+            if (!bed_temps)
+                bed_temps = full_cfg.option<ConfigOptionInts>("bed_temperature");
+        }
+        if (!bed_temps_init) {
+            bed_temps_init = full_cfg.option<ConfigOptionInts>("textured_plate_temp_initial_layer");
+            if (!bed_temps_init)
+                bed_temps_init = full_cfg.option<ConfigOptionInts>("hot_plate_temp_initial_layer");
+            if (!bed_temps_init)
+                bed_temps_init = full_cfg.option<ConfigOptionInts>("bed_temperature_initial_layer");
+        }
         const auto* densities          = full_cfg.option<ConfigOptionFloats>("filament_density");
         const auto* diameters          = full_cfg.option<ConfigOptionFloats>("filament_diameter");
         const auto* costs              = full_cfg.option<ConfigOptionFloats>("filament_cost");
