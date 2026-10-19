@@ -3252,12 +3252,18 @@
             }
 
             // Printer status and control button states
-            const state = (data.state || data.print_state || "free").toLowerCase();
-            currentPrinterState = state;
-            document.getElementById("print-state").innerText = data.state || data.print_state || "Ready";
+            const rawJobName = String(data.job_name || "");
+            const isCmdFile = rawJobName.startsWith("_orcacubic_command_") ||
+                              rawJobName.startsWith("_command_") ||
+                              rawJobName.includes("_orcacubic_command_") ||
+                              rawJobName.includes("_command_");
 
-            const isPrinting = (state === "printing" || state === "busy");
-            const isPaused = (state === "paused");
+            const state = (data.state || data.print_state || "free").toLowerCase();
+            currentPrinterState = isCmdFile ? "free" : state;
+            document.getElementById("print-state").innerText = (!isCmdFile && (data.state || data.print_state)) ? (data.state || data.print_state) : "Ready";
+
+            const isPrinting = !isCmdFile && (state === "printing" || state === "busy");
+            const isPaused = !isCmdFile && (state === "paused");
             const hasActiveJob = (isPrinting || isPaused);
 
             // Active Print Job controls: disabled when there is no active job
@@ -3290,43 +3296,56 @@
                 hintEl.innerText = "Jogging ready. (Click 🏠 Home first if motors were reset).";
                 hintEl.style.color = "var(--text-dim)";
             }
-            if (data.progress !== undefined) {
-                document.getElementById("job-pct").innerText = Math.round(data.progress) + "%";
-                document.getElementById("job-progress-fill").style.width = data.progress + "%";
-            }
-            if (data.job_name) {
-                document.getElementById("job-name").innerText = data.job_name;
-            }
-            if (data.curr_layer !== undefined || data.total_layers !== undefined) {
-                const currLayer = Math.max(0, parseInt(data.curr_layer || 0, 10));
-                let totalLayers = Math.max(0, parseInt(data.total_layers || 0, 10));
-                const progress = parseFloat(data.progress || 0);
 
-                if (totalLayers <= 0 && progress > 0 && currLayer > 0) {
-                    const estimated = Math.round(currLayer / (progress / 100));
-                    if (estimated >= currLayer) {
-                        totalLayers = estimated;
-                    }
-                }
-
+            if (isCmdFile) {
+                document.getElementById("job-pct").innerText = "0%";
+                document.getElementById("job-progress-fill").style.width = "0%";
+                document.getElementById("job-name").innerText = "Ready";
                 const statLayerEl = document.getElementById("stat-layer");
-                if (statLayerEl) {
-                    if (totalLayers > 0) {
-                        statLayerEl.innerText = currLayer + " / " + totalLayers;
-                    } else if (hasActiveJob && currLayer > 0) {
-                        statLayerEl.innerText = currLayer + " / --";
-                    } else if (hasActiveJob) {
-                        statLayerEl.innerText = "0 / --";
-                    } else {
-                        statLayerEl.innerText = "0 / 0";
+                if (statLayerEl) statLayerEl.innerText = "0 / 0";
+                document.getElementById("stat-elapsed").innerText = "0m";
+                document.getElementById("stat-remaining").innerText = "--";
+            } else {
+                if (data.progress !== undefined) {
+                    document.getElementById("job-pct").innerText = Math.round(data.progress) + "%";
+                    document.getElementById("job-progress-fill").style.width = data.progress + "%";
+                }
+                if (data.job_name) {
+                    document.getElementById("job-name").innerText = data.job_name;
+                } else if (!hasActiveJob) {
+                    document.getElementById("job-name").innerText = "Ready";
+                }
+                if (data.curr_layer !== undefined || data.total_layers !== undefined) {
+                    const currLayer = Math.max(0, parseInt(data.curr_layer || 0, 10));
+                    let totalLayers = Math.max(0, parseInt(data.total_layers || 0, 10));
+                    const progress = parseFloat(data.progress || 0);
+
+                    if (totalLayers <= 0 && progress > 0 && currLayer > 0) {
+                        const estimated = Math.round(currLayer / (progress / 100));
+                        if (estimated >= currLayer) {
+                            totalLayers = estimated;
+                        }
+                    }
+
+                    const statLayerEl = document.getElementById("stat-layer");
+                    if (statLayerEl) {
+                        if (totalLayers > 0) {
+                            statLayerEl.innerText = currLayer + " / " + totalLayers;
+                        } else if (hasActiveJob && currLayer > 0) {
+                            statLayerEl.innerText = currLayer + " / --";
+                        } else if (hasActiveJob) {
+                            statLayerEl.innerText = "0 / --";
+                        } else {
+                            statLayerEl.innerText = "0 / 0";
+                        }
                     }
                 }
-            }
-            if (data.print_time !== undefined) {
-                document.getElementById("stat-elapsed").innerText = data.print_time + "m";
-            }
-            if (data.remain_time !== undefined) {
-                document.getElementById("stat-remaining").innerText = data.remain_time + "m";
+                if (data.print_time !== undefined) {
+                    document.getElementById("stat-elapsed").innerText = data.print_time + "m";
+                }
+                if (data.remain_time !== undefined) {
+                    document.getElementById("stat-remaining").innerText = hasActiveJob ? (data.remain_time + "m") : "--";
+                }
             }
             const actionEl = document.getElementById("stat-action");
             if (actionEl) {
@@ -3481,7 +3500,7 @@
                         target_nozzle_temp: data.target_nozzle_temp,
                         bed_temp: data.bed_temp,
                         target_bed_temp: data.target_bed_temp,
-                        print_state: data.state ? (data.state.charAt(0).toUpperCase() + data.state.slice(1)) : "Printing",
+                        print_state: data.state ? (data.state.charAt(0).toUpperCase() + data.state.slice(1)) : "Ready",
                         progress: data.progress,
                         job_name: data.job_name,
                         curr_layer: data.curr_layer,

@@ -119,9 +119,29 @@ shutdown_event = threading.Event()
 server_instance = None
 slot_brand_overrides = {}
 
+def is_command_filename(filename):
+    if not filename or not isinstance(filename, str):
+        return False
+    base = os.path.basename(filename).strip()
+    return (
+        base.startswith(("_orcacubic_command_", "_command_"))
+        or "_orcacubic_command_" in base
+        or "_command_" in base
+    )
+
 def public_telemetry():
     """Return dashboard telemetry without exposing token-bearing printer URLs."""
-    return {key: value for key, value in telemetry.items() if key != "upload_url"}
+    res = {key: value for key, value in telemetry.items() if key != "upload_url"}
+    if is_command_filename(res.get("job_name")):
+        res["job_name"] = "Ready"
+        st = str(res.get("state", "")).lower()
+        if st in ("free", "ready", "idle", "0", "completed", "finish", "finished", "stop", "stopped"):
+            res["curr_layer"] = 0
+            res["total_layers"] = 0
+            res["progress"] = 0
+            res["print_time"] = 0
+            res["remain_time"] = 0
+    return res
 
 def rgb_to_hex(r, g, b):
     return f"#{r:02x}{g:02x}{b:02x}"
@@ -456,30 +476,49 @@ def on_mqtt_message(c, userdata, msg):
 
                 project = data.get("project", {}) if isinstance(data, dict) else {}
                 if project:
-                    telemetry["state"] = project.get("state", telemetry["state"])
-                    telemetry["progress"] = project.get("progress", telemetry["progress"])
-                    telemetry["job_name"] = project.get("filename", telemetry["job_name"])
-                    rep_curr = project.get("curr_layer")
-                    if rep_curr is None:
-                        rep_curr = project.get("cur_layer", project.get("current_layer", data.get("curr_layer") if isinstance(data, dict) else None))
-                    if rep_curr is not None:
-                        telemetry["curr_layer"] = _as_int(rep_curr, telemetry["curr_layer"])
-                    rep_total = (
-                        project.get("total_layers")
-                        or project.get("total_layer")
-                        or project.get("total_layer_num")
-                        or project.get("totalLayer")
-                        or project.get("totalLayers")
-                        or project.get("layer_num")
-                        or (data.get("total_layers") if isinstance(data, dict) else None)
-                        or (data.get("total_layer") if isinstance(data, dict) else None)
-                        or (data.get("total_layer_num") if isinstance(data, dict) else None)
-                    )
-                    if rep_total is not None and _as_int(rep_total, 0) > 0:
-                        telemetry["total_layers"] = _as_int(rep_total)
-                    telemetry["remain_time"] = project.get("remain_time", telemetry["remain_time"])
-                    telemetry["print_time"] = project.get("print_time", telemetry["print_time"])
-                    telemetry["speed_mode"] = project.get("print_speed_mode", telemetry["speed_mode"])
+                    proj_fname = project.get("filename", "")
+                    proj_state = project.get("state", telemetry["state"])
+                    is_cmd = is_command_filename(proj_fname)
+
+                    if is_cmd:
+                        # Internal command execution: never overwrite user print job name or stats with command files
+                        if is_command_filename(telemetry.get("job_name")):
+                            telemetry["job_name"] = "Ready"
+                        state_str = str(proj_state).strip().lower()
+                        if state_str in ("0", "free", "ready", "idle", "completed", "finish", "finished", "stop", "stopped", "cancel", "cancelled"):
+                            telemetry["state"] = "free"
+                            telemetry["curr_layer"] = 0
+                            telemetry["total_layers"] = 0
+                            telemetry["progress"] = 0
+                            telemetry["remain_time"] = 0
+                            telemetry["print_time"] = 0
+                            telemetry["job_name"] = "Ready"
+                    else:
+                        telemetry["state"] = proj_state
+                        telemetry["progress"] = project.get("progress", telemetry["progress"])
+                        if proj_fname:
+                            telemetry["job_name"] = proj_fname
+                        rep_curr = project.get("curr_layer")
+                        if rep_curr is None:
+                            rep_curr = project.get("cur_layer", project.get("current_layer", data.get("curr_layer") if isinstance(data, dict) else None))
+                        if rep_curr is not None:
+                            telemetry["curr_layer"] = _as_int(rep_curr, telemetry["curr_layer"])
+                        rep_total = (
+                            project.get("total_layers")
+                            or project.get("total_layer")
+                            or project.get("total_layer_num")
+                            or project.get("totalLayer")
+                            or project.get("totalLayers")
+                            or project.get("layer_num")
+                            or (data.get("total_layers") if isinstance(data, dict) else None)
+                            or (data.get("total_layer") if isinstance(data, dict) else None)
+                            or (data.get("total_layer_num") if isinstance(data, dict) else None)
+                        )
+                        if rep_total is not None and _as_int(rep_total, 0) > 0:
+                            telemetry["total_layers"] = _as_int(rep_total)
+                        telemetry["remain_time"] = project.get("remain_time", telemetry["remain_time"])
+                        telemetry["print_time"] = project.get("print_time", telemetry["print_time"])
+                        telemetry["speed_mode"] = project.get("print_speed_mode", telemetry["speed_mode"])
 
                 urls = data.get("urls", {})
                 for cam_key in ("rtspUrl", "flvUrl", "cameraUrl", "videoUrl"):
@@ -498,6 +537,8 @@ def on_mqtt_message(c, userdata, msg):
             st = payload.get("state", "")
             if st:
                 telemetry["state"] = st
+                if is_command_filename(telemetry.get("job_name")):
+                    telemetry["job_name"] = "Ready"
 
         elif t == "axis":
             if code != 200 and msg_str:
@@ -687,6 +728,27 @@ def mqtt_worker():
             print(f"[Bridge] MQTT exception: {e}")
             shutdown_event.wait(3)
 
+def delete_file_on_printer(filename):
+    if not mqtt_client:
+        return
+    try:
+        del_msg = {
+            "type": "file",
+            "action": "deleteBatch",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "root": "local",
+                "files": [{"path": "/", "filename": filename}]
+            }
+        }
+        for role in ("slicer", "web"):
+            t_del = f"anycubic/anycubicCloud/v1/{role}/printer/{model_id}/{device_id}/file"
+            mqtt_client.publish(t_del, json.dumps(del_msg))
+        print(f"[Bridge] Sent deleteBatch for {filename}")
+    except Exception as e:
+        print(f"[Bridge] Error sending deleteBatch for {filename}: {e}")
+
 def upload_and_run_gcode(gcode_text, delete_after=True):
     ts = int(time.time())
     rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
@@ -785,6 +847,18 @@ def upload_and_run_gcode(gcode_text, delete_after=True):
     if mqtt_client:
         mqtt_client.publish(topic, json.dumps(msg))
         print(f"[Bridge] Triggered run for {fname}")
+
+    if delete_after:
+        pending_cleanup.append(fname)
+        def _deferred_delete():
+            time.sleep(6)
+            delete_file_on_printer(fname)
+            try:
+                if fname in pending_cleanup:
+                    pending_cleanup.remove(fname)
+            except Exception:
+                pass
+        threading.Thread(target=_deferred_delete, daemon=True).start()
         
     return {"status": "ok", "filename": fname}
 
@@ -882,6 +956,8 @@ def upload_and_start_print_file(content_bytes, raw_filename, use_ams=True, task_
     if parsed_layers > 0:
         telemetry["total_layers"] = parsed_layers
         telemetry["curr_layer"] = 0
+    if fname and not is_command_filename(fname):
+        telemetry["job_name"] = fname
 
     ams_mapping = _default_ams_mapping(use_ams)
     ts = task_settings or {}
@@ -1390,6 +1466,8 @@ class BridgeServer(BaseHTTPRequestHandler):
                     if total_layers > 0:
                         telemetry["total_layers"] = total_layers
                         telemetry["curr_layer"] = 0
+                    if filename and not is_command_filename(filename):
+                        telemetry["job_name"] = filename
 
                     mqtt_client.publish(topic_print, json.dumps(msg))
                     print(f"[Bridge] Published print:start for {filename} with use_ams={use_ams} ams_mapping={json.dumps(ams_mapping)}")

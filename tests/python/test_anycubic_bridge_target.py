@@ -876,6 +876,89 @@ class MaterialSystemTests(unittest.TestCase):
         self.assertTrue(ace_slots[2]["is_active"])
         self.assertFalse(ace_slots[3]["is_active"])
 
+    def test_is_command_filename_detection(self):
+        self.assertTrue(daemon.is_command_filename("_orcacubic_command_1792450398_4k7a.gcode"))
+        self.assertTrue(daemon.is_command_filename("/local/_orcacubic_command_test.gcode"))
+        self.assertTrue(daemon.is_command_filename("_command_extrude.gcode"))
+        self.assertFalse(daemon.is_command_filename("benchy.gcode"))
+        self.assertFalse(daemon.is_command_filename("Plate_1.gcode.3mf"))
+        self.assertFalse(daemon.is_command_filename("Ready"))
+        self.assertFalse(daemon.is_command_filename(""))
+        self.assertFalse(daemon.is_command_filename(None))
+
+    def test_internal_command_file_suppressed_from_telemetry_info(self):
+        class MockMsg:
+            def __init__(self, topic, data):
+                self.topic = topic
+                self.payload = json.dumps(data).encode("utf-8")
+
+        daemon.model_id = "test_model"
+        daemon.device_id = "test_device"
+        daemon.telemetry["job_name"] = "Ready"
+        daemon.telemetry["total_layers"] = 0
+        daemon.telemetry["curr_layer"] = 0
+        daemon.telemetry["progress"] = 0
+        daemon.telemetry["state"] = "free"
+
+        info_payload = {
+            "code": 200,
+            "data": {
+                "project": {
+                    "filename": "_orcacubic_command_1792450398_4k7a.gcode",
+                    "state": 0,
+                    "curr_layer": 0,
+                    "total_layers": 1,
+                    "progress": 0
+                }
+            }
+        }
+        msg = MockMsg("anycubic/anycubicCloud/v1/printer/public/test_model/test_device/info/report", info_payload)
+        daemon.on_mqtt_message(None, None, msg)
+
+        # Internal command file must NEVER pollute job_name or total_layers
+        self.assertEqual(daemon.telemetry["job_name"], "Ready")
+        self.assertEqual(daemon.telemetry["total_layers"], 0)
+        self.assertEqual(daemon.telemetry["curr_layer"], 0)
+        self.assertEqual(daemon.telemetry["progress"], 0)
+        self.assertEqual(daemon.public_telemetry()["job_name"], "Ready")
+
+    def test_real_print_job_updates_telemetry_info(self):
+        class MockMsg:
+            def __init__(self, topic, data):
+                self.topic = topic
+                self.payload = json.dumps(data).encode("utf-8")
+
+        daemon.model_id = "test_model"
+        daemon.device_id = "test_device"
+        info_payload = {
+            "code": 200,
+            "data": {
+                "project": {
+                    "filename": "benchy.gcode",
+                    "state": "printing",
+                    "curr_layer": 15,
+                    "total_layers": 200,
+                    "progress": 7.5
+                }
+            }
+        }
+        msg = MockMsg("anycubic/anycubicCloud/v1/printer/public/test_model/test_device/info/report", info_payload)
+        daemon.on_mqtt_message(None, None, msg)
+
+        self.assertEqual(daemon.telemetry["job_name"], "benchy.gcode")
+        self.assertEqual(daemon.telemetry["curr_layer"], 15)
+        self.assertEqual(daemon.telemetry["total_layers"], 200)
+        self.assertEqual(daemon.telemetry["progress"], 7.5)
+        self.assertEqual(daemon.public_telemetry()["job_name"], "benchy.gcode")
+
+    def test_public_telemetry_sanitizes_stale_command_filename(self):
+        daemon.telemetry["job_name"] = "_orcacubic_command_stale.gcode"
+        daemon.telemetry["state"] = "free"
+        daemon.telemetry["total_layers"] = 1
+        pub = daemon.public_telemetry()
+        self.assertEqual(pub["job_name"], "Ready")
+        self.assertEqual(pub["total_layers"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
