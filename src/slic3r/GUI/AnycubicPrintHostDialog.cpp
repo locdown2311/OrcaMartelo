@@ -67,7 +67,7 @@ void AnycubicPrintHostSendDialog::init()
         const std::string value = app_config->get("recent", key);
         return value == "1" || value == "true";
     };
-    m_auto_leveling = load_bool(CONFIG_KEY_LEVELING, true);
+    m_auto_leveling = load_bool(CONFIG_KEY_LEVELING, false);
     m_resonance_compensation = load_bool(CONFIG_KEY_RESONANCE, false);
     m_flow_calibration = load_bool(CONFIG_KEY_FLOW, false);
     m_timelapse = load_bool(CONFIG_KEY_TIMELAPSE, false);
@@ -295,7 +295,19 @@ void AnycubicPrintHostSendDialog::init()
     calibration_title->SetFont(::Label::Head_13);
     content_sizer->Add(calibration_title, 0, wxBOTTOM, FromDIP(6));
 
-    m_cb_auto_leveling = add_toggle(CONFIG_KEY_LEVELING, _L("Auto Leveling"), _L("Probe and compensate the build plate before this print."), &m_auto_leveling);
+    m_cb_auto_leveling = add_toggle(CONFIG_KEY_LEVELING, _L("Auto Leveling"),
+        _L("Probe and compensate the build plate before this print.\nNotice: Native firmware routine probes with a cold bed. Keep unchecked if your start G-code levels with a heated bed."),
+        &m_auto_leveling);
+
+    auto* leveling_note = new wxStaticText(this, wxID_ANY,
+        _L("Notice: Native auto-leveling probes with a cold bed. Keep unchecked if using heated bed leveling in start G-code."));
+    leveling_note->SetFont(::Label::Body_10);
+    leveling_note->SetForegroundColour(wxColour(220, 130, 20));
+    leveling_note->Wrap(FromDIP(450));
+    auto* note_sizer = new wxBoxSizer(wxHORIZONTAL);
+    note_sizer->AddSpacer(FromDIP(24));
+    note_sizer->Add(leveling_note, 1, wxEXPAND);
+    content_sizer->Add(note_sizer, 0, wxBOTTOM, FromDIP(8));
     m_cb_resonance = add_toggle(CONFIG_KEY_RESONANCE, _L("Resonance Compensation"), _L("Run vibration compensation before this print."), &m_resonance_compensation);
     m_cb_flow = add_toggle(CONFIG_KEY_FLOW, _L("Flow Calibration"), _L("Calibrate extrusion flow before this print."), &m_flow_calibration);
     m_cb_timelapse = add_toggle(CONFIG_KEY_TIMELAPSE, _L("Time-lapse"), _L("Capture a time-lapse while printing. The camera must be available."), &m_timelapse);

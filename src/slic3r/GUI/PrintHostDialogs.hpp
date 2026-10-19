@@ -312,7 +312,7 @@ private:
     std::vector<Slic3r::AnycubicMaterialSlot> m_slots;
     std::vector<Slic3r::AnycubicToolFilament> m_project_filaments;
     std::vector<BitmapComboBox*> m_slot_combos;
-    bool m_auto_leveling {true};
+    bool m_auto_leveling {false};
     bool m_resonance_compensation {false};
     bool m_flow_calibration {false};
     bool m_timelapse {false};

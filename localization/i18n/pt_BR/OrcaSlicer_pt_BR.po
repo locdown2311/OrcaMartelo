@@ -37933,3 +37933,9 @@ msgstr ""
 
 #~ msgid "Printer local connection failed, please try again."
 #~ msgstr "Falha na conexão local da impressora, por favor tente novamente."
+
+msgid "Notice: Native auto-leveling probes with a cold bed. Keep unchecked if using heated bed leveling in start G-code."
+msgstr "Aviso: O nivelamento nativo mede com a mesa fria. Mantenha desmarcado se usar nivelamento quente no G-code inicial."
+
+msgid "Probe and compensate the build plate before this print.\nNotice: Native firmware routine probes with a cold bed. Keep unchecked if your start G-code levels with a heated bed."
+msgstr "Sonda e compensa a mesa antes desta impressão.\nAviso: A rotina nativa da impressora mede com a mesa fria. Mantenha desmarcado se o seu G-code inicial fizer nivelamento com a mesa quente."
