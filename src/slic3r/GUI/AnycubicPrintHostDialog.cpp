@@ -200,7 +200,11 @@ void AnycubicPrintHostSendDialog::init()
                 spool_col->Add(bmp_ctrl, 0, wxALIGN_CENTER_HORIZONTAL);
             }
 
-            auto* name_label = new wxStaticText(this, wxID_ANY, wxString::Format("T%d \xe2\x80\xa2 %s", tool.tool_id, from_u8(tool.type)));
+            wxString type_str = from_u8(tool.type);
+            wxString label_text = type_str.empty()
+                ? wxString::Format("T%d", tool.tool_id)
+                : wxString::Format(wxString::FromUTF8("T%d \xe2\x80\xa2 %s"), tool.tool_id, type_str);
+            auto* name_label = new wxStaticText(this, wxID_ANY, label_text);
             name_label->SetFont(::Label::Head_11);
             spool_col->Add(name_label, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(2));
 
@@ -400,10 +404,11 @@ void AnycubicPrintHostSendDialog::init()
         &m_auto_leveling);
 
     auto* leveling_note = new wxStaticText(this, wxID_ANY,
-        _L("💡 Notice: Native auto-leveling probes with a cold bed. Keep unchecked if using heated bed leveling in start G-code."));
+        _L("💡 Notice: Stock auto-leveling probes cold. Keep unchecked to use heated bed leveling from start G-code."));
     leveling_note->SetFont(::Label::Body_10);
     leveling_note->SetForegroundColour(wxColour(245, 158, 11));
-    leveling_note->Wrap(FromDIP(450));
+    leveling_note->Wrap(FromDIP(540));
+    leveling_note->InvalidateBestSize();
     auto* note_sizer = new wxBoxSizer(wxHORIZONTAL);
     note_sizer->AddSpacer(FromDIP(24));
     note_sizer->Add(leveling_note, 1, wxEXPAND);
@@ -424,8 +429,9 @@ void AnycubicPrintHostSendDialog::init()
     });
     add_button(wxID_CANCEL, false, _L("Cancel"));
     finalize();
+    SetMinSize(wxSize(FromDIP(600), -1));
     Fit();
-    SetSize(wxSize(FromDIP(600), -1));
+    SetSize(wxSize(FromDIP(620), -1));
     CenterOnParent();
 }
 

@@ -37946,5 +37946,5 @@ msgstr "Nome do Trabalho:"
 msgid "Target Material Slot:"
 msgstr "Slot de Destino:"
 
-msgid "💡 Notice: Native auto-leveling probes with a cold bed. Keep unchecked if using heated bed leveling in start G-code."
-msgstr "💡 Aviso: O nivelamento nativo mede com a mesa fria. Mantenha desmarcado se usar nivelamento quente no G-code inicial."
+msgid "💡 Notice: Stock auto-leveling probes cold. Keep unchecked to use heated bed leveling from start G-code."
+msgstr "💡 Aviso: O nivelamento nativo mede com a mesa fria. Mantenha desmarcado para nivelar com a mesa quente no G-code inicial."
