@@ -438,14 +438,14 @@ void append_shell_perimeters(ExtrusionPaths &overhang_region,
 static ExtrusionPath make_wave_path(const Polyline &polyline, const Flow &flow)
 {
     ExtrusionPath path(erOverhangPerimeter, flow.mm3_per_mm(), flow.width(), flow.height());
-    path.polyline = polyline;
+    path.polyline = Polyline3(polyline);
     return path;
 }
 
 static ExtrusionPath make_wave_path(Polyline &&polyline, const Flow &flow)
 {
     ExtrusionPath path(erOverhangPerimeter, flow.mm3_per_mm(), flow.width(), flow.height());
-    path.polyline = std::move(polyline);
+    path.polyline = Polyline3(polyline);
     return path;
 }
 
@@ -541,19 +541,20 @@ void append_wave_fronts(ExtrusionPaths &overhang_region,
 
         double best_score = -1.;
         for (auto it = support_paths.rbegin(); it != support_paths.rend(); ++it) {
-            if (it->polyline.points.size() < 2)
+            Polyline poly2d = it->polyline.to_polyline();
+            if (poly2d.points.size() < 2)
                 continue;
 
             double score = 0.;
             for (const auto &[distance_along, weight] : samples) {
                 Point sample = point_at_distance(candidate, distance_along);
-                std::pair<int, Point> foot = foot_pt(it->polyline.points, sample);
+                std::pair<int, Point> foot = foot_pt(poly2d.points, sample);
                 int seg_idx = foot.first;
-                if (seg_idx < 0 || size_t(seg_idx + 1) >= it->polyline.points.size())
+                if (seg_idx < 0 || size_t(seg_idx + 1) >= poly2d.points.size())
                     continue;
 
-                const Point &a = it->polyline.points[size_t(seg_idx)];
-                const Point &b = it->polyline.points[size_t(seg_idx + 1)];
+                const Point &a = poly2d.points[size_t(seg_idx)];
+                const Point &b = poly2d.points[size_t(seg_idx + 1)];
                 const bool interior_projection = foot.second != a && foot.second != b;
                 const double distance_to_support = (sample - foot.second).cast<double>().norm();
                 const double normalized_support = std::max(0.0, 1.0 - distance_to_support / double(std::max<coord_t>(1, support_reach)));
@@ -621,10 +622,14 @@ void append_zig_zag_front_levels(ExtrusionPaths               &overhang_region,
 
         if (d_flip < d_keep)
             front.reverse();
-        if (current.last_point() == front.first_point())
-            current.polyline.append(front.points.begin() + 1, front.points.end());
-        else
-            current.polyline.append(std::move(front));
+        const coord_t z = current.polyline.empty() ? 0 : current.polyline.points.front().z();
+        Polyline3 front3(front, z);
+        if (current.last_point() == front.first_point()) {
+            if (front3.points.size() > 1)
+                current.polyline.points.insert(current.polyline.points.end(), front3.points.begin() + 1, front3.points.end());
+        } else {
+            current.polyline.append(front3);
+        }
     };
 
     std::function<void(size_t, size_t, bool)> follow_branch = [&](size_t level_idx, size_t front_idx, bool reverse_front) {
