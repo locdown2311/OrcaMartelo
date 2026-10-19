@@ -867,6 +867,12 @@ void GCodeWriter::set_speed(std::string &out, double F, const std::string &comme
 
 std::string GCodeWriter::travel_to_xy(const Vec2d &point, const std::string &comment)
 {
+    return this->travel_to_xy(point, 0.0, comment);
+}
+
+// Orca: wave-overhang — variant accepting an explicit speed override (mm/s). 0 = use config.
+std::string GCodeWriter::travel_to_xy(const Vec2d &point, double speed_override, const std::string &comment)
+{
     m_pos(0) = point(0);
     m_pos(1) = point(1);
 
@@ -884,6 +890,8 @@ std::string GCodeWriter::travel_to_xy(const Vec2d &point, const std::string &com
     }
     auto speed = this->point_on_first_layer(Vec3d(point_on_plate.x(), point_on_plate.y(), m_pos.z()))
         ? this->config.get_abs_value_at("initial_layer_travel_speed", m_cached_extruder_idx) : this->config.travel_speed.get_at(m_cached_extruder_idx);
+    if (speed_override > 0.0)
+        speed = speed_override;
     w.emit_f(speed * 60.0);
     //BBS
     w.emit_comment(GCodeWriter::full_gcode_comment, comment);
@@ -974,6 +982,12 @@ std::string GCodeWriter::eager_lift(const LiftType type) {
 
 std::string GCodeWriter::travel_to_xyz(const Vec3d &point, const std::string &comment, bool force_z)
 {
+    return this->travel_to_xyz(point, 0.0, comment, force_z);
+}
+
+// Orca: wave-overhang — variant accepting an explicit speed override (mm/s). 0 = use config.
+std::string GCodeWriter::travel_to_xyz(const Vec3d &point, double speed_override, const std::string &comment, bool force_z)
+{
     // FIXME: This function was not being used when travel_speed_z was separated (bd6badf).
     // Calculation of feedrate was not updated accordingly. If you want to use
     // this function, fix it first.
@@ -987,11 +1001,15 @@ std::string GCodeWriter::travel_to_xyz(const Vec3d &point, const std::string &co
     Vec3d dest_point = point;
     auto travel_speed =
         this->point_on_first_layer(Vec3d(point.x() - m_x_offset, point.y() - m_y_offset, point.z())) ? this->config.get_abs_value_at("initial_layer_travel_speed", m_cached_extruder_idx) : this->config.travel_speed.get_at(m_cached_extruder_idx);
+    if (speed_override > 0.0)
+        travel_speed = speed_override;
     // See uses_pointwise_travel_speed(): the historical path deliberately emits the
     // raw configured speed in the final branch below, ignoring travel_speed.
-    const double final_travel_speed = this->uses_pointwise_travel_speed()
+    double final_travel_speed = this->uses_pointwise_travel_speed()
         ? travel_speed
         : this->config.travel_speed.get_at(m_cached_extruder_idx);
+    if (speed_override > 0.0)
+        final_travel_speed = speed_override;
     //BBS: a z_hop need to be handle when travel
     if (std::abs(m_to_lift) > EPSILON) {
         assert(std::abs(m_lifted) < EPSILON);
@@ -1097,7 +1115,7 @@ std::string GCodeWriter::travel_to_xyz(const Vec3d &point, const std::string &co
             m_lifted = 0.;
         //BBS
         this->set_current_position_clear(true);
-        return this->travel_to_xy(to_2d(point));
+        return this->travel_to_xy(to_2d(point), speed_override, comment);
     }
     else {
         /*  In all the other cases, we perform an actual XYZ move and cancel

@@ -559,6 +559,11 @@ set(lisbslic3r_sources
     Utils.hpp
     VariableWidth.cpp
     VariableWidth.hpp
+    WaveOverhangs/WaveOverhangs.cpp
+    WaveOverhangs/WaveOverhangs.hpp
+    WaveOverhangs/IGenerator.hpp
+    WaveOverhangs/AndersonsGenerator.cpp
+    WaveOverhangs/AndersonsGenerator.hpp
     Zipper.cpp
     Zipper.hpp
     FilamentGroup.hpp

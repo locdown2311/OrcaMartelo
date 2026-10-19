@@ -118,6 +118,19 @@ public:
     std::vector<std::pair<FuzzySkinConfig, ExPolygons>> regions_by_fuzzify;
     // Area resting on the layer below, where fuzzy skin is allowed. Unset means no restriction.
     std::optional<ExPolygons>                       fuzzy_supported_area;
+
+    // Orca: 2D footprint of wave-overhang extrusions emitted by this generator
+    // (union of the areas filled by the WaveOverhangs algorithm). Picked up by
+    // LayerRegion::make_perimeters and written to Layer::wave_overhang_floor_polygons
+    // so detect_surfaces_type() can promote stInternal -> stBottomBridge above.
+    Polygons                                        out_wave_overhang_floor_polygons;
+
+    // Orca: 2D footprint of wave-overhang extrusions (union of filled_area)
+    // written unconditionally whenever wave paths generated in this region.
+    // Picked up by LayerRegion::make_perimeters and stashed in
+    // Layer::wave_overhang_covered_polygons for the support pipeline to
+    // subtract when support_remaining_areas_after_wave_overhangs is on.
+    Polygons                                        out_wave_overhang_covered_polygons;
     
     PerimeterGenerator(
         // Input:
@@ -168,7 +181,7 @@ public:
 private:
     std::vector<Polygons>     generate_lower_polygons_series(float width);
     void split_top_surfaces(const ExPolygons &orig_polygons, ExPolygons &top_fills, ExPolygons &non_top_polygons, ExPolygons &fill_clip) const;
-    void apply_extra_perimeters(ExPolygons& infill_area);
+    void apply_extra_perimeters(ExPolygons& infill_area, const ExPolygon& island_region);
     void process_no_bridge(Surfaces& all_surfaces, coord_t perimeter_spacing, coord_t ext_perimeter_width);
 
 private:
