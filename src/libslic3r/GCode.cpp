@@ -9652,6 +9652,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
                         return (previous.overlap <= fan_overlap_threshold) != (current.overlap <= fan_overlap_threshold);
                     }) != new_points.end();
             }
+    }
+
     // Orca: wave-overhang print speed override. Overrides any prior speed selection
     // (including dynamic overhang-speed results) so wave-overhang paths print at the
     // user-configured wave speed. Also disables variable_speed so we emit a single F.
