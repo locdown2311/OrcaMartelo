@@ -1485,7 +1485,30 @@ class BridgeServer(BaseHTTPRequestHandler):
                     telemetry["target_nozzle_temp"] = nozzle_val
                     telemetry["target_bed_temp"] = bed_val
 
-                # Primary Kobra 3 protocol: type print, action update, settings target_hotbed_temp / target_nozzle_temp
+                # 1. Direct Klipper / Moonraker dispatch (instant native control if Klipper/Rinkhals is running)
+                if PRINTER_IP:
+                    try:
+                        gcode_cmds = []
+                        if heater == "nozzle":
+                            gcode_cmds.append(f"M104 S{val}")
+                        elif heater == "bed":
+                            gcode_cmds.append(f"M140 S{val}")
+                        elif heater in ("both", "all"):
+                            gcode_cmds.append(f"M104 S{nozzle_val}")
+                            gcode_cmds.append(f"M140 S{bed_val}")
+                        for cmd in gcode_cmds:
+                            req = urllib.request.Request(
+                                f"http://{PRINTER_IP}/api/printer/command",
+                                data=json.dumps({"command": cmd}).encode("utf-8"),
+                                headers={"Content-Type": "application/json"}
+                            )
+                            urllib.request.urlopen(req, timeout=1)
+                            print(f"[Bridge] Sent direct Klipper G-code via Moonraker: {cmd}")
+                    except Exception as e:
+                        # Non-Klipper firmware or Moonraker endpoint unavailable; fallback to MQTT seamlessly
+                        pass
+
+                # 2. Primary Kobra 3 protocol: type print, action update, settings target_hotbed_temp / target_nozzle_temp
                 msg = {
                     "type": "print",
                     "action": "update",
