@@ -1891,9 +1891,10 @@ bool AnycubicLink::upload(PrintHostUpload upload_data, ProgressFn progress_fn, E
         }
     }
 
-    bool pre_engage = upload_data.extended("pre_engage_filament") != "0";
-    bool skip_first_toolchange = upload_data.extended("skip_first_toolchange") != "0"
-                              || upload_data.extended("replace_first_toolchange") != "0";
+    const bool is_start_print = (upload_data.post_action == PrintHostPostUploadAction::StartPrint);
+    bool pre_engage = is_start_print && (upload_data.extended("pre_engage_filament") != "0");
+    bool skip_first_toolchange = is_start_print && (upload_data.extended("skip_first_toolchange") != "0"
+                              || upload_data.extended("replace_first_toolchange") != "0");
     std::string custom_script = upload_data.extended("skip_first_toolchange_script");
     if (custom_script.empty()) {
         custom_script = "M83\nG28 X\nG1 E40 F300\nM106 S229\nM400 P2000\nG1 X20 F15000\nG28 X\n";
@@ -1914,127 +1915,6 @@ bool AnycubicLink::upload(PrintHostUpload upload_data, ProgressFn progress_fn, E
 #ifdef ORCACUBIC_DEV_BUILD
     save_dev_copy = upload_data.extended("save_dev_copy") == "1";
 #endif
-
-    std::string initial_slot_str = upload_data.extended("initial_slot");
-    bool channel_confirmed = false;
-    bool pre_engage_attempted = false;
-    if (pre_engage && !initial_slot_str.empty()) {
-        try {
-            int slot_idx = std::stoi(initial_slot_str);
-            if (slot_idx >= 0 && slot_idx <= 3) {
-                info_fn("AnycubicLink", GUI::from_u8((boost::format(_utf8(L("Pre-engaging filament slot %1%..."))) % (slot_idx + 1)).str()));
-                auto http_ext = Http::post("http://127.0.0.1:18988/control");
-                json ext_data = {
-                    {"action", "switch_channel"},
-                    {"index", slot_idx}
-                };
-                http_ext.header("Content-Type", "application/json")
-                        .header("X-OrcaCubic-Token", anycubic_lan_bridge_token())
-                        .set_post_body(ext_data.dump())
-                        .timeout_connect(1)
-                        .timeout_max(3)
-                        .perform_sync();
-                pre_engage_attempted = true;
-
-                // Brief settling grace period for the printer to receive the command and show the loading bar
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-
-                // Wait until the printer reports the target channel idle and feed complete.
-                // A full ACE-to-nozzle engagement (selector + preheat + feed) displays a loading bar
-                // on the printer screen; starting the print mid-feed causes the printer to cancel the job,
-                // so poll until both the selector and the material feed are completely finished and idle.
-                BOOST_LOG_TRIVIAL(info) << "[AnycubicLink] Pre-engaging extruder channel " << slot_idx << ", waiting for hardware confirmation...";
-                const auto start_time = std::chrono::steady_clock::now();
-                const auto timeout = std::chrono::seconds(25);
-                while (std::chrono::steady_clock::now() - start_time < timeout) {
-                    bool cancel = false;
-                    Http::Progress dummy_progress(0, 0, 0, 0, "");
-                    progress_fn(std::move(dummy_progress), cancel);
-                    if (cancel) {
-                        if (!temp_modified_file.empty()) {
-                            boost::system::error_code ec;
-                            fs::remove(temp_modified_file, ec);
-                        }
-                        return false;
-                    }
-
-                    try {
-                        auto req = Http::get("http://127.0.0.1:18988/status");
-                        req.header("X-OrcaCubic-Token", anycubic_lan_bridge_token())
-                           .timeout_connect(1)
-                           .timeout_max(1)
-                           .on_complete([&](std::string body, unsigned status) {
-                               if (status == 200) {
-                                   try {
-                                       json j = json::parse(body);
-                                       int curr_ch = j.value("channel_index", -1);
-                                       int ch_status = j.value("channel_status", -1);
-
-                                       // feed_status.current_status: 1 = Preheat, 2 = Retracting, 3 = Feeding, 10 = Complete, 0 = Idle
-                                       int feed_cur_status = 0;
-                                       if (j.contains("feed_status") && j["feed_status"].is_object()) {
-                                           feed_cur_status = j["feed_status"].value("current_status", 0);
-                                       }
-
-                                       std::string printer_state = j.value("state", "free");
-                                       boost::to_lower(printer_state);
-
-                                       bool is_loading_in_progress = (feed_cur_status >= 1 && feed_cur_status <= 3)
-                                                                  || (ch_status == 3)
-                                                                  || (printer_state == "feeding" || printer_state == "loading");
-
-                                       bool is_idle_or_ready = (printer_state == "free" || printer_state == "ready"
-                                                             || printer_state == "idle" || printer_state == "standby"
-                                                             || printer_state == "finish" || printer_state == "completed"
-                                                             || printer_state == "stop" || printer_state == "stopped");
-
-                                       // Confirmed only when target channel matches, selector is idle,
-                                       // material feed is complete/idle, and printer state is ready/free/idle.
-                                       if (curr_ch == slot_idx && ch_status == 0 && !is_loading_in_progress && is_idle_or_ready) {
-                                           channel_confirmed = true;
-                                       }
-                                   } catch (...) {}
-                               }
-                           })
-                           .perform_sync();
-                    } catch (...) {}
-                    if (channel_confirmed) {
-                        BOOST_LOG_TRIVIAL(info) << "[AnycubicLink] Hardware confirmed extruder channel engaged to " << slot_idx << " in "
-                            << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time).count() << "ms";
-                        break;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(300));
-                }
-                if (!channel_confirmed) {
-                    BOOST_LOG_TRIVIAL(warning) << "[AnycubicLink] Channel confirmation timed out; continuing standard upload flow.";
-                }
-            }
-        } catch (...) {}
-    }
-
-    if (pre_engage_attempted && !channel_confirmed) {
-        BOOST_LOG_TRIVIAL(warning) << "[AnycubicLink] Filament pre-engagement was not confirmed by the printer; reverting to standard toolchange.";
-        if (toolchange_skipped) {
-            if (!temp_modified_file.empty()) {
-                boost::system::error_code ec;
-                fs::remove(temp_modified_file, ec);
-                temp_modified_file.clear();
-            }
-            upload_file_path = upload_data.source_path;
-            toolchange_skipped = false;
-        }
-    }
-
-    if (toolchange_skipped && !channel_confirmed) {
-        BOOST_LOG_TRIVIAL(warning) << "[AnycubicLink] First tool change skipping disabled because pre-engagement was not confirmed.";
-        boost::system::error_code ec;
-        fs::remove(temp_modified_file, ec);
-        temp_modified_file.clear();
-        upload_file_path = upload_data.source_path;
-    }
-
-    // Save the developer copy only after the pre-engagement fallback decision,
-    // so it always matches the exact bytes being uploaded.
     if (save_dev_copy) {
         save_dev_copy_of_uploaded_file(upload_file_path);
     }
@@ -2095,7 +1975,171 @@ bool AnycubicLink::upload(PrintHostUpload upload_data, ProgressFn progress_fn, E
         return false;
     }
 
-    if (upload_data.post_action == PrintHostPostUploadAction::StartPrint) {
+    if (is_start_print) {
+        std::string initial_slot_str = upload_data.extended("initial_slot");
+        bool channel_confirmed = false;
+        if (pre_engage && !initial_slot_str.empty()) {
+            try {
+                int slot_idx = std::stoi(initial_slot_str);
+                if (slot_idx >= 0 && slot_idx <= 3) {
+                    bool already_engaged = false;
+                    try {
+                        auto check_req = Http::get("http://127.0.0.1:18988/status");
+                        check_req.header("X-OrcaCubic-Token", anycubic_lan_bridge_token())
+                                 .timeout_connect(1)
+                                 .timeout_max(2)
+                                 .on_complete([&](std::string body, unsigned status) {
+                                     if (status == 200) {
+                                         try {
+                                             json j = json::parse(body);
+                                             int curr_ch = j.value("channel_index", -1);
+                                             int ch_status = j.value("channel_status", -1);
+                                             int feed_cur_status = 0;
+                                             if (j.contains("feed_status") && j["feed_status"].is_object()) {
+                                                 feed_cur_status = j["feed_status"].value("current_status", 0);
+                                             }
+                                             std::string pstate = "free";
+                                             if (j.contains("state")) {
+                                                 if (j["state"].is_string()) {
+                                                     pstate = j["state"].get<std::string>();
+                                                 } else if (j["state"].is_number()) {
+                                                     int sn = j["state"].get<int>();
+                                                     pstate = (sn == 0) ? "free" : std::to_string(sn);
+                                                 }
+                                             }
+                                             boost::to_lower(pstate);
+                                             bool is_idle = (pstate == "free" || pstate == "ready" || pstate == "idle"
+                                                          || pstate == "standby" || pstate == "finish" || pstate == "completed"
+                                                          || pstate == "stop" || pstate == "stopped");
+                                             if (curr_ch == slot_idx && ch_status == 0 && feed_cur_status == 0 && is_idle) {
+                                                 already_engaged = true;
+                                             }
+                                         } catch (...) {}
+                                     }
+                                 })
+                                 .perform_sync();
+                    } catch (...) {}
+
+                    if (already_engaged) {
+                        BOOST_LOG_TRIVIAL(info) << "[AnycubicLink] Filament slot " << slot_idx << " is already engaged in extruder and idle; skipping switch.";
+                        channel_confirmed = true;
+                    } else {
+                        BOOST_LOG_TRIVIAL(info) << "[AnycubicLink] Triggering pre-engage filament slot " << slot_idx << "...";
+                        info_fn("AnycubicLink", GUI::from_u8((boost::format(_utf8(L("Pre-engaging filament slot %1%..."))) % (slot_idx + 1)).str()));
+                        auto http_ext = Http::post("http://127.0.0.1:18988/control");
+                        json ext_data = {
+                            {"action", "switch_channel"},
+                            {"index", slot_idx}
+                        };
+                        http_ext.header("Content-Type", "application/json")
+                                .header("X-OrcaCubic-Token", anycubic_lan_bridge_token())
+                                .set_post_body(ext_data.dump())
+                                .timeout_connect(1)
+                                .timeout_max(3)
+                                .perform_sync();
+
+                        std::this_thread::sleep_for(std::chrono::seconds(2));
+
+                        const auto start_time = std::chrono::steady_clock::now();
+                        const auto timeout = std::chrono::seconds(90);
+                        int last_reported_feed_status = -1;
+                        while (std::chrono::steady_clock::now() - start_time < timeout) {
+                            bool cancel = false;
+                            Http::Progress dummy_progress(0, 0, 0, 0, "");
+                            progress_fn(std::move(dummy_progress), cancel);
+                            if (cancel) {
+                                if (!temp_modified_file.empty()) {
+                                    boost::system::error_code ec;
+                                    fs::remove(temp_modified_file, ec);
+                                }
+                                return false;
+                            }
+
+                            try {
+                                auto req = Http::get("http://127.0.0.1:18988/status");
+                                req.header("X-OrcaCubic-Token", anycubic_lan_bridge_token())
+                                   .timeout_connect(1)
+                                   .timeout_max(2)
+                                   .on_complete([&](std::string body, unsigned status) {
+                                       if (status == 200) {
+                                           try {
+                                               json j = json::parse(body);
+                                               int curr_ch = j.value("channel_index", -1);
+                                               int ch_status = j.value("channel_status", -1);
+
+                                               int feed_cur_status = 0;
+                                               if (j.contains("feed_status") && j["feed_status"].is_object()) {
+                                                   feed_cur_status = j["feed_status"].value("current_status", 0);
+                                               }
+
+                                               std::string printer_state = "free";
+                                               if (j.contains("state")) {
+                                                   if (j["state"].is_string()) {
+                                                       printer_state = j["state"].get<std::string>();
+                                                   } else if (j["state"].is_number()) {
+                                                       int st_num = j["state"].get<int>();
+                                                       if (st_num == 0) printer_state = "free";
+                                                       else if (st_num == 2) printer_state = "printing";
+                                                       else if (st_num == 3) printer_state = "paused";
+                                                       else printer_state = std::to_string(st_num);
+                                                   }
+                                               }
+                                               boost::to_lower(printer_state);
+
+                                               bool is_loading_in_progress = (feed_cur_status >= 1 && feed_cur_status <= 3)
+                                                                          || (ch_status == 3)
+                                                                          || (printer_state == "feeding" || printer_state == "loading");
+
+                                               bool is_idle_or_ready = (printer_state == "free" || printer_state == "ready"
+                                                                     || printer_state == "idle" || printer_state == "standby"
+                                                                     || printer_state == "finish" || printer_state == "completed"
+                                                                     || printer_state == "stop" || printer_state == "stopped");
+
+                                               if (feed_cur_status != last_reported_feed_status) {
+                                                   last_reported_feed_status = feed_cur_status;
+                                                   if (feed_cur_status == 1) {
+                                                       info_fn("AnycubicLink", GUI::from_u8((boost::format(_utf8(L("Preheating nozzle for filament slot %1%..."))) % (slot_idx + 1)).str()));
+                                                   } else if (feed_cur_status == 2) {
+                                                       info_fn("AnycubicLink", GUI::from_u8(_utf8(L("Retracting filament..."))));
+                                                   } else if (feed_cur_status == 3) {
+                                                       info_fn("AnycubicLink", GUI::from_u8((boost::format(_utf8(L("Feeding filament slot %1% into extruder..."))) % (slot_idx + 1)).str()));
+                                                   }
+                                               }
+
+                                               if (curr_ch == slot_idx && ch_status == 0 && !is_loading_in_progress && is_idle_or_ready) {
+                                                   channel_confirmed = true;
+                                               }
+                                           } catch (...) {}
+                                       }
+                                   })
+                                   .perform_sync();
+                            } catch (...) {}
+
+                            if (channel_confirmed) {
+                                BOOST_LOG_TRIVIAL(info) << "[AnycubicLink] Hardware confirmed extruder channel engaged to " << slot_idx << " in "
+                                    << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time).count() << "ms";
+                                break;
+                            }
+                            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                        }
+
+                        if (!channel_confirmed) {
+                            BOOST_LOG_TRIVIAL(warning) << "[AnycubicLink] Filament pre-engagement timed out for slot " << slot_idx;
+                        }
+                    }
+                }
+            } catch (...) {}
+
+            if (!channel_confirmed) {
+                if (!temp_modified_file.empty()) {
+                    boost::system::error_code ec;
+                    fs::remove(temp_modified_file, ec);
+                }
+                error_fn(GUI::from_u8(_utf8(L("Filament pre-engagement failed or timed out. Print was not started."))));
+                return false;
+            }
+        }
+
         info_fn("AnycubicLink", GUI::from_u8((boost::format(_utf8(L("File uploaded. Triggering print on %1%..."))) % m_device_name).str()));
         wxString start_err;
         if (!start_print(start_err, upload_filename, upload_data, upload_file_path)) {

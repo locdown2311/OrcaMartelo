@@ -105,6 +105,27 @@ class TargetBindingTests(unittest.TestCase):
         finally:
             daemon.mqtt_client = old_client
 
+    def test_state_is_always_normalized_string_in_telemetry_and_status(self):
+        self.assertEqual(daemon.normalize_printer_state(0), "free")
+        self.assertEqual(daemon.normalize_printer_state(1), "busy")
+        self.assertEqual(daemon.normalize_printer_state(2), "printing")
+        self.assertEqual(daemon.normalize_printer_state("0"), "free")
+        self.assertEqual(daemon.normalize_printer_state("READY"), "free")
+
+        daemon.telemetry["state"] = 0
+        pub = daemon.public_telemetry()
+        self.assertIsInstance(pub["state"], str)
+        self.assertEqual(pub["state"], "free")
+
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
+        conn.request("GET", "/status", headers={"X-OrcaCubic-Token": "test-token"})
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 200)
+        data = json.loads(resp.read())
+        conn.close()
+        self.assertIsInstance(data.get("state"), str)
+        self.assertEqual(data.get("state"), "free")
+
     def test_start_print_job_for_3mf_uses_local_task_and_internal_gcode_name(self):
         published_messages = []
         class MockMqttClient:

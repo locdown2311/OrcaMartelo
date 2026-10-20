@@ -129,9 +129,41 @@ def is_command_filename(filename):
         or "_command_" in base
     )
 
+STATE_CODE_MAP = {
+    0: "free",
+    1: "busy",
+    2: "printing",
+    3: "paused",
+    4: "completed",
+    5: "stopped",
+}
+
+
+def normalize_printer_state(state_value):
+    if isinstance(state_value, int):
+        return STATE_CODE_MAP.get(state_value, "free" if state_value == 0 else str(state_value))
+    if isinstance(state_value, str):
+        val = state_value.strip().lower()
+        if val in ("0", "free", "ready", "idle", "standby"):
+            return "free"
+        if val in ("1", "busy", "preparing", "heating"):
+            return "busy"
+        if val in ("2", "printing"):
+            return "printing"
+        if val in ("3", "paused"):
+            return "paused"
+        if val in ("4", "completed", "finish", "finished"):
+            return "completed"
+        if val in ("5", "stopped", "stop", "cancel", "cancelled"):
+            return "stopped"
+        return val
+    return "free"
+
+
 def public_telemetry():
     """Return dashboard telemetry without exposing token-bearing printer URLs."""
     res = {key: value for key, value in telemetry.items() if key != "upload_url"}
+    res["state"] = normalize_printer_state(res.get("state", "free"))
     if is_command_filename(res.get("job_name")):
         res["job_name"] = "Ready"
         st = str(res.get("state", "")).lower()
@@ -477,7 +509,7 @@ def on_mqtt_message(c, userdata, msg):
                 project = data.get("project", {}) if isinstance(data, dict) else {}
                 if project:
                     proj_fname = project.get("filename", "")
-                    proj_state = project.get("state", telemetry["state"])
+                    proj_state = normalize_printer_state(project.get("state", telemetry["state"]))
                     is_cmd = is_command_filename(proj_fname)
 
                     if is_cmd:
@@ -535,8 +567,8 @@ def on_mqtt_message(c, userdata, msg):
 
         elif t == "status":
             st = payload.get("state", "")
-            if st:
-                telemetry["state"] = st
+            if st != "":
+                telemetry["state"] = normalize_printer_state(st)
                 if is_command_filename(telemetry.get("job_name")):
                     telemetry["job_name"] = "Ready"
 
