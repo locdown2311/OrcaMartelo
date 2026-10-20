@@ -1455,6 +1455,7 @@
                 <div class="job-inline-stat"><span>Layer</span><b id="stat-layer">0 / 0</b></div>
                 <div class="job-inline-stat"><span>Elapsed</span><b id="stat-elapsed">0m</b></div>
                 <div class="job-inline-stat"><span>Remaining</span><b id="stat-remaining">--</b></div>
+                <div class="job-inline-stat"><span>ETA</span><b id="stat-eta">--</b></div>
                 <div class="job-inline-stat"><span>Action</span><b id="stat-action" style="color:#1677ff;">Ready</b></div>
                 <div class="job-inline-spacer"></div>
                 <div class="job-icon-actions">
@@ -3175,6 +3176,42 @@
             document.getElementById("slot-modal").style.display = "none";
         }
 
+        function formatDuration(totalMin) {
+            let min = Math.max(0, parseInt(totalMin || 0, 10));
+            if (min > 14400) min = Math.round(min / 60);
+            if (min <= 0) return "0m";
+            if (min < 60) return min + "m";
+            const hours = Math.floor(min / 60);
+            const remMin = min % 60;
+            if (hours < 24) {
+                return remMin > 0 ? `${hours}h ${remMin}m` : `${hours}h`;
+            }
+            const days = Math.floor(hours / 24);
+            const remHours = hours % 24;
+            return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+        }
+
+        function formatETA(remainMin) {
+            let min = parseInt(remainMin || 0, 10);
+            if (min > 14400) min = Math.round(min / 60);
+            if (min <= 0) return "--";
+            const now = new Date();
+            const finish = new Date(now.getTime() + min * 60 * 1000);
+            const hh = String(finish.getHours()).padStart(2, '0');
+            const mm = String(finish.getMinutes()).padStart(2, '0');
+
+            const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const finishDate = new Date(finish.getFullYear(), finish.getMonth(), finish.getDate());
+            const dayDiff = Math.round((finishDate - nowDate) / (24 * 60 * 60 * 1000));
+
+            if (dayDiff === 1) {
+                return `${hh}:${mm} (+1d)`;
+            } else if (dayDiff > 1) {
+                return `${hh}:${mm} (+${dayDiff}d)`;
+            }
+            return `${hh}:${mm}`;
+        }
+
         function refreshStatus() {
             pollTelemetry();
         }
@@ -3305,6 +3342,8 @@
                 if (statLayerEl) statLayerEl.innerText = "0 / 0";
                 document.getElementById("stat-elapsed").innerText = "0m";
                 document.getElementById("stat-remaining").innerText = "--";
+                const statEtaEl = document.getElementById("stat-eta");
+                if (statEtaEl) statEtaEl.innerText = "--";
             } else {
                 if (data.progress !== undefined) {
                     document.getElementById("job-pct").innerText = Math.round(data.progress) + "%";
@@ -3340,11 +3379,59 @@
                         }
                     }
                 }
-                if (data.print_time !== undefined) {
-                    document.getElementById("stat-elapsed").innerText = data.print_time + "m";
+                let elapsedMin = parseInt(data.print_time || 0, 10);
+                if (elapsedMin > 14400) elapsedMin = Math.round(elapsedMin / 60);
+                const statElapsedEl = document.getElementById("stat-elapsed");
+                if (statElapsedEl) {
+                    statElapsedEl.innerText = formatDuration(elapsedMin);
+                    statElapsedEl.title = `${elapsedMin}m elapsed`;
                 }
-                if (data.remain_time !== undefined) {
-                    document.getElementById("stat-remaining").innerText = hasActiveJob ? (data.remain_time + "m") : "--";
+
+                let remainMin = parseInt(data.remain_time || 0, 10);
+                if (remainMin > 14400) remainMin = Math.round(remainMin / 60);
+
+                const progress = parseFloat(data.progress || 0);
+                const currLayer = parseInt(data.curr_layer || 0, 10);
+                const totalLayers = parseInt(data.total_layers || 0, 10);
+
+                // If printer reports 0 or omits remain_time while actively printing, estimate it
+                if (hasActiveJob && remainMin <= 0) {
+                    if (progress > 1 && progress < 100 && elapsedMin > 0) {
+                        remainMin = Math.round(elapsedMin * (100 - progress) / progress);
+                    } else if (totalLayers > currLayer && currLayer > 0 && elapsedMin > 0) {
+                        remainMin = Math.round(elapsedMin * (totalLayers - currLayer) / currLayer);
+                    }
+                }
+
+                const statRemainingEl = document.getElementById("stat-remaining");
+                if (statRemainingEl) {
+                    if (hasActiveJob && remainMin > 0) {
+                        statRemainingEl.innerText = formatDuration(remainMin);
+                        statRemainingEl.title = `${remainMin}m remaining`;
+                    } else if (hasActiveJob) {
+                        statRemainingEl.innerText = "Estimating...";
+                        statRemainingEl.title = "Estimating remaining time...";
+                    } else {
+                        statRemainingEl.innerText = "--";
+                        statRemainingEl.title = "";
+                    }
+                }
+
+                const statEtaEl = document.getElementById("stat-eta");
+                if (statEtaEl) {
+                    if (hasActiveJob && remainMin > 0) {
+                        statEtaEl.innerText = formatETA(remainMin);
+                        const finish = new Date(Date.now() + remainMin * 60 * 1000);
+                        statEtaEl.title = `Estimated completion: ${finish.toLocaleDateString()} ${String(finish.getHours()).padStart(2, '0')}:${String(finish.getMinutes()).padStart(2, '0')}`;
+                    } else {
+                        statEtaEl.innerText = "--";
+                        statEtaEl.title = "";
+                    }
+                }
+
+                const progBar = document.getElementById("job-progress-bar");
+                if (progBar && hasActiveJob && remainMin > 0) {
+                    progBar.title = `${Math.round(progress)}% - ${formatDuration(remainMin)} remaining (ETA ${formatETA(remainMin)})`;
                 }
             }
             const actionEl = document.getElementById("stat-action");

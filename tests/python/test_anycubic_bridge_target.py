@@ -126,6 +126,32 @@ class TargetBindingTests(unittest.TestCase):
         self.assertIsInstance(data.get("state"), str)
         self.assertEqual(data.get("state"), "free")
 
+    def test_estimated_remaining_time_and_eta_when_printer_reports_zero(self):
+        msg = {
+            "type": "report",
+            "data": {
+                "project": {
+                    "filename": "presepe.gcode",
+                    "state": "printing",
+                    "curr_layer": 114,
+                    "total_layers": 475,
+                    "progress": 24,
+                    "print_time": 85,
+                    "remain_time": 0
+                }
+            }
+        }
+        daemon.on_mqtt_message(None, None, type("MqttMsg", (), {"topic": "anycubic/anycubicCloud/v1/printer/public/20030/test-device/info/report", "payload": json.dumps(msg).encode()})())
+        self.assertEqual(daemon.telemetry["state"], "printing")
+        self.assertEqual(daemon.telemetry["print_time"], 85)
+        self.assertGreater(daemon.telemetry["remain_time"], 250)
+        self.assertLess(daemon.telemetry["remain_time"], 280)
+
+        pub = daemon.public_telemetry()
+        self.assertIn("estimated_end_time", pub)
+        self.assertNotEqual(pub["estimated_end_time"], "--")
+        self.assertEqual(len(pub["estimated_end_time"]), 5)  # HH:MM
+
     def test_start_print_job_for_3mf_uses_local_task_and_internal_gcode_name(self):
         published_messages = []
         class MockMqttClient:

@@ -173,6 +173,15 @@ def public_telemetry():
             res["progress"] = 0
             res["print_time"] = 0
             res["remain_time"] = 0
+    rem = _as_int(res.get("remain_time", 0))
+    st = str(res.get("state", "")).lower()
+    if rem > 0 and st in ("printing", "busy", "paused"):
+        end_ts = int(time.time() + rem * 60)
+        res["estimated_end_time"] = time.strftime("%H:%M", time.localtime(end_ts))
+        res["estimated_end_timestamp"] = end_ts
+    else:
+        res["estimated_end_time"] = "--"
+        res["estimated_end_timestamp"] = 0
     return res
 
 def rgb_to_hex(r, g, b):
@@ -548,9 +557,51 @@ def on_mqtt_message(c, userdata, msg):
                         )
                         if rep_total is not None and _as_int(rep_total, 0) > 0:
                             telemetry["total_layers"] = _as_int(rep_total)
-                        telemetry["remain_time"] = project.get("remain_time", telemetry["remain_time"])
-                        telemetry["print_time"] = project.get("print_time", telemetry["print_time"])
+                        rep_remain = (
+                            project.get("remain_time")
+                            or project.get("remainTime")
+                            or project.get("left_time")
+                            or project.get("leftTime")
+                            or project.get("remaining_time")
+                            or project.get("remainingTime")
+                            or project.get("remain_min")
+                            or project.get("remainMin")
+                            or project.get("left_min")
+                            or project.get("leftMin")
+                            or (data.get("remain_time") if isinstance(data, dict) else None)
+                            or (data.get("left_time") if isinstance(data, dict) else None)
+                        )
+                        if rep_remain is not None:
+                            val = _as_int(rep_remain, telemetry["remain_time"])
+                            if val > 14400:
+                                val = int(round(val / 60))
+                            telemetry["remain_time"] = val
+
+                        rep_print_time = (
+                            project.get("print_time")
+                            or project.get("printTime")
+                            or project.get("elapsed_time")
+                            or project.get("elapsedTime")
+                            or (data.get("print_time") if isinstance(data, dict) else None)
+                        )
+                        if rep_print_time is not None:
+                            pval = _as_int(rep_print_time, telemetry["print_time"])
+                            if pval > 14400:
+                                pval = int(round(pval / 60))
+                            telemetry["print_time"] = pval
+
                         telemetry["speed_mode"] = project.get("print_speed_mode", telemetry["speed_mode"])
+
+                        # If remain_time is omitted or reported as 0 by printer during active print, estimate it
+                        if telemetry["remain_time"] <= 0 and telemetry["state"] in ("printing", "busy", "paused"):
+                            pt = _as_int(telemetry.get("print_time", 0))
+                            prog = float(telemetry.get("progress", 0))
+                            curr_l = _as_int(telemetry.get("curr_layer", 0))
+                            tot_l = _as_int(telemetry.get("total_layers", 0))
+                            if pt > 0 and 0 < prog < 100:
+                                telemetry["remain_time"] = int(round(pt * (100.0 - prog) / prog))
+                            elif pt > 0 and tot_l > curr_l > 0:
+                                telemetry["remain_time"] = int(round(pt * (tot_l - curr_l) / curr_l))
 
                 urls = data.get("urls", {})
                 for cam_key in ("rtspUrl", "flvUrl", "cameraUrl", "videoUrl"):
