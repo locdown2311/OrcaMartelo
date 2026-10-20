@@ -1006,6 +1006,87 @@ class MaterialSystemTests(unittest.TestCase):
         self.assertEqual(pub["job_name"], "Ready")
         self.assertEqual(pub["total_layers"], 0)
 
+    def test_parse_print_time_from_bytes(self):
+        sample = b"; HEADER_BLOCK_START\n; print_time = 1h 25m 30s\n; total layer number: 120\n; HEADER_BLOCK_END\n"
+        mins = daemon._parse_print_time_from_bytes(sample)
+        self.assertEqual(mins, 86)
+
+        sample2 = b"; estimated printing time (normal mode) = 2h 10m\n"
+        self.assertEqual(daemon._parse_print_time_from_bytes(sample2), 130)
+
+        sample3 = b"; total estimated time: 45m 10s\n"
+        self.assertEqual(daemon._parse_print_time_from_bytes(sample3), 45)
+
+    def test_start_print_job_records_estimated_time_and_calculates_remain(self):
+        class MockMqtt:
+            def __init__(self):
+                self.published = []
+            def publish(self, topic, payload):
+                self.published.append((topic, payload))
+
+        old_client = daemon.mqtt_client
+        daemon.mqtt_client = MockMqtt()
+        daemon.model_id = "test_model"
+        daemon.device_id = "test_device"
+        daemon.telemetry["connected"] = True
+        daemon.telemetry["state"] = "printing"
+        daemon.telemetry["progress"] = 25.0
+        daemon.telemetry["remain_time"] = 0
+
+        try:
+            body = json.dumps({
+                "action": "start_print_job",
+                "filename": "dragon.gcode",
+                "estimated_print_time_min": 120,
+                "total_layers": 300
+            }).encode("utf-8")
+            class FakeReq:
+                def __init__(self):
+                    self.headers = {"Content-Length": str(len(body)), "X-OrcaCubic-Token": daemon.BRIDGE_TOKEN}
+                    self.rfile = io.BytesIO(body)
+                    self.wfile = io.BytesIO()
+                    self.client_address = ("127.0.0.1", 12345)
+                    self.path = "/control"
+                def require_authorized(self): return True
+                def send_response(self, code): self.code = code
+                def send_header(self, k, v): pass
+                def end_headers(self): pass
+
+            daemon.BridgeServer.do_POST(FakeReq())
+
+            self.assertEqual(daemon.telemetry["total_print_time"], 120)
+            self.assertEqual(daemon.job_estimated_times.get("dragon.gcode"), 120)
+
+            # Simulate MQTT telemetry update reporting 50% progress but remain_time=0
+            class MockMsg:
+                def __init__(self, topic, data):
+                    self.topic = topic
+                    self.payload = json.dumps(data).encode("utf-8")
+
+            info_payload = {
+                "code": 200,
+                "data": {
+                    "project": {
+                        "filename": "dragon.gcode",
+                        "state": "printing",
+                        "curr_layer": 150,
+                        "total_layers": 300,
+                        "progress": 50.0,
+                        "remain_time": 0
+                    }
+                }
+            }
+            msg = MockMsg("anycubic/anycubicCloud/v1/printer/public/test_model/test_device/info/report", info_payload)
+            daemon.on_mqtt_message(None, None, msg)
+
+            # 120 min total * (100 - 50)% = 60 min remaining
+            self.assertEqual(daemon.telemetry["remain_time"], 60)
+            pub = daemon.public_telemetry()
+            self.assertEqual(pub["remain_time"], 60)
+            self.assertNotEqual(pub["estimated_end_time"], "--")
+        finally:
+            daemon.mqtt_client = old_client
+
 
 if __name__ == "__main__":
     unittest.main()

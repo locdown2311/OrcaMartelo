@@ -61,6 +61,7 @@ telemetry = {
     "total_layers": 0,
     "print_time": 0,
     "remain_time": 0,
+    "total_print_time": 0,
     "nozzle_temp": 0,
     "target_nozzle_temp": 0,
     "bed_temp": 0,
@@ -110,6 +111,66 @@ def _parse_total_layers_from_bytes(content_bytes):
         pass
     return 0
 
+def _parse_time_str_to_minutes(val):
+    if not val:
+        return 0
+    if isinstance(val, (int, float)):
+        return int(round(val))
+    val_str = str(val).strip()
+    import re
+    d = re.search(r'(\d+)\s*d', val_str, re.IGNORECASE)
+    h = re.search(r'(\d+)\s*h', val_str, re.IGNORECASE)
+    m = re.search(r'(\d+)\s*m', val_str, re.IGNORECASE)
+    s = re.search(r'(\d+)\s*s', val_str, re.IGNORECASE)
+    if d or h or m or s:
+        days = int(d.group(1)) if d else 0
+        hours = int(h.group(1)) if h else 0
+        mins = int(m.group(1)) if m else 0
+        secs = int(s.group(1)) if s else 0
+        return days * 1440 + hours * 60 + mins + (1 if secs >= 30 else 0)
+    parts = val_str.split(":")
+    if len(parts) == 3:
+        try:
+            return int(parts[0]) * 60 + int(parts[1]) + (1 if int(parts[2]) >= 30 else 0)
+        except Exception:
+            pass
+    elif len(parts) == 2:
+        try:
+            return int(parts[0]) * 60 + int(parts[1])
+        except Exception:
+            pass
+    try:
+        num = float(val_str)
+        if num > 14400:
+            return int(round(num / 60))
+        return int(round(num))
+    except Exception:
+        pass
+    return 0
+
+def _parse_print_time_from_bytes(content_bytes):
+    try:
+        sample = content_bytes[:1048576]
+        if len(content_bytes) > 2097152:
+            sample += content_bytes[-1048576:]
+        sample_str = sample.decode("utf-8", errors="ignore")
+        import re
+        patterns = [
+            r";\s*print_time\s*=\s*([^\r\n;]+)",
+            r";\s*estimated printing time[^=\r\n]*=\s*([^\r\n;]+)",
+            r";\s*total estimated time:\s*([^\r\n;]+)",
+            r";\s*model printing time:\s*([^\r\n;]+)",
+        ]
+        for pat in patterns:
+            m = re.search(pat, sample_str, re.IGNORECASE)
+            if m:
+                mins = _parse_time_str_to_minutes(m.group(1).strip())
+                if mins > 0:
+                    return mins
+    except Exception:
+        pass
+    return 0
+
 mqtt_client = None
 creds = {}
 model_id = ""
@@ -118,6 +179,7 @@ pending_cleanup = []
 shutdown_event = threading.Event()
 server_instance = None
 slot_brand_overrides = {}
+job_estimated_times = {}
 
 def is_command_filename(filename):
     if not filename or not isinstance(filename, str):
@@ -533,12 +595,26 @@ def on_mqtt_message(c, userdata, msg):
                             telemetry["progress"] = 0
                             telemetry["remain_time"] = 0
                             telemetry["print_time"] = 0
+                            telemetry["total_print_time"] = 0
                             telemetry["job_name"] = "Ready"
                     else:
                         telemetry["state"] = proj_state
                         telemetry["progress"] = project.get("progress", telemetry["progress"])
                         if proj_fname:
                             telemetry["job_name"] = proj_fname
+                            b_proj = os.path.basename(proj_fname)
+                            est = job_estimated_times.get(b_proj, 0)
+                            if not est:
+                                if b_proj.lower().endswith(".gcode"):
+                                    est = job_estimated_times.get(b_proj[:-6], 0)
+                                elif b_proj.lower().endswith(".3mf"):
+                                    est = job_estimated_times.get(b_proj[:-4], 0)
+                            if not est:
+                                for k, v in job_estimated_times.items():
+                                    if k and (k in b_proj or b_proj in k):
+                                        est = v
+                                        break
+                            telemetry["total_print_time"] = est
                         rep_curr = project.get("curr_layer")
                         if rep_curr is None:
                             rep_curr = project.get("cur_layer", project.get("current_layer", data.get("curr_layer") if isinstance(data, dict) else None))
@@ -557,22 +633,19 @@ def on_mqtt_message(c, userdata, msg):
                         )
                         if rep_total is not None and _as_int(rep_total, 0) > 0:
                             telemetry["total_layers"] = _as_int(rep_total)
-                        rep_remain = (
-                            project.get("remain_time")
-                            or project.get("remainTime")
-                            or project.get("left_time")
-                            or project.get("leftTime")
-                            or project.get("remaining_time")
-                            or project.get("remainingTime")
-                            or project.get("remain_min")
-                            or project.get("remainMin")
-                            or project.get("left_min")
-                            or project.get("leftMin")
-                            or (data.get("remain_time") if isinstance(data, dict) else None)
-                            or (data.get("left_time") if isinstance(data, dict) else None)
-                        )
+
+                        rep_remain = None
+                        for k in ("remain_time", "remainTime", "left_time", "leftTime", "remaining_time", "remainingTime", "remain_min", "remainMin", "left_min", "leftMin"):
+                            if isinstance(project, dict) and k in project and project[k] is not None:
+                                rep_remain = project[k]
+                                break
+                        if rep_remain is None and isinstance(data, dict):
+                            for k in ("remain_time", "left_time"):
+                                if k in data and data[k] is not None:
+                                    rep_remain = data[k]
+                                    break
                         if rep_remain is not None:
-                            val = _as_int(rep_remain, telemetry["remain_time"])
+                            val = _as_int(rep_remain, 0)
                             if val > 14400:
                                 val = int(round(val / 60))
                             telemetry["remain_time"] = val
@@ -598,7 +671,13 @@ def on_mqtt_message(c, userdata, msg):
                             prog = float(telemetry.get("progress", 0))
                             curr_l = _as_int(telemetry.get("curr_layer", 0))
                             tot_l = _as_int(telemetry.get("total_layers", 0))
-                            if pt > 0 and 0 < prog < 100:
+                            total_est = _as_int(telemetry.get("total_print_time", 0))
+                            if total_est > 0:
+                                if 0 <= prog <= 100:
+                                    telemetry["remain_time"] = max(0, int(round(total_est * (100.0 - prog) / 100.0)))
+                                elif tot_l > 0 and curr_l >= 0:
+                                    telemetry["remain_time"] = max(0, int(round(total_est * (tot_l - curr_l) / tot_l)))
+                            elif pt > 0 and 0 < prog < 100:
                                 telemetry["remain_time"] = int(round(pt * (100.0 - prog) / prog))
                             elif pt > 0 and tot_l > curr_l > 0:
                                 telemetry["remain_time"] = int(round(pt * (tot_l - curr_l) / curr_l))
@@ -1042,13 +1121,25 @@ def upload_and_start_print_file(content_bytes, raw_filename, use_ams=True, task_
     if fname and not is_command_filename(fname):
         telemetry["job_name"] = fname
 
+    start_name = start_filename_for_print(fname)
+    parsed_time = _parse_print_time_from_bytes(content_bytes)
+    if parsed_time > 0:
+        telemetry["total_print_time"] = parsed_time
+        telemetry["remain_time"] = parsed_time
+        b_name = os.path.basename(fname)
+        job_estimated_times[b_name] = parsed_time
+        job_estimated_times[os.path.basename(start_name)] = parsed_time
+        if b_name.lower().endswith(".gcode"):
+            job_estimated_times[b_name[:-6]] = parsed_time
+        elif b_name.lower().endswith(".3mf"):
+            job_estimated_times[b_name[:-4]] = parsed_time
+
     ams_mapping = _default_ams_mapping(use_ams)
     ts = task_settings or {}
     auto_leveling = 1 if ts.get("auto_leveling", 1) else 0
     vibration_compensation = 1 if ts.get("vibration_compensation", 0) else 0
     flow_calibration = 1 if ts.get("flow_calibration", 0) else 0
     timelapse_status = 1 if ts.get("timelapse", 0) else 0
-    start_name = start_filename_for_print(fname)
 
     topic = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/print"
     msg = {
@@ -1551,6 +1642,22 @@ class BridgeServer(BaseHTTPRequestHandler):
                         telemetry["curr_layer"] = 0
                     if filename and not is_command_filename(filename):
                         telemetry["job_name"] = filename
+
+                    total_min = _as_int(data.get("estimated_print_time_min", 0), 0)
+                    if total_min <= 0:
+                        dhms = data.get("estimated_print_time_dhms")
+                        if dhms:
+                            total_min = _parse_time_str_to_minutes(dhms)
+                    if total_min > 0:
+                        telemetry["total_print_time"] = total_min
+                        telemetry["remain_time"] = total_min
+                        b_name = os.path.basename(filename)
+                        job_estimated_times[b_name] = total_min
+                        job_estimated_times[os.path.basename(target_filename)] = total_min
+                        if b_name.lower().endswith(".gcode"):
+                            job_estimated_times[b_name[:-6]] = total_min
+                        elif b_name.lower().endswith(".3mf"):
+                            job_estimated_times[b_name[:-4]] = total_min
 
                     mqtt_client.publish(topic_print, json.dumps(msg))
                     print(f"[Bridge] Published print:start for {filename} with use_ams={use_ams} ams_mapping={json.dumps(ams_mapping)}")

@@ -497,8 +497,29 @@ static bool ensure_anycubic_gcode_header_in_text(std::string& gcode)
                 total_layers = std::atoi(&gcode[colon]);
             }
         }
-        if (total_layers > 0) {
-            std::string stats_block = (boost::format("; statistics = begin\n; total_layers = %1%\n; statistics = end\n") % total_layers).str();
+        std::string print_time_str;
+        auto pt_pos = gcode.find("; estimated printing time");
+        if (pt_pos == std::string::npos) pt_pos = gcode.find("; total estimated time:");
+        if (pt_pos == std::string::npos) pt_pos = gcode.find("; model printing time:");
+        if (pt_pos != std::string::npos) {
+            auto eq = gcode.find_first_of(":= ", pt_pos + 15);
+            while (eq < gcode.size() && (gcode[eq] == ':' || gcode[eq] == '=' || gcode[eq] == ' '))
+                ++eq;
+            auto eol = gcode.find_first_of("\r\n;", eq);
+            if (eq < eol && eol != std::string::npos) {
+                print_time_str = gcode.substr(eq, eol - eq);
+                boost::trim(print_time_str);
+            }
+        }
+
+        if (total_layers > 0 || !print_time_str.empty()) {
+            std::string stats_block = "; statistics = begin\n";
+            if (total_layers > 0)
+                stats_block += (boost::format("; total_layers = %1%\n") % total_layers).str();
+            if (!print_time_str.empty())
+                stats_block += (boost::format("; print_time = %1%\n") % print_time_str).str();
+            stats_block += "; statistics = end\n";
+
             auto header_end = gcode.find("; HEADER_BLOCK_END\n");
             if (header_end != std::string::npos) {
                 gcode.insert(header_end, stats_block);
@@ -1606,6 +1627,8 @@ bool AnycubicLink::start_print(wxString& error_msg, const std::string& filename,
             {"ams_box_mapping", ams_box_mapping},
             {"pre_engage_filament", read_toggle("pre_engage_filament", true)},
             {"initial_slot", upload_data.extended("initial_slot")},
+            {"estimated_print_time_min", upload_data.extended("estimated_print_time_min")},
+            {"estimated_print_time_dhms", upload_data.extended("estimated_print_time_dhms")},
             {"task_settings", {
                 {"auto_leveling", task_settings.auto_leveling},
                 {"vibration_compensation", task_settings.vibration_compensation},

@@ -21501,6 +21501,24 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
                     extruders_str += std::to_string(used_extruders[i]);
                 }
                 upload_job.upload_data.extended_info["plate_extruders"] = extruders_str;
+
+                PrintBase* pb = nullptr;
+                GCodeResult* res = nullptr;
+                int idx = -1;
+                plate->get_print(&pb, &res, &idx);
+                double normal_time = 0.0;
+                if (res != nullptr) {
+                    normal_time = res->print_statistics.modes[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].time;
+                }
+                if (normal_time <= 0.0 && p->background_process.fff_print() != nullptr) {
+                    normal_time = p->background_process.fff_print()->print_statistics().modes[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].time;
+                }
+                if (normal_time > 0.0) {
+                    int total_min = static_cast<int>(std::round(normal_time / 60.0));
+                    upload_job.upload_data.extended_info["estimated_print_time_min"] = std::to_string(total_min);
+                    upload_job.upload_data.extended_info["estimated_print_time_sec"] = std::to_string(static_cast<int>(normal_time));
+                    upload_job.upload_data.extended_info["estimated_print_time_dhms"] = Slic3r::get_time_dhms(static_cast<float>(normal_time));
+                }
             }
         }
     }

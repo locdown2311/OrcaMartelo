@@ -3395,8 +3395,15 @@
                 const totalLayers = parseInt(data.total_layers || 0, 10);
 
                 // If printer reports 0 or omits remain_time while actively printing, estimate it
+                const totalEst = parseInt(data.total_print_time || 0, 10);
                 if (hasActiveJob && remainMin <= 0) {
-                    if (progress > 1 && progress < 100 && elapsedMin > 0) {
+                    if (totalEst > 0) {
+                        if (progress >= 0 && progress < 100) {
+                            remainMin = Math.round(totalEst * (100 - progress) / 100);
+                        } else if (totalLayers > currLayer && totalLayers > 0) {
+                            remainMin = Math.round(totalEst * (totalLayers - currLayer) / totalLayers);
+                        }
+                    } else if (progress > 1 && progress < 100 && elapsedMin > 0) {
                         remainMin = Math.round(elapsedMin * (100 - progress) / progress);
                     } else if (totalLayers > currLayer && currLayer > 0 && elapsedMin > 0) {
                         remainMin = Math.round(elapsedMin * (totalLayers - currLayer) / currLayer);
@@ -3407,7 +3414,7 @@
                 if (statRemainingEl) {
                     if (hasActiveJob && remainMin > 0) {
                         statRemainingEl.innerText = formatDuration(remainMin);
-                        statRemainingEl.title = `${remainMin}m remaining`;
+                        statRemainingEl.title = totalEst > 0 ? `${remainMin}m remaining (Estimated total: ${formatDuration(totalEst)})` : `${remainMin}m remaining`;
                     } else if (hasActiveJob) {
                         statRemainingEl.innerText = "Estimating...";
                         statRemainingEl.title = "Estimating remaining time...";
@@ -3431,7 +3438,8 @@
 
                 const progBar = document.getElementById("job-progress-bar");
                 if (progBar && hasActiveJob && remainMin > 0) {
-                    progBar.title = `${Math.round(progress)}% - ${formatDuration(remainMin)} remaining (ETA ${formatETA(remainMin)})`;
+                    const totalInfo = totalEst > 0 ? ` / ${formatDuration(totalEst)}` : '';
+                    progBar.title = `${Math.round(progress)}% - ${formatDuration(remainMin)} remaining${totalInfo} (ETA ${formatETA(remainMin)})`;
                 }
             }
             const actionEl = document.getElementById("stat-action");
