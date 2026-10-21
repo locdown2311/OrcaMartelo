@@ -394,9 +394,10 @@ public:
     bool                         is_root_segment() const  { return ! m_segment || m_segment->is_root(); }
     int                          segment_index() const    { return m_segment ? m_segment->index : -1; }
     const std::optional<CutSegmentDescriptor>& segment() const { return m_segment; }
-    // A segment whose layers are not parallel to the bed: its extrusions are un-rotated per point by
-    // post_trafo_inverse() at G-code export, and Z varies along every path.
-    bool                         is_tilted_segment() const { return m_segment.has_value() && ! m_post_trafo_inv.linear().isIdentity(1e-9); }
+    // A segment whose slice frame is not the bed frame: its layers are tilted, or (a horizontal cut)
+    // only rebased in Z. Its extrusions are mapped per point through post_trafo_inverse() at G-code
+    // export, and Z may vary along every path.
+    bool                         is_tilted_segment() const { return m_segment.has_value() && ! m_post_trafo_inv.matrix().isIdentity(1e-6); }
     // Slice frame of a segment (identity for ordinary objects, which keep trafo_centered()).
     // object_to_slice() maps object-local coordinates to the exact centred coordinates handed to the
     // mesh slicer; slice_to_object() is its true inverse. Geometry crossing between two segments
@@ -422,6 +423,27 @@ public:
     double                       effective_build_reach() const;
     // This object's build direction in the world frame (+Z for ordinary objects and the root).
     Vec3d                        build_normal_world() const;
+    // Floor of this object's support is a cut face rather than the build plate (non-root segment).
+    bool                         support_floor_is_tilted() const { return this->is_segment() && ! this->is_root_segment(); }
+
+    // Support demand handed UP from this segment's children -- the load a child could not carry to
+    // its own floor, in THIS object's slice frame and indexed 1:1 with layers(). Transient: rebuilt
+    // by Print::run_segment_support_cascade() before each support generation and never serialized.
+    // Empty for ordinary objects and for leaf segments.
+    const std::vector<Polygons>& segment_support_demand() const { return m_segment_support_demand; }
+    // The same, for the child's BODY over this segment's empty space. Kept apart because the column
+    // under it keeps the normal top Z distance to the model, while a column under the child's
+    // support ends flush with the plane (and may reach past it by support_section_overlap).
+    const std::vector<Polygons>& segment_body_demand() const { return m_segment_body_demand; }
+    bool                         has_segment_demand() const { return ! m_segment_support_demand.empty() || ! m_segment_body_demand.empty(); }
+    // Union of both kinds at the first layer.
+    Polygons                     segment_demand_first_layer() const;
+    // The support-on-support column of the object layer whose slab contains print_z.
+    Polygons                     segment_support_column_at(double print_z) const;
+    void                         clear_segment_support_demand() { m_segment_support_demand.clear(); m_segment_body_demand.clear(); }
+    // Union in one child's contribution (a parent may have several children).
+    void                         add_segment_support_demand(const std::vector<Polygons> &demand);
+    void                         add_segment_body_demand(const std::vector<Polygons> &demand);
 
     // Orca: Bounding box of each connected body, indexed by Layer::lslices_separated_component_ids.
     const std::vector<BoundingBox>& separated_body_bboxes() const { return m_separated_body_bboxes; }
@@ -738,6 +760,9 @@ private:
     Transform3d                             m_object_to_slice = Transform3d::Identity();
     Transform3d                             m_slice_to_object = Transform3d::Identity();
     double                                  m_segment_schedule_base { 0. };
+    // See segment_support_demand() / segment_body_demand(). Transient, per-layer, this object's slice frame.
+    std::vector<Polygons>                   m_segment_support_demand;
+    std::vector<Polygons>                   m_segment_body_demand;
     // Slic3r::Point objects in scaled G-code coordinates
     std::vector<PrintInstance>              m_instances;
     // The mesh is being centered before thrown to Clipper, so that the Clipper's fixed coordinates require less bits.
@@ -1530,6 +1555,24 @@ private:
     bool                has_tpu_filament() const;
     bool                invalidate_state_by_config_options(const ConfigOptionResolver &new_config, const std::vector<t_config_option_key> &opt_keys);
 
+    // Multiplanar cut planes: slice a segment's whole family and run the cascade over it, for the
+    // support-painting preview. Called by PrintObject::generate_support_preview().
+    void                run_segment_support_preview(PrintObject *member);
+    // Generate support for one family child-first, transferring each child's unsupported footprint
+    // to its parent in between. PrintObject::generate_support_material() is private to PrintObject
+    // and Print is its friend, which is why this lives here.
+    void                run_segment_support_cascade(const std::vector<PrintObject*> &family);
+
+public:
+    // The segments derived from one ModelObject under one effective instance transform form a
+    // FAMILY. Support inside a family is generated child-first, so the families are ordered
+    // deepest-first (descending segment index). Ordinary objects are never returned.
+    std::vector<std::vector<PrintObject*>> segment_families() const;
+    // Every segment of `object`'s family printed BEFORE it (lower segment index): the segments
+    // whose support depends on it. Empty for the root and for ordinary objects.
+    std::vector<PrintObject*> segments_below(const PrintObject *object) const;
+
+private:
     void                _make_skirt();
     void                _make_wipe_tower();
     // Belt mode: route filament-change purging into the belt purge prism

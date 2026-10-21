@@ -23,6 +23,7 @@
 #include <Eigen/Geometry>
 #include <set>
 #include "Slicing.hpp"
+#include "Support/SegmentSupportBounds.hpp"
 #include <cstdlib>
 #include "TriangleSelector.hpp"
 #include "GCode/AdaptivePAProcessor.hpp"
@@ -3204,6 +3205,421 @@ std::map<ObjectID, unsigned int> getObjectExtruderMap(const Print& print) {
     return objectExtruderMap;
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Multiplanar cut planes: the segment support cascade (ported from Unlayered Slicer, AGPL-3.0).
+//
+// A segment is sliced in its own frame, where its base plane is the ground. Its support therefore
+// terminates on that plane -- but the plane is a cut face of its PARENT, and wherever the parent
+// has no material under the contact the load has nowhere to go. The cascade closes that gap: each
+// segment is generated child-first, and whatever its support could not carry to its own floor is
+// projected onto the parent as forced overhang ("demand"), in the parent's frame.
+//
+// The partition is a TREE: a parent can receive from several children, so demand accumulates.
+// The child->parent map is a single composition of the authoritative slice frames, and floor/
+// ceiling roles come from the descriptor's clips.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+// Exact matrix identity, deliberately NOT isApprox(). PrintApply expands a ModelObject into one
+// PrintObject per DISTINCT transform using exact comparison (transform3d_equal), so two
+// numerically-close-but-distinct transforms are different families there. Matching them
+// approximately here would merge two families, put duplicate segment indices in one, and let
+// segment_parent_of() return a parent from the wrong transform.
+bool same_trafo(const Transform3d &lhs, const Transform3d &rhs)
+{
+    const double *l = lhs.data();
+    const double *r = rhs.data();
+    for (size_t i = 0; i < 16; ++ i, ++ l, ++ r)
+        if (*l != *r)
+            return false;
+    return true;
+}
+
+// Everything at the bottom of `child` that the segments below may have to hold up, in two kinds:
+// the child's SUPPORT (support-on-support: the receiver's column ends flush with the plane) and
+// the child's BODY (its material over the receiver's empty space: the receiver keeps the normal
+// top Z distance). Sampled over a window of 2 layer heights above the lowest layer rather than
+// the single lowest layer: the exact-lowest layer is routinely empty for one category or another,
+// and trusting it alone silently drops demand.
+struct SegmentFootprint { Polygons support; Polygons body; };
+
+SegmentFootprint segment_support_footprint(const PrintObject *child)
+{
+    Polygons     out;        // full-width support contributions
+    Polygons     tree_base;  // tree pads, eroded before handoff (see below)
+    Polygons     body;
+    const double lh = std::max(0.01, child->config().layer_height.value);
+
+    const ConstSupportLayerPtrsAdaptor support_layers = child->support_layers();
+    if (! support_layers.empty()) {
+        coordf_t z_lo = support_layers.front()->print_z;
+        for (const SupportLayer *sl : support_layers)
+            z_lo = std::min(z_lo, sl->print_z);
+        const coordf_t z_threshold = z_lo + coordf_t(2. * lh);
+        for (const SupportLayer *sl : support_layers)
+            if (sl->print_z <= z_threshold) {
+                // Normal/grid support records its footprint in support_islands; classic tree
+                // leaves that empty and uses base_areas. Take both so either style cascades.
+                append(out,       to_polygons(sl->support_islands));
+                append(tree_base, to_polygons(sl->base_areas));
+            }
+    }
+
+    // A tree roots in a wide base pad. Handing the full pad down makes the parent mirror it as a
+    // blocky column that visibly holds nothing, so slim it to its load-bearing cores by a branch
+    // radius and let the parent's own tree regrow a slim column.
+    if (! tree_base.empty()) {
+        const bool    organic = child->config().support_style.value == smsTreeOrganic;
+        const double  dia_mm  = organic ? child->config().tree_support_branch_diameter_organic.value
+                                        : child->config().tree_support_branch_diameter.value;
+        const coord_t r       = scale_(std::max(0.2, 0.5 * dia_mm));
+        append(out, offset(union_(tree_base), - double(r)));
+    }
+
+    // The body cross-section, same window. This is what makes a child needing NO support of its
+    // own still propagate: its overhang past the parent is not a slicing overhang in any frame.
+    if (child->layer_count() > 0) {
+        const coordf_t z_lo = child->get_layer(0)->print_z;
+        for (size_t i = 0; i < child->layer_count(); ++ i) {
+            const Layer *layer = child->get_layer(int(i));
+            if (layer->print_z > z_lo + coordf_t(2. * lh))
+                break;              // layers are sorted by print_z
+            append(body, to_polygons(layer->lslices));
+        }
+    }
+
+    SegmentFootprint footprint;
+    footprint.support = union_(out);
+    footprint.body    = union_(body);
+    return footprint;
+}
+
+// Fallback when the shared plane is horizontal or near-vertical in the parent's frame: drop the
+// footprint straight onto every parent layer at or below it, minus the parent's own material.
+void seed_single_layer(const PrintObject *parent, const Polygons &footprint_xy, double z_mm,
+                       std::vector<Polygons> &out)
+{
+    if (footprint_xy.empty() || parent->layer_count() == 0)
+        return;
+    // Descend from the shared plane, carrying what is still unsupported and CARVING it against the
+    // parent's material on the way -- the same accumulate-and-carve rule the tilted path uses.
+    // Testing each layer independently instead (as the original did) lets load caught by a shelf
+    // reappear wherever the parent narrows again lower down, asking for support beneath material
+    // that is already carrying it.
+    Polygons column = footprint_xy;
+    for (int i = int(parent->layer_count()) - 1; i >= 0; -- i) {
+        const Layer *layer = parent->get_layer(i);
+        if (layer->print_z > z_mm + EPSILON)
+            continue;                       // above the shared plane: nothing lands here
+        column = diff(column, to_polygons(layer->lslices));
+        if (column.empty())
+            break;                          // fully caught by the parent
+        out[size_t(i)] = column;
+    }
+}
+
+// The child's base plane, expressed in the PARENT's slice frame as z = a*x + b*y + d.
+// Taken from the descriptor's own Floor clip rather than reconstructed from the columns of the
+// child->parent matrix: the clip is exact and object-local, so this is both simpler and
+// numerically better. Returns false if the segment has no usable base-plane clip.
+bool base_plane_in_parent_frame(const PrintObject *child, const PrintObject *parent,
+                                double &a, double &b, double &d)
+{
+    if (! child->is_segment() || child->is_root_segment())
+        return false;
+    const CutSegmentClip *base = nullptr;
+    for (const CutSegmentClip &clip : child->segment()->clips)
+        if (clip.plane_index == child->segment()->base_plane && clip.role == CutClipRole::Floor)
+            base = &clip;
+    if (base == nullptr || base->normal.squaredNorm() < EPSILON)
+        return false;
+
+    const Transform3d &to_parent = parent->object_to_slice();
+    Vec3d              n         = to_parent.linear().inverse().transpose() * base->normal;
+    if (n.norm() < EPSILON)
+        return false;
+    n.normalize();
+    const Vec3d  on_plane = to_parent * (base->normal * (base->offset / base->normal.squaredNorm()));
+    const double D        = n.dot(on_plane);
+    if (std::abs(n.z()) < 1e-9)
+        return false;               // near-vertical in the parent frame; caller seeds instead
+    a = - n.x() / n.z();
+    b = - n.y() / n.z();
+    d = D / n.z();
+    return true;
+}
+
+// Project `footprint_child` (the child's slice frame) onto the parent's layers, keeping only what
+// genuinely overhangs. Walks top->bottom accumulating a column: a patch landing on solid parent
+// material is dropped and never enters the column; what survives descends to the parent's floor,
+// carved by the parent's material on the way. That tightness is what stops the old blocky
+// over-support columns.
+std::vector<Polygons> distribute_demand(const Polygons &footprint_child, const Transform3d &M,
+                                        const PrintObject *parent, const PrintObject *child)
+{
+    std::vector<Polygons> out(parent->layer_count());
+    if (footprint_child.empty() || parent->layer_count() == 0)
+        return out;
+
+    // The footprint polygons are flat 2D, so transforming them directly would treat them as lying at
+    // child-frame z = 0. That is right only when the child RESTS on its base plane. A floating
+    // segment's material starts a gap ABOVE the plane, and the load is handed over at the plane, so
+    // the polygons have to be projected down onto it first -- otherwise the relative transform's
+    // third column times the omitted height shifts the whole footprint sideways in the parent.
+    // Folding the projection into the matrix keeps the 2D transform below exact.
+    const double base_plane_z = child->is_root_segment() ? 0. : - child->segment()->base_plane_distance_below_material;
+    Transform3d  M_projected  = M;
+    M_projected.translate(Vec3d(0., 0., base_plane_z));
+
+    // Polygon::transform applies the matrix to RAW SCALED coordinates, so the translation has to
+    // be pre-divided by SCALING_FACTOR while the linear part is left alone. The z of the result is
+    // dropped; we keep the XY shadow.
+    Transform3d M_scaled = M_projected;
+    M_scaled.translation() = M_projected.translation() * (1. / SCALING_FACTOR);
+    Polygons footprint_xy;
+    footprint_xy.reserve(footprint_child.size());
+    for (const Polygon &p : footprint_child)
+        footprint_xy.emplace_back(p.transform(M_scaled));
+    footprint_xy = union_(footprint_xy);
+    if (footprint_xy.empty())
+        return out;
+
+    // Only the part of the footprint that enters THIS receiver's floor/ceiling slab at the plane
+    // is its business (the column is handed to every earlier segment, see
+    // run_segment_support_cascade). What lands above its ceiling reaches it, if at all, through
+    // the segment that owns that slab; what lands below its floor never does. Clipping here also
+    // spares the per-layer projection below for receivers the column never crosses.
+    const SegmentSupportBounds parent_bounds(*parent);
+
+    double a = 0., b = 0., d = 0.;
+    if (! base_plane_in_parent_frame(child, parent, a, b, d)) {
+        // No usable plane: fall back to the image of the child's own origin as a nominal height.
+        const double z_nominal = M.translation().z();
+        if (parent_bounds.is_active())
+            footprint_xy = intersection(footprint_xy, parent_bounds.valid_region_polygon(z_nominal));
+        seed_single_layer(parent, footprint_xy, z_nominal, out);
+        return out;
+    }
+    if (parent_bounds.is_active()) {
+        footprint_xy = parent_bounds.on_plane_inside(footprint_xy, a, b, d);
+        if (footprint_xy.empty())
+            return out;
+    }
+    const double gnorm = std::hypot(a, b);
+    if (gnorm < 1e-6) {                       // shared plane horizontal in the parent's frame
+        seed_single_layer(parent, footprint_xy, d, out);
+        return out;
+    }
+
+    // Rotate so the plane gradient aligns with +X: then z = gnorm * x_mm + d, and each parent
+    // layer's z band is an axis-aligned x strip.
+    const double ang = std::atan2(b, a);
+    Polygons     rot = footprint_xy;
+    for (Polygon &p : rot)
+        p.rotate(- ang);
+    const BoundingBox bb      = get_extents(rot);
+    const int         nlayers = int(parent->layer_count());
+
+    Polygons column;   // accumulated overhang, parent frame, unrotated
+    for (int i = nlayers - 1; i >= 0; -- i) {
+        const Layer   *layer = parent->get_layer(i);
+        const Polygons lmat  = to_polygons(layer->lslices);
+        const coord_t  x_lo  = scale_((layer->print_z - d) / gnorm);
+        const coord_t  x_hi  = (i + 1 < nlayers) ? scale_((parent->get_layer(i + 1)->print_z - d) / gnorm)
+                                                 : bb.max.x();
+        const coord_t  xa    = std::max(x_lo, bb.min.x());
+        const coord_t  xb    = std::min(x_hi, bb.max.x());
+        if (xb > xa) {
+            Polygon strip;
+            strip.points = { Point(xa, bb.min.y()), Point(xb, bb.min.y()),
+                             Point(xb, bb.max.y()), Point(xa, bb.max.y()) };
+            Polygons band = intersection(rot, Polygons{ strip });
+            for (Polygon &p : band)
+                p.rotate(ang);
+            Polygons overhang = diff(band, lmat);   // drop whatever rests on parent material
+            if (! overhang.empty())
+                append(column, overhang);
+        }
+        if (column.empty())
+            continue;
+        // Carve the column against this layer's material and KEEP the carved result: parent
+        // material that has caught part of the load has caught it for good. Recomputing a
+        // throwaway difference each layer (as the original did) let demand vanish at a shelf and
+        // reappear underneath it, asking for support below material that is already carrying it.
+        column = diff(union_(column), lmat);
+        if (! column.empty())
+            out[i] = column;
+    }
+    return out;
+}
+
+} // namespace
+
+std::vector<std::vector<PrintObject*>> Print::segment_families() const
+{
+    std::vector<std::vector<PrintObject*>> families;
+    for (PrintObject *object : const_cast<Print*>(this)->m_objects) {
+        if (! object->is_segment())
+            continue;
+        // One family per (ModelObject, effective instance transform): a tilt or mirror can change
+        // which side rests on the bed, so differently oriented instances derive different
+        // descriptors and must not be cascaded together.
+        auto family = std::find_if(families.begin(), families.end(), [object](const std::vector<PrintObject*> &f) {
+            return f.front()->model_object() == object->model_object() && same_trafo(f.front()->trafo(), object->trafo());
+        });
+        if (family == families.end()) {
+            families.push_back({ object });
+        } else {
+            family->push_back(object);
+        }
+    }
+
+    for (auto family = families.begin(); family != families.end(); ) {
+        if (family->size() < 2) {
+            // A lone segment has nobody to hand demand to; leave it on the ordinary path.
+            family = families.erase(family);
+            continue;
+        }
+        // Descriptor indices are assigned root-first in peel order, and a chunk's floor borders
+        // only the root and earlier-peeling chunks, so a parent's index is always below its
+        // children's; descending index order is therefore a valid postorder, and every child is
+        // generated before the parent that depends on it.
+        std::sort(family->begin(), family->end(), [](const PrintObject *l, const PrintObject *r) {
+            return l->segment_index() > r->segment_index();
+        });
+        for (const PrintObject *object : *family)
+            assert(object->is_root_segment() || object->segment()->parent < object->segment_index());
+        ++ family;
+    }
+    return families;
+}
+
+std::vector<PrintObject*> Print::segments_below(const PrintObject *object) const
+{
+    std::vector<PrintObject*> below;
+    if (object == nullptr || ! object->is_segment() || object->is_root_segment())
+        return below;
+    for (PrintObject *candidate : const_cast<Print*>(this)->m_objects)
+        if (candidate != object && candidate->is_segment()
+            && candidate->model_object() == object->model_object()
+            && same_trafo(candidate->trafo(), object->trafo())
+            && candidate->segment_index() < object->segment_index())
+            below.push_back(candidate);
+    return below;
+}
+
+// May this object receive automatically-derived support demand?
+//
+// Inherited cut-chunk load is AUTOMATIC support: the slicer works out that a chunk rests on a
+// cut face with nothing under it. The operator did not ask for it by painting. support_type's
+// manual modes mean "I decide where support goes", so honour that here and let only painted
+// enforcers through -- they take the enforcer path and are unaffected by this.
+//
+// Gated at the two producers, not at the consumers: demand is read in six places across the
+// normal, tree and organic generators, and creating none at all is the only way to be sure they
+// all agree. enable_support is deliberately NOT consulted -- has_support() already gates
+// generation, and enforce_support_layers can legitimately turn it on with support off.
+//
+// The trade-off is real and is the operator's to make: a chunk floating over its base plane now
+// prints unsupported unless they paint it. That is what the setting asks for, and the slice is
+// not silent about it -- the suppression is logged per segment.
+static bool segment_demand_allowed(const PrintObject *object)
+{
+    return object != nullptr && is_auto(object->config().support_type.value);
+}
+
+void Print::run_segment_support_cascade(const std::vector<PrintObject*> &family)
+{
+    BOOST_LOG_TRIVIAL(info) << "Cut planes: support cascade over a family of " << family.size() << " segments (deepest first)";
+
+    // Demand is transient and rebuilt from scratch every run, so a stale contribution from a
+    // previous slice can never survive into this one.
+    for (PrintObject *segment : family)
+        segment->clear_segment_support_demand();
+
+    for (PrintObject *child : family) {
+        // A segment that FLOATS above its base plane (a plane through empty space between
+        // disconnected shells produces no cut face) has its whole first layer suspended. The stock
+        // generators assume layer 0 rests on the ground, so nothing would support it: seed the
+        // demand explicitly, before this segment generates.
+        if (! child->is_root_segment() && ! child->segment()->touches_base_plane() && child->layer_count() > 0
+            && ! segment_demand_allowed(child)) {
+            BOOST_LOG_TRIVIAL(info) << "Cut planes: segment " << child->segment_index()
+                                    << " floats above its base plane, but support_type is manual;"
+                                    << " not seeding it -- paint an enforcer to support it.";
+        }
+        else if (! child->is_root_segment() && ! child->segment()->touches_base_plane() && child->layer_count() > 0) {
+            std::vector<Polygons> seed(1);
+            seed[0] = to_polygons(child->get_layer(0)->lslices);
+            BOOST_LOG_TRIVIAL(info) << "Cut planes: segment " << child->segment_index()
+                                    << " floats " << child->segment()->base_plane_distance_below_material
+                                    << "mm above its base plane; seeding its first layer as unsupported";
+            child->add_segment_body_demand(seed);
+        }
+
+        // The belt brim is left to the caller (generate_belt_brim), as on the parallel path.
+        child->generate_support_material(false);
+
+        if (child->is_root_segment())
+            continue;               // the root: its floor is the build plate
+        const SegmentFootprint footprint = segment_support_footprint(child);
+        if (footprint.support.empty() && footprint.body.empty()) {
+            BOOST_LOG_TRIVIAL(info) << "Cut planes: segment " << child->segment_index() << " has no footprint to hand up";
+            continue;
+        }
+        // Hand the column to EVERY segment printed before this one, not only to the parent. The
+        // parent is the segment the child's base plane mostly rests on, but the column below that
+        // plane can pass through the slab of a sibling first: two planes through one point make a
+        // wedge whose ceiling is the child's floor, and where the wedge has no material the load
+        // has to be carried by the wedge's support before it reaches the root. Handing only to the
+        // parent left that slab empty -- the parent clips its support at its ceilings, and the
+        // wedge never heard about the load. Each receiver carves the column against its own
+        // material and clips it to its own floor/ceiling slab, so a segment the column never
+        // crosses ends up with nothing.
+        for (PrintObject *lower : family) {
+            if (lower->segment_index() >= child->segment_index())
+                continue;
+            if (! segment_demand_allowed(lower)) {
+                BOOST_LOG_TRIVIAL(info) << "Cut planes: segment " << child->segment_index()
+                                        << " has load to hand to segment " << lower->segment_index()
+                                        << ", but its support_type is manual; not cascading it.";
+                continue;
+            }
+            // The authoritative composition. NOT lower->post_trafo() * child->post_trafo().inverse():
+            // the shared XY centering does not cancel across a relative rotation (see Print.hpp).
+            const Transform3d M = lower->object_to_slice() * child->slice_to_object();
+            if (! footprint.support.empty())
+                lower->add_segment_support_demand(distribute_demand(footprint.support, M, lower, child));
+            if (! footprint.body.empty())
+                lower->add_segment_body_demand(distribute_demand(footprint.body, M, lower, child));
+        }
+    }
+}
+
+void Print::run_segment_support_preview(PrintObject *member)
+{
+    // The support-painting preview asks ONE PrintObject to slice and generate support. For a
+    // segment that is not enough: its support depends on demand handed up by its children, so
+    // previewing it alone shows support with every inherited load missing -- and, worse, marks its
+    // support step done, so a later full slice can skip regenerating it and keep the wrong result.
+    for (const std::vector<PrintObject*> &family : this->segment_families()) {
+        if (std::find(family.begin(), family.end(), member) == family.end())
+            continue;
+        for (PrintObject *segment : family)
+            segment->slice();
+        this->run_segment_support_cascade(family);
+        for (PrintObject *segment : family)
+            segment->generate_belt_brim();
+        return;
+    }
+    // A segment with no family (nothing to hand demand to): the ordinary path is correct.
+    member->slice();
+    member->generate_support_material();
+}
+
+
 // Slicing process, running at a background thread.
 void Print::process(long long *time_cost_with_cache, bool use_cache)
 {
@@ -3462,10 +3878,21 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             for (size_t i = 0; i < m_objects.size(); ++i)
                 sup_was_done[i] = m_objects[i]->is_step_done(posSupportMaterial) ? 1 : 0;
 
+        // Multiplanar cut planes: segments of one family are supported child-first by the serial
+        // cascade below, because a parent's support depends on demand handed up by its children.
+        // They are skipped here; with no cut planes in the scene `families` is empty.
+        const std::vector<std::vector<PrintObject*>> families = this->segment_families();
+        std::set<const PrintObject*> cascade_objects;
+        for (const std::vector<PrintObject*> &family : families)
+            for (const PrintObject *object : family)
+                cascade_objects.insert(object);
+
         tbb::parallel_for(tbb::blocked_range<int>(0, int(m_objects.size())),
-            [this, need_slicing_objects](const tbb::blocked_range<int>& range) {
+            [this, need_slicing_objects, &cascade_objects](const tbb::blocked_range<int>& range) {
                 for (int i = range.begin(); i < range.end(); i++) {
                     PrintObject* obj = m_objects[i];
+                    if (cascade_objects.count(obj) != 0)
+                        continue;           // handled by the cascade below
                     if (need_slicing_objects.count(obj) != 0) {
                         // The belt brim follows sequentially below.
                         obj->generate_support_material(false);
@@ -3477,6 +3904,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 }
             }
         );
+        for (const std::vector<PrintObject*> &family : families)
+            this->run_segment_support_cascade(family);
         // The belt brim keeps clear of every object's layers and support layers,
         // so it runs once no support step is rebuilding them any more.
         for (PrintObject *obj : m_objects)
@@ -3501,6 +3930,13 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
         }
     }
     else {
+        // Same deferral as the parallel branch above. Empty when the scene has no cut planes.
+        const std::vector<std::vector<PrintObject*>> cached_families = this->segment_families();
+        std::set<const PrintObject*> cached_cascade_objects;
+        for (const std::vector<PrintObject*> &family : cached_families)
+            for (const PrintObject *object : family)
+                cached_cascade_objects.insert(object);
+
         for (PrintObject *obj : m_objects) {
             if (re_slicing_objects.count(obj) == 0) {
                 if (obj->set_started(posSlice))
@@ -3524,11 +3960,24 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 obj->make_perimeters();
                 obj->infill();
                 obj->ironing();
-                obj->generate_support_material();
+                // Cut-plane family members are deferred to the cascade below: their support (and
+                // the lift/curled analysis that reads it) needs every child's demand first.
+                if (cached_cascade_objects.count(obj) == 0) {
+                    obj->generate_support_material();
+                    obj->detect_overhangs_for_lift();
+                    obj->estimate_curled_extrusions();
+                }
+            }
+        }
+
+        for (const std::vector<PrintObject*> &family : cached_families)
+            this->run_segment_support_cascade(family);
+        for (PrintObject *obj : m_objects)
+            if (cached_cascade_objects.count(obj) != 0 && re_slicing_objects.count(obj) != 0) {
+                obj->generate_belt_brim();
                 obj->detect_overhangs_for_lift();
                 obj->estimate_curled_extrusions();
             }
-        }
     }
 
     for (PrintObject *obj : m_objects)

@@ -37,6 +37,7 @@
 #include "SupportCommon.hpp"
 #include "TreeSupportCommon.hpp"
 #include "TreeSupport.hpp"
+#include "SegmentSupportBounds.hpp"
 #include "TreeSupport3D.hpp"
 #include "BeltFloorContext.hpp"
 #include "libslic3r/libslic3r.h"
@@ -759,6 +760,8 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
     const bool support_critical_regions_only = config.support_critical_regions_only.value;
     bool config_remove_small_overhangs = config.support_remove_small_overhang.value;
     bool config_detect_sharp_tails = g_config_support_sharp_tails;
+    // Multiplanar cut planes: the true floor (no clearance): see the lower_polys note in the loop below.
+    const SegmentSupportBounds floor_bounds = m_object->support_floor_is_tilted() ? SegmentSupportBounds(*m_object, 0.) : SegmentSupportBounds();
     const int enforce_support_layers = config.enforce_support_layers.value;
     const double area_thresh_well_supported = SQ(scale_(6));
     const double length_thresh_well_supported = scale_(6);
@@ -896,6 +899,41 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
     std::chrono::time_point<clock_> t0{ clock_::now() };
     // main part of overhang detection can be parallel
     tbb::concurrent_vector<ExPolygons> overhangs_all_layers(m_object->layer_count());
+    // Multiplanar cut planes: the FRESH BAND of inherited demand at each layer (demand[i] minus
+    // demand[i+1]), mapped to the layer it must be seeded at. Inherited load is support-on-support
+    // and must end flush under the ceiling: an overhang found at layer L gets its virtual gap node
+    // one layer down (generate_contact_points) and the branch's real top top_z_distance below
+    // that, so a band at layer s is seeded at the layer whose branch top lands at or just below
+    // print_z(s). Mapped source -> target so no band is skipped when layer heights vary; the
+    // segment-bounds clip in draw_circles() trims whatever a tilted ceiling cuts off.
+    // Bands under the child's BODY are ordinary overhangs and stay at their own layer, so the
+    // branch top keeps the normal top Z distance to the model.
+    std::vector<Polygons> demand_bands_at;
+    if (m_object->has_segment_demand()) {
+        const size_t n = m_object->layer_count();
+        demand_bands_at.resize(n);
+        const double overlap = m_object_config->support_section_overlap.value;
+        for (const bool flush : { true, false }) {
+            const std::vector<Polygons> &demand = flush ? m_object->segment_support_demand() : m_object->segment_body_demand();
+            for (size_t src = 0; src < demand.size() && src < n; ++ src) {
+                if (demand[src].empty())
+                    continue;
+                Polygons band = (src + 1 < demand.size()) ? diff(demand[src], demand[src + 1]) : demand[src];
+                if (band.empty())
+                    continue;
+                if (! flush) {
+                    append(demand_bands_at[src], band);
+                    continue;
+                }
+                const double top = m_object->get_layer(int(src))->print_z + top_z_distance + overlap;
+                size_t m = src;
+                while (m + 1 < n && m_object->get_layer(int(m + 1))->print_z <= top + EPSILON)
+                    ++ m;
+                append(demand_bands_at[std::min(m + 1, n - 1)], band);
+            }
+        }
+    }
+
     tbb::parallel_for(tbb::blocked_range<size_t>(0, m_object->layer_count()),
         [&](const tbb::blocked_range<size_t>& range) {
             for (size_t layer_nr = range.begin(); layer_nr < range.end(); layer_nr++) {
@@ -924,7 +962,13 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
                 //lower_layer_offset = std::min(lower_layer_offset, extrusion_width);
                 coordf_t support_offset_scaled = scale_(lower_layer_offset);
                 ExPolygons& curr_polys = layer->lslices_extrudable;
-                ExPolygons& lower_polys = lower_layer->lslices_extrudable;
+                // Multiplanar cut planes: material resting on a cut face is supported
+                // by it, not by the layer below: the floor's band through this slab counts as "below"
+                // for the overhang diff and the sharp-tail test alike.
+                ExPolygons lower_polys_on_floor;
+                if (floor_bounds.is_active())
+                    lower_polys_on_floor = union_ex(lower_layer->lslices_extrudable, floor_bounds.floor_band(layer->print_z - layer->height, layer->print_z));
+                const ExPolygons& lower_polys = floor_bounds.is_active() ? lower_polys_on_floor : lower_layer->lslices_extrudable;
 
                 // Apply build plate tilt: shift lower layer polygons to simulate tilted gravity
                 //
@@ -1259,6 +1303,12 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
                 layer->cantilevers.clear();
             }
         }
+
+        // Multiplanar cut planes: seed the inherited demand bands mapped to this layer (see
+        // demand_bands_at above). Placed before nDetected so it counts as detected overhang and
+        // can make an otherwise support-free segment grow support at all.
+        if (size_t(layer_nr) < demand_bands_at.size() && ! demand_bands_at[layer_nr].empty())
+            append(layer->loverhangs, union_ex(demand_bands_at[layer_nr]));
 
 		int nDetected = layer->loverhangs.size();
         // enforcers now follow same logic as normal support. See STUDIO-3692
@@ -1910,6 +1960,11 @@ void TreeSupport::generate()
 
     if (m_support_params.support_style == smsTreeOrganic) {
         generate_tree_support_3D(*m_object, this, this->throw_on_cancel);
+        // Organic plans its branches from non-negative layer indices and, with no natural overhang
+        // at all, returns before assembling any layer -- which is exactly the floating-segment case.
+        // Carry its feet (or the bare seeded demand) down to the segment's floor with the same
+        // column the classic path uses, so both tree styles land on the cut face.
+        extend_below_segment_floor();
         return;
     }
 
@@ -1955,6 +2010,10 @@ void TreeSupport::generate()
     profiler.stage_start(STAGE_GENERATE_TOOLPATHS);
     m_object->print()->set_status(70, _u8L("Generating support"));
     generate_toolpaths();
+
+    // AFTER generate_toolpaths on purpose -- see the note in the function. It generates its own
+    // extrusions, so it must follow the pass that would otherwise mis-index them.
+    extend_below_segment_floor();
     profiler.stage_finish(STAGE_GENERATE_TOOLPATHS);
 
     profiler.stage_finish(STAGE_total);
@@ -2136,8 +2195,108 @@ Polygons TreeSupport::get_trim_support_regions(
     return polygons_trimming;
 }
 
+void TreeSupport::extend_below_segment_floor()
+{
+    // The tree's node graph is indexed by object layer and stops dropping at layer 0, so branches
+    // can never descend past this segment's own zero. That zero is not the ground here: the segment
+    // rests on a cut FACE, which dips below zero across part of the footprint, and a floating
+    // segment's base plane lies below zero everywhere. Rather than rework the node graph, carry the
+    // tree's feet down as a straight column -- the same answer the normal generator produces with
+    // extend_support_below_segment_floor(), and the physically right one for the last stretch onto
+    // the cut face.
+    //
+    // This runs AFTER generate_toolpaths() and produces its own extrusions. Everything in
+    // draw_circles/generate_toolpaths addresses layers as `index + m_raft_layers` and reads
+    // per-index side tables (layer_heights, contact_nodes), so inserting layers before either pass
+    // shifts those indices and reads out of bounds -- which is exactly what it did.
+    if (! m_object->support_floor_is_tilted())
+        return;
+    const SegmentSupportBounds bounds(*m_object, m_slicing_params.first_print_layer_height);
+    if (! bounds.is_active())
+        return;
+    if (m_raft_layers > 0) {
+        // A raft belongs to the build plate, and the first m_raft_layers support layers are treated
+        // positionally as raft. Prepending below them would silently reassign that mapping.
+        BOOST_LOG_TRIVIAL(warning) << "cut planes: raft on a non-root segment, skipping the below-floor extension";
+        return;
+    }
+    const coordf_t h = m_object->config().layer_height.value;
+    if (h < EPSILON)
+        return;
+
+    // The tree's lowest foot, plus load that has no layer of its own to project: a floating
+    // segment's suspended first layer arrives as demand on object layer 0, which the node graph
+    // cannot turn into contacts.
+    // The classic tree records its feet in base_areas; the organic generator hands its layers
+    // through generate_support_toolpaths(), which fills support_islands instead. Take the lowest
+    // layer that has material in either.
+    SupportLayer *src = nullptr;
+    for (SupportLayer *layer : m_object->support_layers())
+        if (layer != nullptr && (! layer->base_areas.empty() || ! layer->support_islands.empty())
+            && (src == nullptr || layer->print_z < src->print_z))
+            src = layer;
+    ExPolygons source;
+    if (src != nullptr) {
+        source = src->base_areas;
+        append(source, src->support_islands);
+    }
+    if (const Polygons seed = m_object->segment_demand_first_layer(); ! seed.empty())
+        append(source, union_ex(seed));
+    if (source.empty())
+        return;
+    source = union_ex(source);
+    const coordf_t first_z = (src != nullptr) ? src->print_z : coordf_t(0.);
+
+    // How far the floor dips under that footprint. It is a plane, so its minimum is at a vertex.
+    double deepest = 0.;
+    for (const ExPolygon &ex : source)
+        for (const Point &pt : ex.contour.points)
+            deepest = std::min(deepest, bounds.floor_z(pt));
+    if (deepest >= - EPSILON)
+        return;                 // floor never dips below zero: the tree already reaches it
+
+    const coordf_t nozzle_diameter = m_object->print()->config().nozzle_diameter.get_at(
+        m_object->config().support_filament == 0 ? 0 : m_object->config().support_filament - 1);
+    // Same fallback generate_toolpaths() applies: the configured width is commonly 0, meaning
+    // "derive it", and handing 0 to Flow throws on negative spacing.
+    coordf_t extrusion_width = m_support_params.support_extrusion_width;
+    if (extrusion_width <= 0.)
+        extrusion_width = Flow::auto_extrusion_width(FlowRole::frSupportMaterial, float(nozzle_diameter));
+
+    int added = 0;
+    for (int i = 1; ; ++ i) {
+        const coordf_t print_z = first_z - coordf_t(i) * h;
+        if (print_z < deepest - h)
+            break;              // descended past the floor's lowest point under the footprint
+        ExPolygons clipped = intersection_ex(source, bounds.valid_region_polygon(print_z));
+        if (clipped.empty())
+            break;              // footprint entirely past the floor
+        // Inserted at the front, deepest last, so the list stays ascending by print_z -- which the
+        // G-code assembly requires.
+        auto          it    = m_object->insert_support_layer(m_object->support_layers().begin(), 0, 0, h, print_z, print_z - h / 2);
+        SupportLayer *layer = *it;
+        layer->support_type = stInnerTree;
+        layer->base_areas   = std::move(clipped);
+        // Own extrusions, with the tree's own path generator, at this layer's height.
+        const Flow flow{ float(extrusion_width), float(h), float(nozzle_diameter) };
+        tree_supports_generate_paths(layer->support_fills.entities, to_polygons(layer->base_areas), flow, m_support_params);
+        ++ added;
+    }
+    BOOST_LOG_TRIVIAL(info) << "cut planes: segment " << m_object->segment_index()
+                            << " tree extended " << added << " layers below its zero, floor at " << deepest;
+}
+
 void TreeSupport::draw_circles()
 {
+    // Multiplanar cut planes: build the segment's bounds ONCE here, before the parallel loop below.
+    // const, so it is safe to share read-only across the threads; inactive (and a no-op) for an
+    // ordinary object.
+    const SegmentSupportBounds segment_bounds(*m_object, m_slicing_params.first_print_layer_height);
+    // For a non-root segment the first slice layer is its cut face mid-stack, not the build plate,
+    // so a first-layer tree brim / base expansion there is a flange floating inside the model.
+    // Matches the normal-support first-layer expansion rule in SupportCommon.
+    const bool non_root_segment = m_object->support_floor_is_tilted();
+
     const PrintObjectConfig &config = m_object->config();
     const Print* print = m_object->print();
     bool has_brim = print->has_brim();
@@ -2305,7 +2464,7 @@ void TreeSupport::draw_circles()
                                 circle.points[i] = circle.points[i] * scale + node.position;
                             }
                         }
-                        if (obj_layer_nr == 0 && m_raft_layers == 0 && !belt_floor_active) {
+                        if (obj_layer_nr == 0 && m_raft_layers == 0 && !belt_floor_active && ! non_root_segment) {
                             double brim_width = !config.tree_support_auto_brim ? tree_brim_width : std::max(MIN_BRANCH_RADIUS_FIRST_LAYER, std::min(node.radius + node.dist_mm_to_top / (scale * branch_radius) * 0.5, MAX_BRANCH_RADIUS_FIRST_LAYER) - node.radius);
                             auto tmp=offset(circle, scale_(brim_width));
                             if(!tmp.empty())
@@ -2531,7 +2690,7 @@ void TreeSupport::draw_circles()
                 // support nodes in Hybrid mode. Apply the expansion before area_groups and
                 // lslices are built so toolpaths and brim avoidance use the same footprint.
                 if (layer_nr == 0 && m_raft_layers == 0 && !belt_floor_active && m_support_params.support_style == smsTreeHybrid &&
-                    m_object_config->raft_first_layer_expansion.value > 0.f) {
+                    ! non_root_segment && m_object_config->raft_first_layer_expansion.value > 0.f) {
                     ExPolygons expanded_base_areas;
                     const float inflate_factor_1st_layer = float(scale_(m_object_config->raft_first_layer_expansion.value));
                     Polygons trimming = offset(m_object->layers().front()->lslices, float(scale_(m_support_params.gap_xy_first_layer)),
@@ -2549,6 +2708,19 @@ void TreeSupport::draw_circles()
                             expanded_base_areas.emplace_back(expoly);
                     }
                     ts_layer->base_areas = std::move(expanded_base_areas);
+                }
+
+                // Multiplanar cut planes: confine this layer's areas to the segment. This MUST happen
+                // before area_groups is built below: area_groups stores raw ExPolygon pointers into
+                // these four vectors, so reassigning any of them afterwards dangles every pointer
+                // and crashes in generate_toolpaths.
+                if (segment_bounds.is_active()) {
+                    const Polygons valid = segment_bounds.valid_region_polygon(ts_layer->print_z,
+                        m_object->segment_support_column_at(ts_layer->print_z), m_object_config->support_section_overlap.value);
+                    ts_layer->base_areas     = intersection_ex(ts_layer->base_areas,     valid);
+                    ts_layer->roof_areas     = intersection_ex(ts_layer->roof_areas,     valid);
+                    ts_layer->roof_1st_layer = intersection_ex(ts_layer->roof_1st_layer, valid);
+                    ts_layer->floor_areas    = intersection_ex(ts_layer->floor_areas,    valid);
                 }
 
                 // Orca: Final tree base polygons may be too close above model surfaces.

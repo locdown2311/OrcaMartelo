@@ -7814,6 +7814,21 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
 
+    def = this->add("support_section_overlap", coFloat);
+    def->label = L("Section support overlap");
+    def->category = L("Support");
+    def->tooltip = L("Multiplanar cut planes only. How far the support of a lower section may reach past the section plane "
+                     "into the support of the section above it, closing the seam between the two columns. "
+                     "Layers are whole, so without this the lower column stops up to one layer short of a "
+                     "tilted plane. One layer height closes that seam at the cost of a little over-extrusion "
+                     "where the two columns meet. Never applied under the model itself, which keeps its normal "
+                     "top Z distance.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min = 0;
+    def->max = 2;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
+
     // BBS: change type to common float.
     // It may be rounded to mulitple layer height when independent_support_layer_height is false.
     def = this->add("support_top_z_distance", coFloat);

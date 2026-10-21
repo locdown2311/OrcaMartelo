@@ -48,6 +48,7 @@ add_executable(${_TEST_NAME}_tests
     test_mutable_polygon.cpp
     test_mutable_priority_queue.cpp
     test_multiplanar.cpp
+    test_segment_support_bounds.cpp
     test_minimum_spanning_tree.cpp
     test_nozzle_volume_type.cpp
     test_obj.cpp

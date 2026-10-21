@@ -493,6 +493,8 @@ set(lisbslic3r_sources
     Support/BeltFloorContext.hpp
     Support/SupportCommon.cpp
     Support/SupportCommon.hpp
+    Support/SegmentSupportBounds.cpp
+    Support/SegmentSupportBounds.hpp
     Support/SupportLayer.hpp
     Support/SupportMaterial.cpp
     Support/SupportMaterial.hpp

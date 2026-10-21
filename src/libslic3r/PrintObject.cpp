@@ -868,6 +868,10 @@ void PrintObject::ironing()
 
 bool PrintObject::need_z_contouring() const
 {
+    // Z contouring works in the bed frame against flat layers; a cut-plane segment's layers may be
+    // tilted and are emitted per point through the slice frame, so the two cannot be combined.
+    if (this->is_segment())
+        return false;
     size_t num_regions = this->num_printing_regions();
     for (size_t region_id = 0; region_id < num_regions; region_id++) {
         if (this->printing_region(region_id).config().zaa_enabled)
@@ -1004,7 +1008,10 @@ void PrintObject::generate_support_material(bool with_belt_brim)
 #endif
         }
 
-        if ((this->has_support() && m_layers.size() > 1) || (this->has_raft() && !m_layers.empty())) {
+        // The m_layers.size() > 1 rule is about natural overhangs: a single-layer object rests on the
+        // plate and can have none. A cut-plane segment can still carry INHERITED load handed up by a
+        // child, and dropping that would leave real support ungenerated.
+        if ((this->has_support() && (m_layers.size() > 1 || this->has_segment_demand())) || (this->has_raft() && !m_layers.empty())) {
             m_print->set_status(50, L("Generating support"));
 
             this->_generate_support_material();
@@ -1595,6 +1602,7 @@ bool PrintObject::invalidate_state_by_config_options(
 	        }
         } else if (
         	   opt_key == "support_type"
+            || opt_key == "support_section_overlap"
             || opt_key == "support_angle"
             || opt_key == "support_on_build_plate_only"
             || opt_key == "support_critical_regions_only"
@@ -1884,6 +1892,9 @@ bool PrintObject::invalidate_state_by_config_options(
 bool PrintObject::invalidate_step(PrintObjectStep step)
 {
 	bool invalidated = Inherited::invalidate_step(step);
+    // Whether THIS object's step just flipped to invalid. The cut-plane edge below propagates only
+    // then: a family of k segments otherwise re-walks every lower segment on every call, 2^k times.
+    const bool own_invalidated = invalidated;
 
     // propagate to dependent steps
     if (step == posPerimeters) {
@@ -1917,6 +1928,14 @@ bool PrintObject::invalidate_step(PrintObjectStep step)
         m_slicing_params.valid = false;
     }
 
+    // Multiplanar cut planes: a segment's support is generated from demand handed down by every
+    // segment printed after it (see Print::run_segment_support_cascade). So if this segment's
+    // slices or support change, the support of every segment BELOW it is stale. Propagation is
+    // strictly downward, so it terminates at the root. Ordinary objects are unaffected.
+    if (own_invalidated && (step == posSlice || step == posSupportMaterial) && m_print != nullptr && this->is_segment() && ! this->is_root_segment())
+        for (PrintObject *lower : m_print->segments_below(this))
+            invalidated |= lower->invalidate_step(posSupportMaterial);
+
     // Wipe tower depends on the ordering of extruders, which in turn depends on everything.
     // It also decides about what the flush_into_infill / wipe_into_object / flush_into_support features will do,
     // and that too depends on many of the settings.
@@ -1935,7 +1954,59 @@ bool PrintObject::invalidate_all_steps()
 	// Then reset some of the depending values.
 	m_slicing_params.valid = false;
 	m_belt_floor_z_shift_cache_valid = false;
+    // Same downward edge as invalidate_step(): Print::invalidate_all_steps() clears the PRINT's own
+    // steps, not sibling objects', so a segment replaced wholesale would otherwise leave the
+    // segments below it with support built from stale demand.
+    if (inherited_invalidated && m_print != nullptr && this->is_segment() && ! this->is_root_segment())
+        for (PrintObject *lower : m_print->segments_below(this))
+            result |= lower->invalidate_step(posSupportMaterial);
 	return result;
+}
+
+static void add_segment_demand(std::vector<Polygons> &dst, const std::vector<Polygons> &demand)
+{
+    if (demand.empty())
+        return;
+    if (dst.size() < demand.size())
+        dst.resize(demand.size());
+    for (size_t i = 0; i < demand.size(); ++ i)
+        if (! demand[i].empty())
+            append(dst[i], demand[i]);
+    // Several children can land demand on the same parent layer: union once here.
+    for (Polygons &layer : dst)
+        if (! layer.empty())
+            layer = union_(layer);
+}
+
+void PrintObject::add_segment_support_demand(const std::vector<Polygons> &demand)
+{
+    add_segment_demand(m_segment_support_demand, demand);
+}
+
+void PrintObject::add_segment_body_demand(const std::vector<Polygons> &demand)
+{
+    add_segment_demand(m_segment_body_demand, demand);
+}
+
+Polygons PrintObject::segment_demand_first_layer() const
+{
+    Polygons out;
+    if (! m_segment_support_demand.empty())
+        append(out, m_segment_support_demand.front());
+    if (! m_segment_body_demand.empty())
+        append(out, m_segment_body_demand.front());
+    return out.empty() ? out : union_(out);
+}
+
+Polygons PrintObject::segment_support_column_at(double print_z) const
+{
+    if (m_segment_support_demand.empty() || m_layers.empty())
+        return Polygons();
+    // The object layer whose slab holds print_z: the first with print_z >= z, else the last.
+    size_t i = 0;
+    while (i + 1 < m_layers.size() && m_layers[i]->print_z < print_z - EPSILON)
+        ++ i;
+    return i < m_segment_support_demand.size() ? m_segment_support_demand[i] : Polygons();
 }
 
 // This function analyzes slices of a region (SurfaceCollection slices).
@@ -4596,6 +4667,12 @@ void PrintObject::generate_support_preview()
     POProfiler profiler;
 
     boost::posix_time::ptime ts1 = boost::posix_time::microsec_clock::local_time();
+    // Multiplanar cut planes: a segment cannot be previewed on its own, its support depends on the
+    // demand of the segments printed after it -- see Print::run_segment_support_preview().
+    if (m_print != nullptr && this->is_segment()) {
+        m_print->run_segment_support_preview(this);
+        return;
+    }
     this->slice();
     boost::posix_time::ptime ts2 = boost::posix_time::microsec_clock::local_time();
     profiler.duration1 = (ts2 - ts1).total_milliseconds();

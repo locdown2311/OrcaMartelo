@@ -3194,6 +3194,7 @@ void TabPrint::build()
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced");
         optgroup->append_single_option_line("support_top_z_distance", "support_settings_advanced#z-distance");
         optgroup->append_single_option_line("support_bottom_z_distance", "support_settings_advanced#z-distance");
+        optgroup->append_single_option_line("support_section_overlap");
         optgroup->append_single_option_line("tree_support_wall_count", "support_settings_advanced#support-wall-loops");
         optgroup->append_single_option_line("support_base_pattern", "support_settings_advanced#base-pattern");
         optgroup->append_single_option_line("support_base_pattern_spacing", "support_settings_advanced#base-pattern-spacing");
