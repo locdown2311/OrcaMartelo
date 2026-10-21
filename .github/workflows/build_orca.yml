@@ -122,6 +122,20 @@ jobs:
           # The restored directory carries the previous run's counters.
           ccache -z
 
+      # Every push build gets its own version, so each GitHub release has a new tag and the
+      # in-app updater (GUI_App::check_new_version_sf) sees a newer version than the build it
+      # runs in. The run number is zero-padded and glued to the pre-release label without a dot
+      # ("2.5.0-alpha" -> "2.5.0-alpha00123"): the updater's version regex accepts no dot in
+      # the pre-release, and semver compares an alphanumeric label as a string, so a fixed
+      # width keeps the order right and builds made before this change still parse the tag.
+      - name: Stamp the build number into the version
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          build=$(printf '%05d' "${{ github.run_number }}")
+          perl -pi -e 's/^set\(SoftFever_VERSION "([^"-]+)(?:-([A-Za-z]+))?"\)/"set(SoftFever_VERSION \"$1-" . ($2 \/\/ "build") . "'"$build"'\")"/e' version.inc
+          grep 'set(SoftFever_VERSION' version.inc
+
       - name: Get the version and date on Ubuntu and macOS
         if: runner.os != 'Windows'
         run: |
@@ -561,6 +575,7 @@ jobs:
         continue-on-error: true
         with:
           tag_name: ${{ env.ver }}
+          target_commitish: ${{ github.sha }}
           name: OrcaMartelo ${{ env.ver }}
           draft: false
           prerelease: true
