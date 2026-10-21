@@ -8119,6 +8119,88 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionFloat(0.));
 
+    // Multiplanar printing, virtual mode (Multiplanar.hpp). Every key below is a printer option.
+    def = this->add("enable_nonplanar", coBool);
+    def->label = L("Enable multiplanar printing");
+    def->category = L("Multiplanar printing");
+    def->tooltip = L("Allow objects to be split by cut planes into segments that are each sliced in their own "
+                     "orientation. On this ordinary 3-axis printer a tilted segment is printed in tilted layers "
+                     "with the nozzle upright, so how far a segment may lean is limited by the hotend and gantry "
+                     "geometry below.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("nonplanar_virtual_max_angle", coFloat);
+    def->label = L("Max tilt angle");
+    def->category = L("Multiplanar printing");
+    def->tooltip = L("An additional, stricter ceiling on how far a build direction may lean from vertical. The "
+                     "nozzle stays upright while a tilted segment prints, so past a certain tilt the side of the "
+                     "hotend can no longer reach the surface cleanly. Slicing is refused if any build direction "
+                     "exceeds it. 0 means this ceiling is not applied. A limit is still worked out from the gantry "
+                     "height and the hotend side angles, and whichever is smaller wins.");
+    def->sidetext = u8"\u00B0";	// degrees, don't need translation
+    def->min = 0;
+    def->max = 90;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.0));
+
+    def = this->add("nonplanar_virtual_max_z", coFloat);
+    def->label = L("Max print height (from the bed)");
+    def->category = L("Multiplanar printing");
+    def->tooltip = L("The highest the nozzle may go while printing a multiplanar object, measured from the bed: "
+                     "usually the printer's build height, or less if the gantry would strike a tall tilted part. "
+                     "Moves between segments lift clear of everything printed so far, so on a large tilted part "
+                     "the head climbs as it works. Slicing is refused if the toolpath would go above this. "
+                     "0 means no limit.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.0));
+
+    def = this->add("nonplanar_gantry_height", coFloat);
+    def->label = L("Gantry height above nozzle");
+    def->category = L("Multiplanar printing");
+    def->tooltip = L("Vertical distance from the nozzle tip up to the lowest fixed obstruction above it: the "
+                     "gantry beam or the carriage plate, whichever the head would strike first. It sets how far "
+                     "a tilted segment may climb before the print hits the machine, and together with the hotend "
+                     "side angles it gives the largest tilt each segment is allowed. Leave at 0 if you have not "
+                     "measured it: the tilt is then limited by the hotend alone, however wide the segment.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.0));
+
+    def = this->add("nonplanar_hotend_cone_height", coFloat);
+    def->label = L("Hotend envelope height");
+    def->category = L("Multiplanar printing");
+    def->tooltip = L("The hotend is modelled as a four-sided pyramid with its apex at the nozzle tip, reaching "
+                     "this far up the nozzle. Its side angles limit how far a segment may lean. 0 switches the "
+                     "hotend model off.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(40.0));
+
+    struct HotendFaceDef { const char *key, *label; };
+    for (const HotendFaceDef &face : { HotendFaceDef{ "nonplanar_hotend_angle_xpos", L("Hotend side angle +X (right)") },
+                                       HotendFaceDef{ "nonplanar_hotend_angle_xneg", L("Hotend side angle -X (left)") },
+                                       HotendFaceDef{ "nonplanar_hotend_angle_ypos", L("Hotend side angle +Y (back)") },
+                                       HotendFaceDef{ "nonplanar_hotend_angle_yneg", L("Hotend side angle -Y (front)") } }) {
+        def = this->add(face.key, coFloat);
+        def->label = face.label;
+        def->category = L("Multiplanar printing");
+        def->tooltip = L("Angle of this side of the hotend envelope, measured up from the bed plane with the nozzle "
+                         "vertical: lay a protractor on the bed against the nozzle tip and read the steepest line that "
+                         "still clears the fan duct, heater block, probe or anything else on this side. 90 is a side "
+                         "flush with the nozzle; a smaller angle is a fatter side. It is also the steepest a segment "
+                         "may lean away from this side.");
+        def->sidetext = u8"\u00B0";	// degrees, don't need translation
+        def->min = 1;
+        def->max = 90;
+        def->mode = comAdvanced;
+        def->set_default_value(new ConfigOptionFloat(45.0));
+    }
+
     def = this->add("belt_printer", coBool);
     def->label = L("Enable belt printing");
     def->category = L("Printable space");

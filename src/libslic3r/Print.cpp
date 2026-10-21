@@ -103,6 +103,7 @@
 #include "nlohmann/json.hpp"
 
 #include "GCode/ConflictChecker.hpp"
+#include "Multiplanar.hpp"
 
 #include <codecvt>
 #include "Format/STEP.hpp"
@@ -174,6 +175,15 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
     // Cache the plenty of parameters, which influence the G-code generator only,
     // or they are only notes not influencing the generated G-code.
     static std::unordered_set<std::string> steps_gcode = {
+        // Multiplanar limits: checked by validate() and at export; none of them moves a slice.
+        "nonplanar_virtual_max_angle",
+        "nonplanar_virtual_max_z",
+        "nonplanar_gantry_height",
+        "nonplanar_hotend_cone_height",
+        "nonplanar_hotend_angle_xpos",
+        "nonplanar_hotend_angle_xneg",
+        "nonplanar_hotend_angle_ypos",
+        "nonplanar_hotend_angle_yneg",
         // Belt printer G-code axis remap (only affects G-code output, not slicing).
         "gcode_remap_x",
         "gcode_remap_y",
@@ -822,6 +832,9 @@ StringObjectException Print::sequential_print_clearance_valid(const Print &print
         // exactly by satisfying the extruder_clearance_radius, this test will not trigger collision.
         float obj_distance = print.is_all_objects_are_short() ? scale_(std::max(0.5f * MAX_OUTER_NOZZLE_DIAMETER, object_skirt_offset) - 0.1) : scale_(0.5 * print.config().extruder_clearance_radius.value + object_skirt_offset - 0.1);
 
+        // The cut-plane segments of one ModelInstance are separate PrintObjects sharing that
+        // instance's footprint by design; the clearance is checked once per ModelInstance.
+        std::set<const ModelInstance*> checked_model_instances;
         for (const PrintObject *print_object : print.objects()) {
             assert(! print_object->model_object()->instances.empty());
             assert(! print_object->instances().empty());
@@ -829,6 +842,8 @@ StringObjectException Print::sequential_print_clearance_valid(const Print &print
             // Orca: check convex hull intersection for each instance individually to handle rotation/offset differences correctly
             // Now we check that no instance of convex_hull intersects any of the previously checked object instances.
             for (const PrintInstance &instance : print_object->instances()) {
+                if (! checked_model_instances.insert(instance.model_instance).second)
+                    continue;
                 Polygon convex_hull0 = print_object->model_object()->convex_hull_2d(Geometry::assemble_transform(
                             { 0.0, 0.0, instance.model_instance->get_offset().z() }, instance.model_instance->get_rotation(), instance.model_instance->get_scaling_factor(), instance.model_instance->get_mirror()));
 
@@ -2106,6 +2121,55 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         }
     }
 
+    // Multiplanar cut planes, virtual mode.
+    if (std::any_of(m_objects.begin(), m_objects.end(), [](const PrintObject *object) { return object->is_segment(); })) {
+        // A section is printed completely before the section resting on it; only the sequential
+        // print order does that.
+        if (m_config.print_sequence != PrintSequence::ByObject)
+            return { L("Cut planes require the \"By object\" print sequence: each section is printed completely before the section resting on it."), nullptr, "print_sequence" };
+        if (m_config.spiral_mode)
+            return { L("Spiral vase mode is not supported with cut planes."), nullptr, "spiral_mode" };
+
+        // The nozzle stays upright while a tilted section prints, so past a certain tilt the side of
+        // the hotend the layer climbs toward runs into it, and past a certain run the climb no longer
+        // fits under the gantry. Refused, never clamped: the build direction drives the cut geometry
+        // and the 3D scene, so quietly reducing it here would print something the viewport never showed.
+        const double         manual   = m_config.nonplanar_virtual_max_angle.value;
+        const HotendEnvelope envelope = HotendEnvelope::from_config(m_config);
+        for (const PrintObject *object : m_objects) {
+            if (! object->is_segment() || object->is_root_segment())
+                continue;
+            const Vec3d  normal  = object->build_normal_world();
+            const double tilt    = Geometry::rad2deg(std::acos(std::clamp(normal.z(), -1., 1.)));
+            const double azimuth = std::atan2(normal.y(), normal.x());
+            const double reach   = object->effective_build_reach();
+            const double derived = virtual_tilt_limit_deg(envelope, m_config.nonplanar_gantry_height.value, reach, azimuth);
+            // Whichever is stricter, ignoring the ones that are switched off (0 = not applied).
+            const double limit = (derived > 0. && manual > 0.) ? std::min(derived, manual) : std::max(derived, manual);
+            if (limit <= 0. || tilt <= limit + EPSILON)
+                continue;
+            // Name the constraint that actually bound, so the advice is actionable.
+            const bool gantry_bound = limit == derived && reach > 0. && derived < virtual_tilt_hotend_term_deg(envelope, azimuth) - EPSILON;
+            const HotendEnvelope::Side face = virtual_tilt_binding_face(envelope, azimuth);
+            StringObjectException ret;
+            ret.string = gantry_bound ?
+                // TRN %1% and %2% are angles in degrees, %3% is the section width in mm, %4% the gantry clearance in mm.
+                Slic3r::format(_u8L("A cut-plane section is tilted %1% degrees from vertical, but at most %2% degrees is allowed here. "
+                                    "The section is %3% mm across, so at that tilt it would climb higher than the %4% mm of clearance "
+                                    "under the gantry. Reduce the cut plane angle, or cut it into smaller sections."),
+                               (boost::format("%.1f") % tilt).str(), (boost::format("%.1f") % limit).str(),
+                               (boost::format("%.0f") % reach).str(), (boost::format("%.0f") % m_config.nonplanar_gantry_height.value).str()) :
+                // TRN %1% and %2% are angles in degrees, %3% is a side of the hotend such as "+X".
+                Slic3r::format(_u8L("A cut-plane section is tilted %1% degrees from vertical, but at most %2% degrees is allowed here. "
+                                    "Leaning this way, the layers climb toward the hotend's %3% side. Reduce the cut plane angle, or "
+                                    "lean it toward a slimmer side of the hotend."),
+                               (boost::format("%.1f") % tilt).str(), (boost::format("%.1f") % limit).str(), HotendEnvelope::side_name(face));
+            ret.opt_key = gantry_bound ? "nonplanar_gantry_height" : HotendEnvelope::option_key(face);
+            ret.object  = object->model_object();
+            return ret;
+        }
+    }
+
     if (m_config.print_sequence == PrintSequence::ByObject && (m_objects.size() > 1 || m_objects[0]->instances().size() > 1)) {
         if (m_config.timelapse_type == TimelapseType::tlSmooth)
             return {L("Smooth mode of timelapse is not supported when \"by object\" sequence is enabled.")};
@@ -2896,8 +2960,14 @@ BoundingBox Print::total_bounding_box() const
     BoundingBox bb = this->bounding_box();
 
     // we need to offset the objects bounding box by at least half the perimeters extrusion width
-    Flow perimeter_flow = m_objects.front()->get_layer(0)->get_region(0)->flow(frPerimeter);
-    double extra = perimeter_flow.width/2;
+    // A cut plane may legally leave a segment with no layers, so the first object is not guaranteed
+    // to have a layer 0 to sample the flow from: take the first object that has one.
+    double extra = 0.;
+    for (const PrintObject *object : m_objects)
+        if (object->layer_count() > 0 && ! object->get_layer(0)->regions().empty()) {
+            extra = object->get_layer(0)->get_region(0)->flow(frPerimeter).width / 2;
+            break;
+        }
 
     // consider support material
     if (this->has_support_material()) {
@@ -3114,6 +3184,9 @@ std::map<ObjectID, unsigned int> getObjectExtruderMap(const Print& print) {
         // BBS
         if (object->object_first_layer_wall_extruders.empty()){
             unsigned int objectFirstLayerFirstExtruder = print.config().filament_diameter.size();
+            // A non-root cut-plane segment never touches the bed, so it takes no part in the brim.
+            if (object->layers().empty() || ! object->is_root_segment())
+                continue;
             auto firstLayerRegions = object->layers().front()->regions();
             if (!firstLayerRegions.empty()) {
                 for (const LayerRegion* regionPtr : firstLayerRegions) {
@@ -3182,6 +3255,10 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
     //add the print_object share check logic
     auto is_print_object_the_same = [](const PrintObject* object1, const PrintObject* object2) -> bool{
         if (object1->trafo().matrix() != object2->trafo().matrix())
+            return false;
+        // The cut-plane segments of one ModelObject share its volumes and trafo but slice different
+        // parts of it in different frames; a segment is never the same as anything else.
+        if (object1->is_segment() || object2->is_segment())
             return false;
         const ModelObject* model_obj1 = object1->model_object();
         const ModelObject* model_obj2 = object2->model_object();
@@ -3817,7 +3894,12 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             m_fake_wipe_tower.set_pos({m_config.wipe_tower_x.get_at(m_plate_index), m_config.wipe_tower_y.get_at(m_plate_index)});
             wipe_tower_opt = std::make_optional<const FakeWipeTower *>(&m_fake_wipe_tower);
         }
-        auto            conflictRes = ConflictChecker::find_inter_of_lines_in_diff_objs(m_objects, wipe_tower_opt);
+        // Cut-plane segments are sliced in their own frames and overlap their neighbours by design;
+        // the per-layer XY comparison does not apply to them.
+        PrintObjectPtrs conflict_objects;
+        std::copy_if(m_objects.begin(), m_objects.end(), std::back_inserter(conflict_objects),
+                     [](const PrintObject *object) { return ! object->is_segment(); });
+        auto            conflictRes = ConflictChecker::find_inter_of_lines_in_diff_objs(conflict_objects, wipe_tower_opt);
         auto            endTime     = Clock::now();
         volatile double seconds     = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() / (double) 1000;
         BOOST_LOG_TRIVIAL(info) << "gcode path conflicts check takes " << seconds << " secs.";
@@ -3913,6 +3995,9 @@ void Print::_make_skirt()
     coordf_t skirt_height_z = 0.;
     if (generate_skirt) {
         for (const PrintObject *object : m_objects) {
+            // The skirt surrounds what stands on the bed: a non-root cut-plane segment does not.
+            if (! object->is_root_segment() || object->layer_count() == 0)
+                continue;
             size_t skirt_layers = this->has_infinite_skirt() ?
                 object->layer_count() :
                 std::min(size_t(m_config.skirt_height.value), object->layer_count());
@@ -3929,6 +4014,8 @@ void Print::_make_skirt()
     // geometry up to skirt height. Instances translate this hull later.
     std::vector<ObjectSkirtHull> object_convex_hulls;
     for (PrintObject *object : m_objects) {
+        if (! object->is_root_segment())
+            continue;
         Points object_points;
         // Get object layers up to skirt_height_z.
         for (const Layer *layer : object->m_layers) {
@@ -4250,6 +4337,9 @@ Polygons Print::first_layer_islands() const
 {
     Polygons islands;
     for (PrintObject *object : m_objects) {
+        // A non-root cut-plane segment never touches the bed.
+        if (! object->is_root_segment() || object->m_layers.empty())
+            continue;
         Polygons object_islands;
         for (ExPolygon &expoly : object->m_layers.front()->lslices)
             object_islands.push_back(expoly.contour);

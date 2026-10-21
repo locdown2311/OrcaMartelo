@@ -1278,6 +1278,7 @@ ModelObject& ModelObject::assign_copy(const ModelObject &rhs)
     this->sla_drain_holes             = rhs.sla_drain_holes;
     this->brim_points                 = rhs.brim_points;
     this->layer_config_ranges         = rhs.layer_config_ranges;
+    this->cut_planes                  = rhs.cut_planes;
     this->layer_height_profile        = rhs.layer_height_profile;
     this->printable                   = rhs.printable;
     this->auto_drop                   = rhs.auto_drop;
@@ -1319,6 +1320,7 @@ ModelObject& ModelObject::assign_copy(ModelObject &&rhs)
     this->sla_drain_holes             = std::move(rhs.sla_drain_holes);
     this->brim_points                 = std::move(rhs.brim_points);
     this->layer_config_ranges         = std::move(rhs.layer_config_ranges);
+    this->cut_planes                  = std::move(rhs.cut_planes);
     this->layer_height_profile        = std::move(rhs.layer_height_profile);
     this->printable                   = std::move(rhs.printable);
     this->auto_drop                   = rhs.auto_drop;
@@ -2119,6 +2121,9 @@ void ModelObject::clone_for_cut(ModelObject **obj)
     (*obj)->sla_points_status = sla::PointsStatus::NoPoints;
     (*obj)->clear_volumes();
     (*obj)->input_file.clear();
+    // A destructive cut must not duplicate the cut-plane stack onto the clone; the halves would
+    // otherwise each carry (and re-apply) the full set of planes.
+    (*obj)->cut_planes = CutPlaneStack();
 }
 
 bool ModelVolume::is_the_only_one_part() const 

@@ -117,6 +117,8 @@ set(lisbslic3r_sources
     ContourZ.cpp
     CustomGCode.cpp
     CustomGCode.hpp
+    CutPlaneSegmentation.cpp
+    CutPlaneSegmentation.hpp
     CutUtils.cpp
     CutUtils.hpp
     EdgeGrid.cpp
@@ -368,6 +370,8 @@ set(lisbslic3r_sources
     MTUtils.hpp
     MultiMaterialSegmentation.cpp
     MultiMaterialSegmentation.hpp
+    Multiplanar.cpp
+    Multiplanar.hpp
     MultiPoint.cpp
     MultiPoint.hpp
     MutablePolygon.cpp

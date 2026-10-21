@@ -134,6 +134,9 @@ static bool closest_point_on_matching_island(const ExPolygons &raw_outline, cons
 static ExPolygons get_print_object_bottom_layer_expolygons(const PrintObject &print_object)
 {
     ExPolygons ex_polygons;
+    // A cut-plane segment may legitimately have no layers.
+    if (print_object.layers().empty())
+        return ex_polygons;
     for (LayerRegion *region : print_object.layers().front()->regions())
         Slic3r::append(ex_polygons, closing_ex(region->slices.surfaces, float(SCALED_EPSILON)));
     return ex_polygons;
@@ -378,7 +381,7 @@ static ExPolygons make_brim_ears(const PrintObject* object)
 {
     ExPolygons mouse_ears_ex;
     BrimPoints brim_ear_points = object->model_object()->brim_points;
-    if (brim_ear_points.size() <= 0) {
+    if (brim_ear_points.size() <= 0 || object->layers().empty()) {
         return mouse_ears_ex;
     }
     //ORCA: Painted ears follow the EFC-adjusted outline when enabled, while
@@ -919,6 +922,11 @@ void make_brim(const Print& print, PrintTryCancel try_cancel, Polygons& islands_
     for (const ObjectID printObjID : print.print_object_ids()) {
         BoundingBox bbx;
         PrintObject* object = const_cast<PrintObject*>(print.get_object(printObjID));
+        // A non-root cut-plane segment never touches the bed.
+        if (! object->is_root_segment() || object->layers().empty()) {
+            object->firstLayerObjectBrimBoundingBox = bbx;
+            continue;
+        }
         //ORCA: Use EFC-compensated outline for brim bounding box when enabled.
         const ExPolygons brim_slices = use_brim_efc_outline(*object) ?
             get_print_object_bottom_layer_expolygons(*object) : object->layers().front()->lslices;

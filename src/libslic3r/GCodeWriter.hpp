@@ -98,6 +98,13 @@ public:
     // Orca: wave-overhang — travel with an explicit speed override (mm/s). 0 = use config.
     std::string travel_to_xyz(const Vec3d &point, double speed_override, const std::string &comment = std::string(), bool force_z = false);
     std::string travel_to_z(double z, const std::string &comment = std::string(), bool force = false);
+    // One travel to a bed-frame point, emitted as is: no lazy-lift rewriting, and any pending or
+    // applied lift is considered consumed. Used by multiplanar segments, whose travels plan their
+    // own clearance (GCode::frame_travel_to()).
+    std::string travel_to_xyz_direct(const Vec3d &point, const std::string &comment = std::string());
+    // Highest bed-frame Z at which material has been laid so far. Unlike a layer's print_z it is a
+    // real height for tilted cut-plane segments too.
+    double      max_extrusion_z() const { return m_max_extrusion_z; }
     bool        will_move_z(double z) const;
     std::string extrude_to_xy(const Vec2d &point, double dE, const std::string &comment = std::string(), bool force_no_extrusion = false);
     //BBS: generate G2 or G3 extrude which moves by arc
@@ -191,6 +198,8 @@ public:
 protected:
     // Position/lift/offset state.
     Vec3d           m_pos = Vec3d::Zero();
+    // See max_extrusion_z(). Updated by the extrude_* emitters.
+    double          m_max_extrusion_z = 0.;
     double          m_x_offset{ 0 };
     double          m_y_offset{ 0 };
     double          m_lifted;

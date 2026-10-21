@@ -487,14 +487,16 @@ void ToolOrdering::sort_and_build_data(const PrintObject& object , unsigned int 
     m_sorted = true;
 
     double max_layer_height = calc_max_layer_height(object.print()->config(), object.config().layer_height);
+    // A cut-plane segment may legitimately have no layers.
+    const double object_bottom_z = object.layers().empty() ? 0. : object.layers().front()->print_z - object.layers().front()->height;
 
-    this->fill_wipe_tower_partitions(object.print()->config(), object.layers().front()->print_z - object.layers().front()->height, max_layer_height);
+    this->fill_wipe_tower_partitions(object.print()->config(), object_bottom_z, max_layer_height);
     if (this->insert_wipe_tower_extruder()) {
         reorder_extruders_for_minimum_flush_volume(reorder_first_layer);
         // Orca reorders a second time here (BBS has no such path); re-enforce so the
         // mixed sub-layer component order survives the extra pass.
         this->enforce_mixed_component_order();
-        this->fill_wipe_tower_partitions(object.print()->config(), object.layers().front()->print_z - object.layers().front()->height, max_layer_height);
+        this->fill_wipe_tower_partitions(object.print()->config(), object_bottom_z, max_layer_height);
     }
 
     this->collect_extruder_statistics(prime_multi_material);

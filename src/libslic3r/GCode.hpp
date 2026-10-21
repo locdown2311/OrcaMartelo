@@ -541,7 +541,9 @@ protected:
     void            set_extruders(const std::vector<unsigned int> &extruder_ids);
     std::string     preamble();
     // BBS
-    std::string     change_layer(coordf_t print_z);
+    // tilted_frame: the layer belongs to a tilted cut-plane segment, whose print_z is a distance along
+    // the segment's build normal rather than a bed height (see m_slice_frame).
+    std::string     change_layer(coordf_t print_z, bool tilted_frame = false);
     // Bedslinger model: derive the Y-axis acceleration limit from the machine force/bed-mass config
     // and the mass already printed. Yields the min machine Y acceleration when the A2L config keys are
     // unset (i.e. every existing printer), so it is inert for them.
@@ -907,6 +909,22 @@ protected:
     double   m_sub_layer_flow_ratio = 0.0;
     double   m_sub_layer_height     = 0.0;
     bool m_need_change_layer_lift_z = false;
+    // Multiplanar cut planes. While a tilted segment's extrusions are emitted this holds its
+    // PrintObject::post_trafo_inverse(): every point (G-code XY, slice-frame Z) is un-rotated into the
+    // bed frame and written with its own Z, and travels clear the tilted layer (frame_travel_to()).
+    // Empty for everything else, which is then emitted exactly as before.
+    std::optional<Transform3d> m_slice_frame;
+    // The next travel inside a slice frame starts from a position that may lie in another frame (a
+    // new object, or after custom G-code): lift clear of everything printed so far first.
+    bool m_slice_frame_transition = false;
+    // The last frame set, to tell a new segment from the next layer of the same one.
+    std::optional<Transform3d> m_last_slice_frame;
+    void        set_slice_frame(const PrintObject &object);
+    void        reset_slice_frame() { m_slice_frame.reset(); }
+    // A point in this object's slice frame (scaled XY, slice-frame Z in mm including z_offset) as a
+    // G-code (bed-frame) point.
+    Vec3d       frame_point(const Point &point, double z) const;
+    std::string frame_travel_to(const Point &point, ExtrusionRole role, const std::string &comment, double z);
     int m_start_gcode_filament = -1;
     std::string m_filament_instances_code;
 
@@ -951,7 +969,9 @@ protected:
     void _print_first_layer_extruder_temperatures(GCodeOutputStream &file, Print &print, const std::string &gcode, unsigned int first_printing_extruder_id, bool wait);
     // On the first printing layer. This flag triggers first layer speeds.
     //BBS
-    bool    on_first_layer() const { return m_layer != nullptr && m_layer->id() == 0 && abs(m_layer->bottom_z()) < EPSILON; }
+    // A non-root cut-plane segment's first layer rests on printed plastic, not on the bed.
+    bool    on_first_layer() const { return m_layer != nullptr && m_layer->id() == 0 && abs(m_layer->bottom_z()) < EPSILON
+                                            && (m_layer->object() == nullptr || m_layer->object()->is_root_segment()); }
     // Per-point first-layer test.  On a belt printer the result depends on the
     // supplied slicing-frame point (its height above the belt); otherwise we
     // delegate to the legacy per-layer test.  This is the entry point used by

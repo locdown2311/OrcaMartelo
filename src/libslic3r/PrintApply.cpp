@@ -184,12 +184,28 @@ struct PrintObjectTrafoAndInstances
 {
     Transform3d    	trafo;
     PrintInstances	instances;
-    bool operator<(const PrintObjectTrafoAndInstances &rhs) const { return transform3d_lower(this->trafo, rhs.trafo); }
+    // Multiplanar cut planes: which segment of the ModelObject's partition this PrintObject
+    // represents (-1 = not segmented). Part of the identity key together with the trafo, so
+    // co-located segments do not collapse into one PrintObject.
+    int                                 segment_index { -1 };
+    std::optional<CutSegmentDescriptor> segment;
+    bool operator<(const PrintObjectTrafoAndInstances &rhs) const {
+        if (transform3d_lower(this->trafo, rhs.trafo))
+            return true;
+        if (transform3d_lower(rhs.trafo, this->trafo))
+            return false;
+        return this->segment_index < rhs.segment_index;
+    }
 };
 
 // Generate a list of trafos and XY offsets for instances of a ModelObject
 // Orca: Updated to include XYZ filament shrinkage compensation
-static std::vector<PrintObjectTrafoAndInstances> print_objects_from_model_object(const ModelObject &model_object, const Vec3d &shrinkage_compensation, bool force_separate_instances = false)
+// Multiplanar cut planes: with `enable_cut_planes`, each distinct transform derives its own
+// segment partition and is multiplied into one entry per segment, keyed by (trafo, segment_index).
+// The caller also forces separate instances then: a segment un-rotates about its own instance's
+// placement (PrintObject::update_slice_frame()), so copies cannot share one PrintObject.
+static std::vector<PrintObjectTrafoAndInstances> print_objects_from_model_object(const ModelObject &model_object, const Vec3d &shrinkage_compensation, bool force_separate_instances = false,
+                                                                                 bool enable_cut_planes = false, double min_segment_thickness = 0.)
 {
     std::set<PrintObjectTrafoAndInstances> trafos;
     PrintObjectTrafoAndInstances           trafo;
@@ -224,8 +240,26 @@ static std::vector<PrintObjectTrafoAndInstances> print_objects_from_model_object
         index++;
     }
 
-    //BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", Line %1%: got %2% print objects")%__LINE__ %trafos.size();
-    return std::vector<PrintObjectTrafoAndInstances>(trafos.begin(), trafos.end());
+    if (! enable_cut_planes)
+        return std::vector<PrintObjectTrafoAndInstances>(trafos.begin(), trafos.end());
+
+    std::vector<PrintObjectTrafoAndInstances> out;
+    for (const PrintObjectTrafoAndInstances &base : trafos) {
+        // Derived per distinct transform: a tilt or mirror may change which side rests on the bed,
+        // so descriptors cannot be shared between differently oriented instances.
+        const std::vector<CutSegmentDescriptor> segments = derive_cut_segments(model_object, base.trafo, min_segment_thickness);
+        if (segments.empty()) {
+            out.push_back(base);
+            continue;
+        }
+        for (const CutSegmentDescriptor &seg : segments) {
+            PrintObjectTrafoAndInstances entry = base; // copies the instances
+            entry.segment_index = seg.index;
+            entry.segment       = seg;
+            out.push_back(std::move(entry));
+        }
+    }
+    return out;
 }
 
 // Compare just the layer ranges and their layer heights, not the associated configs.
@@ -555,6 +589,7 @@ struct PrintObjectStatus {
         id(print_object->model_object()->id()),
         print_object(print_object),
         trafo(print_object->trafo()),
+        segment_index(print_object->segment_index()),
         status(status) {}
     PrintObjectStatus(ObjectID id) : id(id), print_object(nullptr), trafo(Transform3d::Identity()), status(Unknown) {}
 
@@ -564,6 +599,8 @@ struct PrintObjectStatus {
     PrintObject     *print_object;
     // Trafo generated with model_object->world_matrix(true)
     Transform3d      trafo;
+    // Multiplanar cut planes: segment identity of the PrintObject (-1 = not segmented).
+    int              segment_index { -1 };
     Status           status;
 
     // Search by id.
@@ -1816,7 +1853,10 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         bool solid_or_modifier_differ   = model_volume_list_changed(model_object, model_object_new, solid_or_modifier_types) ||
                                           model_mmu_segmentation_data_changed(model_object, model_object_new) ||
                                           (model_object_new.is_mm_painted() && num_extruders_changed) ||
-                                          model_fuzzy_skin_data_changed(model_object, model_object_new);
+                                          model_fuzzy_skin_data_changed(model_object, model_object_new) ||
+                                          // Cut planes reshape the sliced geometry and possibly the PrintObject
+                                          // count, so any change routes through the full invalidation.
+                                          model_object.cut_planes != model_object_new.cut_planes;
         bool supports_differ            = model_volume_list_changed(model_object, model_object_new, ModelVolumeType::SUPPORT_BLOCKER) ||
                                           model_volume_list_changed(model_object, model_object_new, ModelVolumeType::SUPPORT_ENFORCER);
         bool precise_seam_differ        = model_volume_list_changed(model_object, model_object_new, precise_seam_types);
@@ -1951,7 +1991,13 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             // Belt printers: force each instance into its own PrintObject so each
             // gets independent layer Z values (its bed position is folded into them).
             bool belt_force_separate = m_config.belt_printer.value;
-            model_object_status.print_instances = print_objects_from_model_object(*model_object, this->shrinkage_compensation(), belt_force_separate);
+            // Multiplanar cut planes: gated on the printer switch and an active stack, so ordinary
+            // objects follow the legacy path bit for bit. Derivation is deterministic, so an
+            // unchanged stack reproduces identical (trafo, segment_index) keys and the PrintObjects
+            // are reused.
+            const bool cut_planes = m_config.enable_nonplanar.value && ! m_config.belt_printer.value && model_object->cut_planes.active();
+            model_object_status.print_instances = print_objects_from_model_object(*model_object, this->shrinkage_compensation(),
+                belt_force_separate || cut_planes, cut_planes, m_config.initial_layer_print_height.value);
             std::vector<const PrintObjectStatus*> old;
             old.reserve(print_object_status_db.count(*model_object));
             for (const PrintObjectStatus &print_object_status : print_object_status_db.get_range(*model_object))
@@ -1966,10 +2012,26 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                     PrintObject::object_config_from_model_object(m_default_object_config, *model_object, num_extruders, print_variant_index));
                 print_object_last = print_object;
             };
+            // Multiplanar cut planes: PrintObject identity is (trafo, segment_index), not the trafo alone.
+            auto old_key_lower = [](const PrintObjectStatus *lhs, const PrintObjectStatus *rhs) {
+                if (transform3d_lower(lhs->trafo, rhs->trafo)) return true;
+                if (transform3d_lower(rhs->trafo, lhs->trafo)) return false;
+                return lhs->segment_index < rhs->segment_index;
+            };
+            auto old_lower_than_new = [](const PrintObjectStatus *lhs, const PrintObjectTrafoAndInstances &rhs) {
+                if (transform3d_lower(lhs->trafo, rhs.trafo)) return true;
+                if (transform3d_lower(rhs.trafo, lhs->trafo)) return false;
+                return lhs->segment_index < rhs.segment_index;
+            };
+            auto old_equals_new = [](const PrintObjectStatus *lhs, const PrintObjectTrafoAndInstances &rhs) {
+                return transform3d_equal(lhs->trafo, rhs.trafo) && lhs->segment_index == rhs.segment_index;
+            };
             if (old.empty()) {
                 // Simple case, just generate new instances.
                 for (PrintObjectTrafoAndInstances &print_instances : model_object_status.print_instances) {
                     PrintObject *print_object = new PrintObject(this, model_object, print_instances.trafo, std::move(print_instances.instances));
+                    if (print_instances.segment)
+                        print_object->set_segment(std::move(*print_instances.segment));
                     print_object_apply_config(print_object);
                     print_objects_new.emplace_back(print_object);
                     // print_object_status.emplace(PrintObjectStatus(print_object, PrintObjectStatus::New));
@@ -1978,15 +2040,17 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                 continue;
             }
             // Complex case, try to merge the two lists.
-            // Sort the old lexicographically by their trafos.
-            std::sort(old.begin(), old.end(), [](const PrintObjectStatus *lhs, const PrintObjectStatus *rhs){ return transform3d_lower(lhs->trafo, rhs->trafo); });
+            // Sort the old lexicographically by their (trafo, segment) keys.
+            std::sort(old.begin(), old.end(), old_key_lower);
             // Merge the old / new lists.
             auto it_old = old.begin();
             for (PrintObjectTrafoAndInstances &new_instances : model_object_status.print_instances) {
-				for (; it_old != old.end() && transform3d_lower((*it_old)->trafo, new_instances.trafo); ++ it_old);
-				if (it_old == old.end() || ! transform3d_equal((*it_old)->trafo, new_instances.trafo)) {
+				for (; it_old != old.end() && old_lower_than_new(*it_old, new_instances); ++ it_old);
+				if (it_old == old.end() || ! old_equals_new(*it_old, new_instances)) {
                     // This is a new instance (or a set of instances with the same trafo). Just add it.
                     PrintObject *print_object = new PrintObject(this, model_object, new_instances.trafo, std::move(new_instances.instances));
+                    if (new_instances.segment)
+                        print_object->set_segment(std::move(*new_instances.segment));
                     print_object_apply_config(print_object);
                     print_objects_new.emplace_back(print_object);
                     // print_object_status.emplace(PrintObjectStatus(print_object, PrintObjectStatus::New));
@@ -2000,6 +2064,14 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                         size_t extruder_num = new_full_config.option<ConfigOptionFloats>("nozzle_diameter")->size();
                         update_apply_status(status == PrintBase::APPLY_STATUS_INVALIDATED);
                         belt_instances_shifted = true;
+                    }
+                    // Multiplanar cut planes: the key matched but the descriptor can still differ (the
+                    // instance defining "down" changed while this trafo key survived). The sliced
+                    // geometry depends on the clips and the build normal, so refresh and invalidate.
+                    if (new_instances.segment && (*it_old)->print_object->segment().has_value() &&
+                        *(*it_old)->print_object->segment() != *new_instances.segment) {
+                        update_apply_status((*it_old)->print_object->invalidate_all_steps());
+                        (*it_old)->print_object->set_segment(std::move(*new_instances.segment));
                     }
 					print_objects_new.emplace_back((*it_old)->print_object);
 					const_cast<PrintObjectStatus*>(*it_old)->status = PrintObjectStatus::Reused;

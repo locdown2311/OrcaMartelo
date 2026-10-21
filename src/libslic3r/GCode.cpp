@@ -2295,7 +2295,9 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
         // zero perimeters and an empty first layer — which is expected, not
         // an error.  In global shear mode the object may also start above
         // Z=0 on the tilted belt surface.
-        if (layers_to_print.size() == 1u) {
+        // A cut-plane segment never rests on the bed with an empty first layer: its schedule is
+        // rebased onto its own material, and the layers it keeps without extrusions are dropped below.
+        if (layers_to_print.size() == 1u && ! object.is_segment()) {
             if (!has_extrusions && !skip_empty_first_layer)
                 throw Slic3r::SlicingError(_(L("One object has an empty first layer and can't be printed. Please Cut the bottom or enable supports.")), object.id().id);
         }
@@ -2346,6 +2348,14 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
         if (has_extrusions)
             last_extrusion_layer = &layers_to_print.back();
     }
+
+    // Multiplanar cut planes: a segment slices past its own material where a later segment may need a
+    // support column (PrintObject::segment_slice_top()). The layers that end up with nothing to
+    // print are dropped: a tilted segment's layer change has no bed height to move to.
+    if (object.is_segment())
+        layers_to_print.erase(std::remove_if(layers_to_print.begin(), layers_to_print.end(), [](const LayerToPrint &ltp) {
+            return ! (ltp.object_layer && ltp.object_layer->has_extrusions()) && ! (ltp.support_layer && ltp.support_layer->has_extrusions());
+        }), layers_to_print.end());
 
     // ORCA-Belt: objects print at their position along the belt, so the first
     // extrusions legitimately start far above Z=0. Drop the spurious
@@ -3209,11 +3219,25 @@ std::vector<const PrintInstance*> sort_object_instances_by_model_order(const Pri
                 const_cast<ModelInstance*>(print_instance.model_instance)->arrange_order = find_object_index(print.model(), print_object->model_object());
             model_instance_to_print_instance.emplace_back(print_instance.model_instance, &print_instance);
         }
-    std::sort(model_instance_to_print_instance.begin(), model_instance_to_print_instance.end(), [](auto &l, auto &r) { return l.first->arrange_order < r.first->arrange_order; });
+    // The cut-plane segments of one ModelInstance are separate PrintObjects sharing that instance:
+    // they stay together, root first, then in segment (peel) order, so each section is printed
+    // completely before the section resting on it.
+    const auto print_order_lower = [](const std::pair<const ModelInstance*, const PrintInstance*> &l,
+                                      const std::pair<const ModelInstance*, const PrintInstance*> &r) {
+        if (l.first->arrange_order != r.first->arrange_order)
+            return l.first->arrange_order < r.first->arrange_order;
+        return l.second->print_object->segment_index() < r.second->print_object->segment_index();
+    };
+    std::stable_sort(model_instance_to_print_instance.begin(), model_instance_to_print_instance.end(), print_order_lower);
     if (init_order) {
         // Re-assign the arrange_order so each instance has a unique order number
-        for (int k = 0; k < model_instance_to_print_instance.size(); k++) {
-            const_cast<ModelInstance*>(model_instance_to_print_instance[k].first)->arrange_order = k + 1;
+        int order = 0;
+        const ModelInstance *last = nullptr;
+        for (auto &[model_instance, print_instance] : model_instance_to_print_instance) {
+            if (model_instance != last)
+                ++ order;
+            last = model_instance;
+            const_cast<ModelInstance*>(model_instance)->arrange_order = order;
         }
     }
 
@@ -3222,10 +3246,15 @@ std::vector<const PrintInstance*> sort_object_instances_by_model_order(const Pri
     for (const ModelObject *model_object : print.model().objects)
         for (const ModelInstance *model_instance : model_object->instances) {
             auto it = std::lower_bound(model_instance_to_print_instance.begin(), model_instance_to_print_instance.end(), std::make_pair(model_instance, nullptr), [](auto &l, auto &r) { return l.first->arrange_order < r.first->arrange_order; });
-            if (it != model_instance_to_print_instance.end() && it->first == model_instance)
-                instances.emplace_back(it->second);
+            for (; it != model_instance_to_print_instance.end() && it->first->arrange_order == model_instance->arrange_order; ++ it)
+                if (it->first == model_instance)
+                    instances.emplace_back(it->second);
         }
-    std::sort(instances.begin(), instances.end(), [](auto& l, auto& r) { return l->model_instance->arrange_order < r->model_instance->arrange_order; });
+    std::stable_sort(instances.begin(), instances.end(), [](auto& l, auto& r) {
+        if (l->model_instance->arrange_order != r->model_instance->arrange_order)
+            return l->model_instance->arrange_order < r->model_instance->arrange_order;
+        return l->print_object->segment_index() < r->print_object->segment_index();
+    });
     return instances;
 }
 
@@ -3950,8 +3979,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             const PrintObject *print_object = print.get_object(print_object_ID_t);
             // object hight
             if (!print_object->layers().empty() && print_object->layers().back()->print_z > max_hight_temp) max_hight_temp = print_object->layers().back()->print_z;
-            // object area
-            if (!print_object->layers().empty() && print_object->layers().front()->print_z < print.config().initial_layer_print_height + EPSILON &&
+            // object area (a non-root cut-plane segment never touches the bed)
+            if (print_object->is_root_segment() && !print_object->layers().empty() && print_object->layers().front()->print_z < print.config().initial_layer_print_height + EPSILON &&
                 !print_object->layers().front()->lslices.empty()) {
                 ExPolygons temp_Expolys = print_object->layers().front()->lslices;
                 for (ExPolygon &temp_Expoly : temp_Expolys) { area_sum_temp += temp_Expoly.area(); }
@@ -4645,8 +4674,11 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                     } else {
                         file.write(this->retract());
                     }
-                    file.write(m_writer.travel_to_z(m_max_layer_z + m_writer.config.z_hop.get_at(get_filament_config_index((int)initial_extruder_id))));
+                    // m_max_layer_z is a slice-frame height; a tilted cut-plane segment may have
+                    // printed higher in the bed frame, which the writer tracks.
+                    file.write(m_writer.travel_to_z(std::max<double>(m_max_layer_z, m_writer.max_extrusion_z()) + m_writer.config.z_hop.get_at(get_filament_config_index((int)initial_extruder_id))));
                     file.write(this->travel_to(Point(0, 0), erNone, "move to origin position for next object"));
+                    m_slice_frame_transition = true;
                     m_enable_cooling_markers = true;
                     // Disable motion planner when traveling to first object point.
                     m_avoid_crossing_perimeters.disable_once();
@@ -4656,8 +4688,12 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                     this->placeholder_parser().set("current_object_idx", int(finished_objects));
                     std::string printing_by_object_gcode = this->placeholder_parser_process("printing_by_object_gcode", print.config().printing_by_object_gcode.value, initial_extruder_id);
                     // Set first layer bed and extruder temperatures, don't wait for it to reach the temperature.
-                    this->_print_first_layer_bed_temperature(file, print, printing_by_object_gcode, initial_extruder_id, false);
-                    this->_print_first_layer_extruder_temperatures(file, print, printing_by_object_gcode, initial_extruder_id, false);
+                    // A non-root cut-plane segment continues the object on printed plastic: it keeps
+                    // the normal temperatures.
+                    if (object.is_root_segment()) {
+                        this->_print_first_layer_bed_temperature(file, print, printing_by_object_gcode, initial_extruder_id, false);
+                        this->_print_first_layer_extruder_temperatures(file, print, printing_by_object_gcode, initial_extruder_id, false);
+                    }
                     file.writeln(printing_by_object_gcode);
                 }
                 // Reset the cooling buffer internal state (the current position, feed rate, accelerations).
@@ -4693,8 +4729,13 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                 }
                 ++ finished_objects;
                 // Flag indicating whether the nozzle temperature changes from 1st to 2nd layer were performed.
-                // Reset it when starting another object from 1st layer.
-                m_second_layer_things_done = false;
+                // Reset it when starting another object from 1st layer. The section after a cut-plane
+                // segment continues on printed plastic, so the next segment never restarts them.
+                {
+                    auto next = std::next(print_object_instance_sequential_active);
+                    if (next == print_object_instances_ordering.end() || (*next)->print_object->is_root_segment())
+                        m_second_layer_things_done = false;
+                }
                 prev_object = &object;
             }
         } else {
@@ -6549,7 +6590,8 @@ LayerResult GCode::process_layer(
     //BBS: using layer id to judge whether the layer is first layer is wrong. Because if the normal
     //support is attached above the object, and support layers has independent layer height, then the lowest support
     //interface layer id is 0.
-    bool                 first_layer   = (layer.id() == 0 && abs(layer.bottom_z()) < EPSILON);
+    // A non-root cut-plane segment's first layer rests on printed plastic, not on the bed.
+    bool                 first_layer   = (layer.id() == 0 && abs(layer.bottom_z()) < EPSILON) && layer.object()->is_root_segment();
     m_writer.set_is_first_layer(first_layer);
     unsigned int         first_extruder_id = layer_tools.extruders.front();
 
@@ -6633,7 +6675,9 @@ LayerResult GCode::process_layer(
         auto_lift_type = LiftType::SpiralLift;
 
     // BBS: don't use lazy_raise when enable spiral vase
-    gcode += this->change_layer(print_z);  // this will increase m_layer_index
+    // A tilted cut-plane segment is always printed alone (Print::validate() requires "By object").
+    this->reset_slice_frame();
+    gcode += this->change_layer(print_z, layer.object()->is_tilted_segment());  // this will increase m_layer_index
     update_layer_related_config(m_layer_index);
     update_placeholder_parser_with_variant_params();
     m_layer = &layer;
@@ -7421,6 +7465,8 @@ LayerResult GCode::process_layer(
 
     for (unsigned int extruder_id : layer_tools.extruders)
     {
+        // Skirt, tool changes and the wipe tower are emitted in the bed frame.
+        this->reset_slice_frame();
         if (print.config().skirt_type == stCombined && !print.skirt_brim_groups().empty()) {
             for (size_t group_idx = 0; group_idx < print.skirt_brim_groups().size(); ++group_idx) {
                 const Print::SkirtBrimGroup& group = print.skirt_brim_groups()[group_idx];
@@ -7626,6 +7672,8 @@ LayerResult GCode::process_layer(
                 m_last_obj_copy = this_object_copy;
                 this->set_origin(unscale(offset));
                 this->on_set_origin(&instance_to_print.print_object, offset);
+                // A tilted cut-plane segment's support and islands are emitted in its slice frame.
+                this->set_slice_frame(instance_to_print.print_object);
                 if (visit.first_visit && instance_to_print.object_by_extruder.support != nullptr) {
                     m_layer = layers[instance_to_print.layer_id].support_layer;
                     m_object_layer_over_raft = false;
@@ -7742,6 +7790,7 @@ LayerResult GCode::process_layer(
                     gcode += this->extrude_infill(print,by_region_specific, true);
                 }
 
+                this->reset_slice_frame();
                 if (this->config().gcode_label_objects) {
                     gcode += std::string("; stop printing object ") +
                              instance_to_print.print_object.model_object()->name +
@@ -7854,6 +7903,7 @@ LayerResult GCode::process_layer(
                 // Same as the main instance loop: a belt printer rotates the origin through
                 // the belt transform (BeltGCode::on_set_origin).
                 this->on_set_origin(&instance_to_print.print_object, offset);
+                this->set_slice_frame(instance_to_print.print_object);
 
                 // --- Build emission plan ---
                 // Each entry represents one travel_to_z + extrude pass. Per-object mode produces
@@ -8117,6 +8167,12 @@ LayerResult GCode::process_layer(
         this->set_origin(saved_origin);
     }
 
+    this->reset_slice_frame();
+    // A tilted cut-plane segment's print_z is a distance along its build normal, not a bed height.
+    // m_max_layer_z feeds the end G-code and the moves between sequential objects, which must clear
+    // what was actually printed.
+    if (layer.object()->is_tilted_segment())
+        m_max_layer_z = std::max(m_max_layer_z, float(m_writer.max_extrusion_z() - m_config.z_offset.value));
     if (first_layer) {
         for (auto iter = by_extruder.begin(); iter != by_extruder.end(); ++iter) {
             if (!iter->second.empty())
@@ -8393,7 +8449,7 @@ std::string GCode::preamble()
 }
 
 // called by GCode::process_layer()
-std::string GCode::change_layer(coordf_t print_z)
+std::string GCode::change_layer(coordf_t print_z, bool tilted_frame)
 {
     std::string gcode;
     if (m_layer_count > 0)
@@ -8401,7 +8457,12 @@ std::string GCode::change_layer(coordf_t print_z)
         gcode += m_writer.update_progress(++ m_layer_index, m_layer_count);
     //BBS
     coordf_t z = print_z + m_config.z_offset.value;  // in unscaled coordinates
-    if (FILAMENT_CONFIG(retract_when_changing_layer) && m_writer.will_move_z(z)) {
+    if (tilted_frame) {
+        // A tilted layer has no single bed height: retract as for any layer change and leave the
+        // writer's bed-frame Z alone. The first travel of the layer (frame_travel_to()) moves Z.
+        if (FILAMENT_CONFIG(retract_when_changing_layer))
+            gcode += this->retract(false, false, LiftType::NormalLift);
+    } else if (FILAMENT_CONFIG(retract_when_changing_layer) && m_writer.will_move_z(z)) {
         LiftType lift_type = this->to_lift_type(ZHopType(FILAMENT_CONFIG(z_hop_types)));
         //BBS: force to use SpiralLift when change layer if lift type is auto
         gcode += this->retract(false, false, ZHopType(FILAMENT_CONFIG(z_hop_types)) == ZHopType::zhtAuto ? LiftType::SpiralLift : lift_type);
@@ -8419,7 +8480,8 @@ std::string GCode::change_layer(coordf_t print_z)
     m_need_change_layer_lift_z = true;
 
     m_nominal_z = z;
-    m_writer.get_position().z() = z;
+    if (! tilted_frame)
+        m_writer.get_position().z() = z;
 
     // forget last wiping path as wiping after raising Z is pointless
     // BBS. Dont forget wiping path to reduce stringing.
@@ -8703,7 +8765,7 @@ std::string GCode::extrude_loop(const ExtrusionLoop&                       loop_
 
     bool wipe_inward_applied = false;
     // Orca: store loop paths in print order because inward offsets use this orientation.
-    if (m_wipe.enable && FILAMENT_CONFIG(wipe)) {
+    if (m_wipe.enable && FILAMENT_CONFIG(wipe) && !m_slice_frame) {
         m_wipe.update_path(paths);
 
         // Orca: loop wipe paths retain print direction. Their material side is
@@ -8755,8 +8817,11 @@ std::string GCode::extrude_loop(const ExtrusionLoop&                       loop_
 
     // Orca: make the configured inward move before leaving the loop.
     if (wipe_on_loops_dest) {
-        gcode += m_writer.extrude_to_xy(
-            this->point_to_gcode(*wipe_on_loops_dest), 0, "move inwards before travel", true);
+        if (m_slice_frame)
+            gcode += m_writer.extrude_to_xyz(this->frame_point(*wipe_on_loops_dest, m_nominal_z), 0, "move inwards before travel", true);
+        else
+            gcode += m_writer.extrude_to_xy(
+                this->point_to_gcode(*wipe_on_loops_dest), 0, "move inwards before travel", true);
         this->set_last_pos(*wipe_on_loops_dest);
     }
 
@@ -8800,7 +8865,7 @@ std::string GCode::extrude_multi_path(const ExtrusionMultiPath& multipath, const
     }
 
     // Orca: multipath wipes retrace the extrusion in reverse order.
-    if (m_wipe.enable && FILAMENT_CONFIG(wipe))
+    if (m_wipe.enable && FILAMENT_CONFIG(wipe) && !m_slice_frame)
         m_wipe.update_path(multipath.paths, true);
 
     return gcode;
@@ -8830,7 +8895,7 @@ std::string GCode::extrude_path(const ExtrusionPath& path, const std::string& de
     m_multi_flow_segment_path_average_mm3_per_mm = 0;
     //    description += ExtrusionEntity::role_to_string(path.role());
     std::string gcode = this->_extrude(path, description, speed);
-    if (m_wipe.enable && FILAMENT_CONFIG(wipe)) {
+    if (m_wipe.enable && FILAMENT_CONFIG(wipe) && !m_slice_frame) {
         m_wipe.reset_path();
         m_wipe.path = path.polyline.to_polyline();
         if (is_tree(this->config().support_type) && is_support(path.role())) {
@@ -8867,7 +8932,7 @@ std::string GCode::extrude_perimeters(const Print &print, const std::vector<Obje
             // Build the printed prefix once in emission order, scoped to this
             // region. Disabled or zero-length wipes need no support geometry.
             std::optional<WipeInwardSupport> wipe_support;
-            if (m_wipe.enable && FILAMENT_CONFIG(wipe) && m_config.wipe_inward &&
+            if (m_wipe.enable && FILAMENT_CONFIG(wipe) && !m_slice_frame && m_config.wipe_inward &&
                 m_config.wipe_inward_distance.value > 0. &&
                 scale_(FILAMENT_CONFIG(wipe_distance)) > SCALED_EPSILON)
                 wipe_support.emplace();
@@ -9241,7 +9306,19 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
     // path is 2D. But in slope lift case, lift z is done in travel_to function.
     // Add m_need_change_layer_lift_z when change_layer in case of no lift if m_last_pos is equal to path.first_point() by chance
     Point first_point = path.first_point();
-    if (!m_last_pos_defined || m_last_pos.to_point() != first_point || m_need_change_layer_lift_z ||
+    if (m_slice_frame) {
+        // Tilted cut-plane segment: Z varies along the path, so the travel arrives at the path's
+        // own first point in the bed frame (frame_travel_to()), and every point carries its Z.
+        if (!m_last_pos_defined || m_last_pos.to_point() != first_point || m_need_change_layer_lift_z) {
+            double z = m_nominal_z;
+            if (sloped != nullptr)
+                z = get_sloped_z(sloped->slope_begin.z_ratio);
+            else if (path.z_contoured && !path.polyline.lines().empty())
+                z = unscale_(path.polyline.lines().begin()->a.z()) + m_nominal_z;
+            gcode += this->travel_to(first_point, path.role(), "move to first " + description + " point", z);
+            m_need_change_layer_lift_z = false;
+        }
+    } else if (!m_last_pos_defined || m_last_pos.to_point() != first_point || m_need_change_layer_lift_z ||
         slope_need_z_travel) {
         const bool _last_pos_undefined = !m_last_pos_defined;
 
@@ -9263,14 +9340,14 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
         m_need_change_layer_lift_z = false;
     }
 
-    if (path.z_contoured && !path.polyline.lines().empty()) {
+    if (!m_slice_frame && path.z_contoured && !path.polyline.lines().empty()) {
         double current_z = m_writer.get_position().z();
         double first_z = unscale_(path.polyline.lines().begin()->a.z()) + m_nominal_z;
         if (GCodeFormatter::quantize_xyzf(first_z) != GCodeFormatter::quantize_xyzf(current_z)) {
             gcode += m_writer.travel_to_z(first_z, "set Z for contouring", true);
         }
     }
-    if (!path.z_contoured && sloped == nullptr) {
+    if (!m_slice_frame && !path.z_contoured && sloped == nullptr) {
         double current_z = m_writer.get_position().z();
         if (GCodeFormatter::quantize_xyzf(current_z) != GCodeFormatter::quantize_xyzf(m_nominal_z)) {
             gcode += this->writer().travel_to_z(m_nominal_z, "reset Z after contouring", true);
@@ -9980,7 +10057,9 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
             }
             // BBS: use G1 if not enable arc fitting or has no arc fitting result or in spiral_mode mode or we are doing sloped extrusion
             // Attention: G2 and G3 is not supported in spiral_mode mode
-            if (!m_config.enable_arc_fitting || path.polyline.fitting_result.empty() || m_config.spiral_mode || sloped != nullptr || path.z_contoured || this->should_disable_arc_fitting()) {
+            // A tilted cut-plane segment un-rotates every point into the bed frame, where an arc in the
+            // slice plane is no longer an arc in XY: plain G1 moves only.
+            if (!m_config.enable_arc_fitting || path.polyline.fitting_result.empty() || m_config.spiral_mode || sloped != nullptr || path.z_contoured || m_slice_frame || this->should_disable_arc_fitting()) {
                 double path_length = 0.;
                 double total_length = sloped == nullptr ? 0. : path.polyline.length() * SCALING_FACTOR;
                 double saved_z      = m_writer.get_position().z();
@@ -10001,7 +10080,23 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
                         }
                     }
                     tag_belt_band((line.a.x() + line.b.x()) / 2, (line.a.y() + line.b.y()) / 2);
-                    if (path.z_contoured) {
+                    if (m_slice_frame) {
+                        // Tilted cut-plane segment: the point in its slice frame, un-rotated.
+                        double z = m_nominal_z;
+                        double e = dE;
+                        if (path.z_contoured) {
+                            const coordf_t z_diff = unscale_(line.b.z());
+                            z += z_diff;
+                            if (path.role() != erIroning)
+                                e *= (path.height + z_diff) / path.height;
+                        } else if (sloped != nullptr) {
+                            const auto [z_ratio, e_ratio] = sloped->interpolate(path_length / total_length);
+                            z = get_sloped_z(z_ratio);
+                            e *= e_ratio;
+                        }
+                        m_writer.extrude_to_xyz(gcode, this->frame_point(line.b.to_point(), z), e,
+                                                flow_description.empty() ? description : flow_description, path.is_force_no_extrusion());
+                    } else if (path.z_contoured) {
                         // ZAA: Z anti-aliased extrusion with variable Z per point
                         Vec2d dest2d = this->point_to_gcode(line.b.to_point());
                         coordf_t z_diff = unscale_(line.b.z());
@@ -10210,7 +10305,23 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
                     flow_description = description + Slic3r::format(" | Old Flow Value: %0.5f Length: %0.5f",oldE, line_length);
                 }
             }
-            if (path.z_contoured) {
+            if (m_slice_frame) {
+                // Tilted cut-plane segment: the point in its slice frame, un-rotated.
+                double z = m_nominal_z;
+                double e = dE;
+                if (path.z_contoured) {
+                    const coordf_t z_diff = unscale_(processed_point.p.z());
+                    z += z_diff;
+                    if (path.role() != erIroning)
+                        e *= (path.height + z_diff) / path.height;
+                } else if (sloped != nullptr) {
+                    const auto [z_ratio, e_ratio] = sloped->interpolate(path_length / total_length);
+                    z = get_sloped_z(z_ratio);
+                    e *= e_ratio;
+                }
+                m_writer.extrude_to_xyz(gcode, this->frame_point(processed_point.p.to_point(), z), e,
+                                        flow_description.empty() ? description : flow_description);
+            } else if (path.z_contoured) {
                 Vec2d    dest2d = p.head<2>();
                 coordf_t z_diff = unscale_(processed_point.p.z());
 
@@ -10402,6 +10513,9 @@ std::string GCode::_encode_label_ids_to_base64(std::vector<size_t> ids)
 // This method accepts &point in print coordinates.
 std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string comment, double z/* = DBL_MAX*/)
 {
+    if (m_slice_frame)
+        return this->frame_travel_to(point, role, comment, z);
+
     /*  Define the travel move as a line between current position and the taget point.
         This is expressed in print coordinates, so it will need to be translated by
         this->origin in order to get G-code coordinates.  */
@@ -10569,6 +10683,71 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
     return gcode;
 }
 
+void GCode::set_slice_frame(const PrintObject &object)
+{
+    if (! object.is_tilted_segment()) {
+        m_slice_frame.reset();
+        return;
+    }
+    // Entering a frame the nozzle was not in before: the first travel lifts clear of everything
+    // printed so far. Layers of one segment keep the same frame, so they travel normally.
+    if (! m_last_slice_frame || ! m_last_slice_frame->isApprox(object.post_trafo_inverse()))
+        m_slice_frame_transition = true;
+    m_slice_frame      = object.post_trafo_inverse();
+    m_last_slice_frame = m_slice_frame;
+    m_wipe.reset_path();
+}
+
+Vec3d GCode::frame_point(const Point &point, double z) const
+{
+    assert(m_slice_frame);
+    // point_to_gcode() subtracts the nozzle's XY offset, which is a machine-frame quantity: undo it
+    // before the un-rotation and apply it after, or a tilted segment would shift relative to the
+    // segment below it by (R - I) * offset. z_offset is a bed-frame shift too.
+    const Vec2d  extruder_offset = EXTRUDER_CONFIG(extruder_offset);
+    const Vec2d  xy              = this->point_to_gcode(point) + extruder_offset;
+    const double z_offset        = m_config.z_offset.value;
+    const Vec3d  bed             = (*m_slice_frame) * Vec3d(xy.x(), xy.y(), z - z_offset);
+    return Vec3d(bed.x() - extruder_offset.x(), bed.y() - extruder_offset.y(), bed.z() + z_offset);
+}
+
+// Travel inside a tilted cut-plane segment. The layer is a sloped plane under an upright nozzle, so
+// a level XY move at the current Z could cross the layer where it climbs. A short move that needs no
+// retraction stays between the current and the next layer plane when made as one straight 3D move;
+// anything else rises above the higher end (or, arriving from another frame, above everything
+// printed so far), traverses, and comes straight down onto the target.
+std::string GCode::frame_travel_to(const Point &point, ExtrusionRole role, const std::string &comment, double z)
+{
+    std::string gcode;
+    const Polyline travel { this->last_pos(), point };
+    LiftType       lift_type  = LiftType::NormalLift;
+    const bool     transition = m_slice_frame_transition || ! m_last_pos_defined || ! m_writer.is_current_position_clear();
+    const bool     lift       = transition || this->needs_retraction(travel, role, lift_type);
+    if (lift)
+        gcode += this->retract(false, false, LiftType::NormalLift, false, role);
+    m_writer.add_object_change_labels(gcode);
+
+    const Vec3d target = this->frame_point(point, z == DBL_MAX ? m_nominal_z : z);
+    if (lift) {
+        const Vec3d  current = m_writer.get_position();
+        const double hop     = std::max(FILAMENT_CONFIG(z_hop), 0.4);
+        double       safe_z  = std::max(current.z(), target.z()) + hop;
+        if (transition)
+            safe_z = std::max(safe_z, m_writer.max_extrusion_z() + std::max(hop, 1.));
+        if (m_writer.is_current_position_clear())
+            gcode += m_writer.travel_to_xyz_direct(Vec3d(current.x(), current.y(), safe_z), comment);
+        else
+            gcode += m_writer.travel_to_z(safe_z, comment, true);
+        gcode += m_writer.travel_to_xyz_direct(Vec3d(target.x(), target.y(), safe_z), comment);
+    }
+    gcode += m_writer.travel_to_xyz_direct(target, comment);
+
+    m_slice_frame_transition = false;
+    m_wipe.reset_path();
+    this->set_last_pos(point);
+    return gcode;
+}
+
 //BBS
 LiftType GCode::to_lift_type(ZHopType z_hop_types) {
     switch (z_hop_types)
@@ -10717,7 +10896,8 @@ std::string GCode::retract(bool toolchange, bool is_last_retraction, LiftType li
         return gcode;
 
     // wipe (if it's enabled for this extruder and we have a stored wipe path and no-zero wipe distance)
-    if (FILAMENT_CONFIG(wipe) && m_wipe.has_path() && scale_(FILAMENT_CONFIG(wipe_distance)) > SCALED_EPSILON) {
+    // A tilted cut-plane segment never stores a wipe path (it would be in its slice frame).
+    if (FILAMENT_CONFIG(wipe) && m_wipe.has_path() && !m_slice_frame && scale_(FILAMENT_CONFIG(wipe_distance)) > SCALED_EPSILON) {
         Wipe::RetractionValues wipeRetractions = m_wipe.calculateWipeRetractionLengths(*this, toolchange);
         gcode += toolchange ? m_writer.retract_for_toolchange(true, wipeRetractions.retraction_length_before_wipe) :
                               m_writer.retract(true, wipeRetractions.retraction_length_before_wipe);

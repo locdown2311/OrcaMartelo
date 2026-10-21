@@ -2024,6 +2024,17 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     // Belt-printer-only "type" of purge tower: enables the auto-generated belt
     // purge prism (the belt replacement for the classic wipe/prime tower).
     ((ConfigOptionBool,                           enable_belt_purge_tower))
+    // Multiplanar printing (virtual mode, see Multiplanar.hpp): objects split by cut planes print
+    // each segment in its own tilted layers on an ordinary 3-axis printer, nozzle upright.
+    ((ConfigOptionBool,                           enable_nonplanar))
+    ((ConfigOptionFloat,                          nonplanar_virtual_max_angle))
+    ((ConfigOptionFloat,                          nonplanar_virtual_max_z))
+    ((ConfigOptionFloat,                          nonplanar_gantry_height))
+    ((ConfigOptionFloat,                          nonplanar_hotend_cone_height))
+    ((ConfigOptionFloat,                          nonplanar_hotend_angle_xpos))
+    ((ConfigOptionFloat,                          nonplanar_hotend_angle_xneg))
+    ((ConfigOptionFloat,                          nonplanar_hotend_angle_ypos))
+    ((ConfigOptionFloat,                          nonplanar_hotend_angle_yneg))
     //BBS
     ((ConfigOptionInts,               additional_cooling_fan_speed))
     ((ConfigOptionInts,               close_additional_fan_first_x_layers))

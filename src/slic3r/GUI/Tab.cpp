@@ -5752,6 +5752,14 @@ PageShp TabPrinter::build_kinematics_page()
     auto optgroup = page->new_optgroup(L("Advanced"), "param_advanced");
     optgroup->append_single_option_line("emit_machine_limits_to_gcode", "printer_motion_ability#emit-limits-to-g-code");
 
+    // Multiplanar printing (virtual mode). Everything but the switch is hidden while it is off
+    // (TabPrinter::toggle_options).
+    optgroup = page->new_optgroup(L("Multiplanar printing"), "param_advanced");
+    for (const char *key : { "enable_nonplanar", "nonplanar_gantry_height", "nonplanar_virtual_max_angle", "nonplanar_virtual_max_z",
+                             "nonplanar_hotend_cone_height", "nonplanar_hotend_angle_xpos", "nonplanar_hotend_angle_xneg",
+                             "nonplanar_hotend_angle_ypos", "nonplanar_hotend_angle_yneg" })
+        optgroup->append_single_option_line(key);
+
     // resonance avoidance ported over from qidi slicer
     optgroup = page->new_optgroup(L("Resonance Compensation"), "param_resonance_avoidance");
     optgroup->append_single_option_line("resonance_avoidance", "printer_motion_ability#resonance-avoidance");
@@ -6629,6 +6637,17 @@ void TabPrinter::toggle_options()
         toggle_line("cooling_filter_enabled", m_config->opt_bool("support_cooling_filter"));
     }
 
+
+    if (m_active_page->title() == L("Motion ability")) {
+        // Cut planes are not combined with a belt.
+        const bool is_belt     = m_config->opt_bool("belt_printer");
+        const bool multiplanar = m_config->opt_bool("enable_nonplanar") && ! is_belt;
+        toggle_option("enable_nonplanar", ! is_belt);
+        for (const char *key : { "nonplanar_gantry_height", "nonplanar_virtual_max_angle", "nonplanar_virtual_max_z",
+                                 "nonplanar_hotend_cone_height", "nonplanar_hotend_angle_xpos", "nonplanar_hotend_angle_xneg",
+                                 "nonplanar_hotend_angle_ypos", "nonplanar_hotend_angle_yneg" })
+            toggle_line(key, multiplanar);
+    }
 
     if (m_active_page->title() == L("Machine G-code")) {
         PresetBundle *preset_bundle = wxGetApp().preset_bundle;

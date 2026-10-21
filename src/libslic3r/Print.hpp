@@ -30,6 +30,7 @@
 #include "MultiMaterialSegmentation.hpp"
 #include "BeltBrim.hpp"
 #include "BeltTransform.hpp"
+#include "CutPlaneSegmentation.hpp"
 #include "ObjectID.hpp"
 #include "TriangleSelector.hpp"
 #include "libslic3r.h"
@@ -378,9 +379,50 @@ public:
     Transform3d                  trafo_centered() const
         { Transform3d t = this->trafo(); t.pretranslate(Vec3d(- unscale<double>(m_center_offset.x()), - unscale<double>(m_center_offset.y()), 0)); return t; }
     // trafo_centered() with the belt pre-slice transforms applied: the frame the layers were sliced in (Layer::slice_z).
-    // Equal to trafo_centered() unless a belt rotation or pre-slice remap is active.
+    // Equal to trafo_centered() unless a belt rotation or pre-slice remap is active, or the object is a
+    // cut-plane segment (then object_to_slice()).
     Transform3d                  trafo_sliced() const;
     const PrintInstances&        instances() const      { return m_instances; }
+
+    // Multiplanar cut planes (CutPlaneSegmentation.hpp). When this PrintObject is one segment of a
+    // ModelObject partitioned by its cut planes, Print::apply stores the segment descriptor here and
+    // the object is sliced in its own frame: rotated so its build normal is +Z and rebased onto its
+    // own lowest point. Ordinary objects have no descriptor and slice exactly as before.
+    bool                         is_segment() const       { return m_segment.has_value(); }
+    // Root == the segment resting on the bed. Non-segment objects count as roots so bed-contact
+    // logic (brim, skirt, elephant foot, first layer) can gate on this uniformly.
+    bool                         is_root_segment() const  { return ! m_segment || m_segment->is_root(); }
+    int                          segment_index() const    { return m_segment ? m_segment->index : -1; }
+    const std::optional<CutSegmentDescriptor>& segment() const { return m_segment; }
+    // A segment whose layers are not parallel to the bed: its extrusions are un-rotated per point by
+    // post_trafo_inverse() at G-code export, and Z varies along every path.
+    bool                         is_tilted_segment() const { return m_segment.has_value() && ! m_post_trafo_inv.linear().isIdentity(1e-9); }
+    // Slice frame of a segment (identity for ordinary objects, which keep trafo_centered()).
+    // object_to_slice() maps object-local coordinates to the exact centred coordinates handed to the
+    // mesh slicer; slice_to_object() is its true inverse. Geometry crossing between two segments
+    // must compose these (parent.object_to_slice() * child.slice_to_object()).
+    const Transform3d&           object_to_slice() const  { return m_object_to_slice; }
+    const Transform3d&           slice_to_object() const  { return m_slice_to_object; }
+    // Maps a point given as G-code XY (slice-frame XY after GCode::point_to_gcode, i.e. with the
+    // instance shift added) and slice-frame Z (print_z) to the bed frame.
+    const Transform3d&           post_trafo_inverse() const { return m_post_trafo_inv; }
+    // How far up its build axis this segment slices: its own material, or higher where a later
+    // segment's cut face rises above it and the column carrying that segment has to be printed here
+    // in otherwise empty layers. Zero for ordinary objects.
+    double                       segment_slice_top() const;
+    // The slack above support_z_max that segment_slice_top() adds: zero for a segment with no
+    // ceiling, else the support gap plus two of the tallest layers the schedule may use.
+    double                       segment_support_slack() const;
+    // Where this segment's layer schedule was cut out of the FULL object schedule, in the object's
+    // own build coordinates. Height ranges are authored against object height, so lookups add this.
+    double                       segment_schedule_base() const { return m_segment_schedule_base; }
+    // The B/C angles this object slices under: the segment's build normal (root: exactly 0/0).
+    void                         effective_layer_rotation_bc(double &b_deg, double &c_deg) const;
+    // Horizontal run the segment's tilt is measured over (CutSegmentDescriptor::build_reach_max).
+    double                       effective_build_reach() const;
+    // This object's build direction in the world frame (+Z for ordinary objects and the root).
+    Vec3d                        build_normal_world() const;
+
     // Orca: Bounding box of each connected body, indexed by Layer::lslices_separated_component_ids.
     const std::vector<BoundingBox>& separated_body_bboxes() const { return m_separated_body_bboxes; }
     PrintInstances &instances() { return m_instances; }
@@ -419,7 +461,9 @@ public:
     bool                         has_brim() const       {
         return ((this->config().brim_type != btNoBrim && this->config().brim_width.value > 0.) || this->config().brim_type == btAutoBrim
             || (this->config().brim_type == btPainted && !this->model_object()->brim_points.empty()))
-            && ! this->has_raft();
+            && ! this->has_raft()
+            // A non-root cut-plane segment rests on the segment below it, never on the bed.
+            && this->is_root_segment();
     }
 
     // Belt brim.  A tilted belt needs its brim laid onto the belt plane over many
@@ -570,6 +614,12 @@ public:
         const ConfigOptionResolver &old_config, const ConfigOptionResolver &new_config, const std::vector<t_config_option_key> &opt_keys);
     // If ! m_slicing_params.valid, recalculate.
     void                    update_slicing_parameters();
+    // Recompute the slice frame of a cut-plane segment (m_post_trafo_inv, m_object_to_slice,
+    // m_slice_to_object). Idempotent and independent of the slicing STEP, so the frame is valid even
+    // when posSlice is already done and slice() early-returns. No-op for ordinary objects.
+    void                    update_slice_frame();
+    // Set by Print::apply right after construction (and when a reused segment's descriptor changed).
+    void                    set_segment(CutSegmentDescriptor &&segment) { m_segment = std::move(segment); this->update_slice_frame(); }
 
     static PrintObjectConfig object_config_from_model_object(const PrintObjectConfig &default_object_config, const ModelObject &object, size_t num_extruders, std::vector<int>& variant_index);
 
@@ -602,6 +652,9 @@ private:
     std::vector<std::set<int>> detect_extruder_geometric_unprintables() const;
 
     void slice_volumes();
+    // Multiplanar cut planes: confine a segment's per-volume slices to its clips; may drop leading
+    // layers emptied by the build plate (slice_zs and m_layers shrink in step).
+    void clip_segment_slices(std::vector<VolumeSlices> &volume_slices, std::vector<float> &slice_zs);
     // Belt mode: shift the sliced layer grid (layer print_z and the belt floor
     // clipping shift) by delta, used by Print::_align_belt_purge_layers() to
     // snap the purge prism's layers onto the printed objects' layer grid.
@@ -679,6 +732,12 @@ private:
     PrintObjectConfig                       m_config;
     // Translation in Z + Rotation + Scaling / Mirroring.
     Transform3d                             m_trafo = Transform3d::Identity();
+    // Multiplanar cut planes: see is_segment() / object_to_slice(). Kept in sync by update_slice_frame().
+    std::optional<CutSegmentDescriptor>     m_segment;
+    Transform3d                             m_post_trafo_inv  = Transform3d::Identity();
+    Transform3d                             m_object_to_slice = Transform3d::Identity();
+    Transform3d                             m_slice_to_object = Transform3d::Identity();
+    double                                  m_segment_schedule_base { 0. };
     // Slic3r::Point objects in scaled G-code coordinates
     std::vector<PrintInstance>              m_instances;
     // The mesh is being centered before thrown to Clipper, so that the Clipper's fixed coordinates require less bits.

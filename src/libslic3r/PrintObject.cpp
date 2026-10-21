@@ -13,6 +13,7 @@
 #include "BoundingBox.hpp"
 #include "ClipperUtils.hpp"
 #include "ConnectedBodies.hpp"
+#include "CutPlaneSegmentation.hpp"
 #include "Geometry.hpp"
 #include "I18N.hpp"
 #include "Layer.hpp"
@@ -187,6 +188,10 @@ PrintBase::ApplyStatus PrintObject::set_instances(PrintInstances &&instances)
         m_instances = std::move(instances);
 	    for (PrintInstance &i : m_instances)
 	    	i.print_object = this;
+        // A cut-plane segment un-rotates about its instance's placement; moving the instance moves
+        // the pivot but not the slices.
+        if (this->is_segment())
+            this->update_slice_frame();
     }
     return status;
 }
@@ -4600,8 +4605,67 @@ void PrintObject::generate_support_preview()
     profiler.duration2 = (ts3 - ts2).total_milliseconds();
 }
 
+double PrintObject::segment_support_slack() const
+{
+    if (! this->is_segment())
+        return 0.;
+    bool has_ceiling = false;
+    for (const CutSegmentClip &clip : m_segment->clips)
+        has_ceiling |= clip.role == CutClipRole::Ceiling;
+    if (! has_ceiling)
+        return 0.;
+    double tallest = m_config.layer_height.value;
+    for (double h : m_print->config().max_layer_height.values)
+        tallest = std::max(tallest, h);
+    return m_config.support_top_z_distance.value + 2. * tallest;
+}
+
+double PrintObject::segment_slice_top() const
+{
+    if (! this->is_segment())
+        return 0.;
+    const double slack = this->segment_support_slack();
+    return slack > 0. ? std::max(m_segment->build_z_max, m_segment->support_z_max + slack) : m_segment->build_z_max;
+}
+
+void PrintObject::effective_layer_rotation_bc(double &b_deg, double &c_deg) const
+{
+    // The root always slices along +Z exactly; a non-root segment along its world-frame build
+    // normal. The build normal is stored object-local, so it maps to world by the inverse-transpose
+    // of the instance linear part -- correct under rotation, non-uniform scale and mirror.
+    b_deg = 0.;
+    c_deg = 0.;
+    if (this->is_segment() && ! this->is_root_segment())
+        Geometry::bc_from_build_normal(this->build_normal_world(), b_deg, c_deg);
+}
+
+double PrintObject::effective_build_reach() const
+{
+    return this->is_segment() ? m_segment->build_reach_max : 0.;
+}
+
+Vec3d PrintObject::build_normal_world() const
+{
+    if (! this->is_segment() || this->is_root_segment())
+        return Vec3d::UnitZ();
+    return (m_trafo.linear().inverse().transpose() * m_segment->build_normal).normalized();
+}
+
 void PrintObject::update_slicing_parameters()
 {
+    // Refresh a segment's slice frame here, not only in slice(): Print::apply() reaches this while
+    // preparing slicing parameters, so the frame is valid even when posSlice is already done.
+    if (this->is_segment()) {
+        this->update_slice_frame();
+        if (! m_slicing_params.valid)
+            // A segment slices over ITS OWN extent along its build axis, up to where its support may
+            // have to reach (segment_slice_top()), measured from slice_z_base() (a sunk root is not
+            // rebased, so it slices from the plate).
+            m_slicing_params = SlicingParameters::create_from_config(this->print()->config(), m_config,
+                this->segment_slice_top() - m_segment->slice_z_base(), this->object_extruders(),
+                this->print()->shrinkage_compensation());
+        return;
+    }
     // Orca: updated function call for XYZ shrinkage compensation
     if (!m_slicing_params.valid) {
           coordf_t object_height = this->model_object()->max_z();

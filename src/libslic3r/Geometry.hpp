@@ -575,6 +575,16 @@ Transformation generate_transform(const Vec3d &x_dir, const Vec3d &y_dir, const 
  */
 bool is_point_inside_polygon_corner(const Point &a, const Point &b, const Point &c, const Point &query_point);
 
+// Multiplanar build-orientation math, shared by the slicing backend and the cut-plane gizmo so the
+// two cannot drift. The rotation applied to the model frame is R = Rb(b) * Rc(c), Rb about Y and
+// Rc about Z, angles in degrees; R maps the build normal onto +Z.
+Eigen::Matrix3d layer_rotation_matrix(double b_deg, double c_deg);
+// B/C angles (degrees) that rotate build normal `n` onto +Z: c = -atan2(n.y, n.x),
+// b = -atan2(hypot(n.x, n.y), n.z). b in [-180, 0], c in (-180, 180].
+void bc_from_build_normal(const Vec3d &n, double &b_deg, double &c_deg);
+// Inverse of bc_from_build_normal: the unit build normal for given B/C angles (degrees).
+Vec3d build_normal_from_bc(double b_deg, double c_deg);
+
 } } // namespace Slicer::Geometry
 
 #endif

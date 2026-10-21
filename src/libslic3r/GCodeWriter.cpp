@@ -1172,6 +1172,29 @@ std::string GCodeWriter::travel_to_z(double z, const std::string &comment, bool 
     return this->_travel_to_z(z, comment);
 }
 
+std::string GCodeWriter::travel_to_xyz_direct(const Vec3d &point, const std::string &comment)
+{
+    const bool   z_only = std::abs(point.x() - m_pos.x()) < EPSILON && std::abs(point.y() - m_pos.y()) < EPSILON
+                       && this->is_current_position_clear();
+    double       speed  = z_only ? this->config.travel_speed_z.get_at(m_cached_extruder_idx) : 0.;
+    if (speed == 0.)
+        speed = this->config.travel_speed.get_at(m_cached_extruder_idx);
+    m_pos     = point;
+    m_lifted  = 0.;
+    m_to_lift = 0.;
+    this->set_current_position_clear(true);
+
+    //BBS: take plate offset into consider
+    Vec3d point_on_plate = { point.x() - m_x_offset, point.y() - m_y_offset, point.z() };
+    if (has_axis_remap())
+        point_on_plate = apply_axis_remap(point_on_plate);
+    GCodeG1Formatter w;
+    w.emit_xyz(point_on_plate);
+    w.emit_f(speed * 60.0);
+    w.emit_comment(GCodeWriter::full_gcode_comment, comment);
+    return w.string();
+}
+
 std::string GCodeWriter::_travel_to_z(double z, const std::string &comment)
 {
     m_pos(2) = z;
@@ -1306,8 +1329,10 @@ void GCodeWriter::extrude_to_xy(std::string &out, const Vec2d &point, double dE,
     if(std::abs(dE) <= std::numeric_limits<double>::epsilon())
         force_no_extrusion = true;
 
-    if (!force_no_extrusion)
+    if (!force_no_extrusion) {
         filament()->extrude(dE);
+        m_max_extrusion_z = std::max(m_max_extrusion_z, m_pos.z());
+    }
 
     //BBS: take plate offset into consider
     Vec2d point_on_plate = { point(0) - m_x_offset, point(1) - m_y_offset };
@@ -1393,8 +1418,10 @@ void GCodeWriter::extrude_arc_to_xy(std::string &out, const Vec2d& point, const 
 
     m_pos(0) = point(0);
     m_pos(1) = point(1);
-    if (!force_no_extrusion)
+    if (!force_no_extrusion) {
         filament()->extrude(dE);
+        m_max_extrusion_z = std::max(m_max_extrusion_z, m_pos.z());
+    }
 
     Vec2d point_on_plate = { point(0) - m_x_offset, point(1) - m_y_offset };
 
@@ -1424,8 +1451,10 @@ void GCodeWriter::extrude_to_xyz(std::string &out, const Vec3d &point, double dE
 
     m_pos = point;
     m_lifted = 0;
-    if (!force_no_extrusion)
+    if (!force_no_extrusion) {
         filament()->extrude(dE);
+        m_max_extrusion_z = std::max(m_max_extrusion_z, point.z());
+    }
 
     //BBS: take plate offset into consider
     Vec3d point_on_plate = { point(0) - m_x_offset, point(1) - m_y_offset, point(2) };
