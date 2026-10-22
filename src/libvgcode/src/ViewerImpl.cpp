@@ -757,6 +757,14 @@ void ViewerImpl::SegmentsUniforms::init(unsigned int shader_id)
     instances_count        = glGetUniformLocation(shader_id, "instances_count");
     // ORCA: section view
     clipping_plane         = glGetUniformLocation(shader_id, "clipping_plane");
+    tool_axes              = glGetUniformLocation(shader_id, "tool_axes");
+}
+
+void ViewerImpl::set_tool_axes_uniform(int location) const
+{
+    // -1 for a shader without the array (the OpenGL ES ones), where this is a no-op.
+    if (location != -1 && !m_tool_axes.empty())
+        glsafe(glUniform3fv(location, static_cast<GLsizei>(std::min(m_tool_axes.size(), MAX_TOOL_AXES)), m_tool_axes.front().data()));
 }
 
 void ViewerImpl::init(const std::string& opengl_context_version)
@@ -832,6 +840,7 @@ void ViewerImpl::init(const std::string& opengl_context_version)
     m_uni_options_segment_index_tex_id      = glGetUniformLocation(m_options_shader_id, "segment_index_tex");
     // ORCA: section view
     m_uni_options_clipping_plane_id         = glGetUniformLocation(m_options_shader_id, "clipping_plane");
+    m_uni_options_tool_axes_id              = glGetUniformLocation(m_options_shader_id, "tool_axes");
     m_uni_options_layer_colors.init(m_options_shader_id);
     glcheck();
     assert(m_uni_options_view_matrix_id != -1 &&
@@ -925,6 +934,7 @@ void ViewerImpl::reset()
     m_extrusion_roles.reset();
     m_options.clear();
     m_used_extruders.clear();
+    m_tool_axes.assign(1, Vec3{ 0.0f, 0.0f, 1.0f });
     m_total_time = { 0.0f, 0.0f };
     m_travels_time = { 0.0f, 0.0f };
     // swap rather than clear: these are sized by the print, and a reset means the memory
@@ -969,9 +979,11 @@ void ViewerImpl::reset()
 // To let all drivers be happy, we use GL_RGBA32F format, so we need to add an extra float
 // to position and heights_widths_angles vectors
 
-static void extract_pos_and_or_hwa(const std::vector<PathVertex>& vertices, float travels_radius, float wipes_radius, BitSet<>& valid_lines_bitset,
+static void extract_pos_and_or_hwa(const std::vector<PathVertex>& vertices, const std::vector<Vec3>& tool_axes,
+    float travels_radius, float wipes_radius, BitSet<>& valid_lines_bitset,
     std::vector<Vec4>* positions = nullptr, std::vector<Vec4>* heights_widths_angles = nullptr, bool update_bitset = false) {
   static constexpr const Vec3 ZERO = { 0.0f, 0.0f, 0.0f };
+  static constexpr const Vec3 UP_Z = { 0.0f, 0.0f, 1.0f };
     if (positions == nullptr && heights_widths_angles == nullptr)
         return;
     if (vertices.empty())
@@ -993,6 +1005,9 @@ static void extract_pos_and_or_hwa(const std::vector<PathVertex>& vertices, floa
                                      vertices[i + 1].type == move_type &&
                                      move_type != EMoveType::Seam;
         const Vec3 this_line = this_line_valid ? vertices[i + 1].position - v.position : ZERO;
+        // Multiplanar cut planes: the direction this move's extrusion height runs along. +Z for a
+        // planar layer; the section's build direction for a tilted one.
+        const Vec3 up = v.tool_axis_id < tool_axes.size() ? tool_axes[v.tool_axis_id] : UP_Z;
 
         if (this_line_valid) {
             // there is a valid path between point i and i+1.
@@ -1006,9 +1021,12 @@ static void extract_pos_and_or_hwa(const std::vector<PathVertex>& vertices, floa
         if (positions != nullptr) {
             // ORCA: the last component, there to comply with GL_RGBA32F format, carries the layer the shaders grey and dim by
             Vec4 position = { v.position[0], v.position[1], v.position[2], static_cast<float>(v.layer_id) };
-            if (move_type == EMoveType::Extrude)
-                // push down extrusion vertices by half height to render them at the right z
-                position[2] -= 0.5f * v.height;
+            if (move_type == EMoveType::Extrude) {
+                // push extrusion vertices back by half height along the build direction, so the
+                // bead straddles the toolpath (for a planar layer: down, to the right z)
+                for (int k = 0; k < 3; ++k)
+                    position[k] -= 0.5f * v.height * up[k];
+            }
             positions->emplace_back(position);
         }
 
@@ -1035,10 +1053,15 @@ static void extract_pos_and_or_hwa(const std::vector<PathVertex>& vertices, floa
             else if (v.is_option())
                 bias = 0.1f;
 
-            // the last component is a dummy float to comply with GL_RGBA32F format
-            // ORCA: Pass bias to shader
+            // The corner angle used to miter the joint, measured about the build direction so a
+            // tilted layer's wedge grows to the right side; for up == +Z this is the XY cross product.
+            const Vec3 turn_axis = { prev_line[1] * this_line[2] - prev_line[2] * this_line[1],
+                                     prev_line[2] * this_line[0] - prev_line[0] * this_line[2],
+                                     prev_line[0] * this_line[1] - prev_line[1] * this_line[0] };
+            // ORCA: Pass bias to shader. Multiplanar cut planes: the integer part carries the
+            // tool_axes[] index (bias stays below 1), so a planar print sends exactly the bias.
             heights_widths_angles->push_back({ height, width,
-                std::atan2(prev_line[0] * this_line[1] - prev_line[1] * this_line[0], dot(prev_line, this_line)), bias });
+                std::atan2(dot(turn_axis, up), dot(prev_line, this_line)), float(v.tool_axis_id) + bias });
         }
     }
 }
@@ -1054,6 +1077,15 @@ void ViewerImpl::load(GCodeInputData&& gcode_data)
     reset();
 
     m_vertices = std::move(gcode_data.vertices);
+    m_tool_axes = std::move(gcode_data.tool_axes);
+    if (m_tool_axes.empty())
+        m_tool_axes.push_back({ 0.0f, 0.0f, 1.0f });
+    if (m_tool_axes.size() > MAX_TOOL_AXES)
+        m_tool_axes.resize(MAX_TOOL_AXES);
+    // An index the palette cannot hold (or the shaders' array) falls back to +Z.
+    for (PathVertex& v : m_vertices)
+        if (v.tool_axis_id >= m_tool_axes.size())
+            v.tool_axis_id = 0;
     m_tool_colors = std::move(gcode_data.tools_colors);
     m_color_print_colors = std::move(gcode_data.color_print_colors);
     m_vertices_colors.resize(m_vertices.size());
@@ -1162,7 +1194,7 @@ void ViewerImpl::load(GCodeInputData&& gcode_data)
     std::vector<Vec4> heights_widths_angles;
     positions.reserve(m_vertices.size());
     heights_widths_angles.reserve(m_vertices.size());
-    extract_pos_and_or_hwa(m_vertices, m_travels_radius, m_wipes_radius, m_valid_lines_bitset, &positions, &heights_widths_angles, true);
+    extract_pos_and_or_hwa(m_vertices, m_tool_axes, m_travels_radius, m_wipes_radius, m_valid_lines_bitset, &positions, &heights_widths_angles, true);
 
     if (!positions.empty()) {
 #ifdef ENABLE_OPENGL_ES
@@ -2067,7 +2099,7 @@ void ViewerImpl::update_heights_widths()
 #ifdef ENABLE_OPENGL_ES
     std::vector<Vec4> heights_widths_angles;
     heights_widths_angles.reserve(m_vertices.size());
-    extract_pos_and_or_hwa(m_vertices, m_travels_radius, m_wipes_radius, m_valid_lines_bitset, nullptr, &heights_widths_angles);
+    extract_pos_and_or_hwa(m_vertices, m_tool_axes, m_travels_radius, m_wipes_radius, m_valid_lines_bitset, nullptr, &heights_widths_angles);
     m_texture_data.set_heights_widths_angles(heights_widths_angles);
 #else
     if (m_heights_widths_angles_buf_id == 0)
@@ -2075,7 +2107,9 @@ void ViewerImpl::update_heights_widths()
 
     glsafe(glBindBuffer(GL_TEXTURE_BUFFER, m_heights_widths_angles_buf_id));
 
-    Vec3* buffer = static_cast<Vec3*>(glMapBuffer(GL_TEXTURE_BUFFER, GL_WRITE_ONLY));
+    // The buffer is GL_RGBA32F { height, width, angle, axis + bias }: mapped as Vec3 every write
+    // landed at float 3i instead of 4i and overwrote the neighbouring texels.
+    Vec4* buffer = static_cast<Vec4*>(glMapBuffer(GL_TEXTURE_BUFFER, GL_WRITE_ONLY));
     glcheck();
 
     for (size_t i = 0; i < m_vertices.size(); ++i) {
@@ -2130,6 +2164,7 @@ void ViewerImpl::render_segments(const Mat4x4& view_matrix, const Mat4x4& projec
     const bool reverse_order = view_matrix[10] > 0.0f;
     glsafe(glUniform1i(uni.reverse_order, reverse_order ? 1 : 0));
     glsafe(glUniform4fv(uni.clipping_plane, 1, m_clipping_plane.data()));
+    set_tool_axes_uniform(uni.tool_axes);
     if (!m_rendering_shadow_casters) {
         // ORCA: realistic view
         glsafe(glUniform1i(m_uni_segments_shadow_map_id, m_shadow_map_texture_unit));
@@ -2245,6 +2280,7 @@ void ViewerImpl::render_options(const Mat4x4& view_matrix, const Mat4x4& project
     glsafe(glUniformMatrix4fv(m_uni_options_view_matrix_id, 1, GL_FALSE, view_matrix.data()));
     glsafe(glUniformMatrix4fv(m_uni_options_projection_matrix_id, 1, GL_FALSE, projection_matrix.data()));
     glsafe(glUniform4fv(m_uni_options_clipping_plane_id, 1, m_clipping_plane.data()));
+    set_tool_axes_uniform(m_uni_options_tool_axes_id);
     set_layer_colors(m_uni_options_layer_colors);
 
     glsafe(glEnable(GL_CULL_FACE));

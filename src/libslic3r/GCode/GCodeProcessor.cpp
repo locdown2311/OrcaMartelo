@@ -164,6 +164,7 @@ const std::string GCodeProcessor::External_Purge_Tag = " EXTERNAL_PURGE";
 const std::string GCodeProcessor::Skippable_Start_Tag = " SKIPPABLE_START";
 const std::string GCodeProcessor::Skippable_End_Tag   = " SKIPPABLE_END";
 const std::string GCodeProcessor::Skippable_Type_Tag  = " SKIPTYPE: ";
+const std::string GCodeProcessor::Tool_Axis_Tag       = " TOOL_AXIS:";
 
 // Usage-block builder markers. START/END machine-gcode markers are whole-line tags; the
 // NOZZLE_CHANGE_* and CP_TOOLCHANGE_WIPE tags carry an OF/NF/ON/NN or CT/FL payload and are
@@ -2607,6 +2608,7 @@ void GCodeProcessorResult::reset() {
 
     // moves and lines_ends grow with the print: free them, as no reset result reuses the capacity.
     clear_and_shrink(moves);
+    tool_axes.assign(1, Vec3f::UnitZ());
     plate_mass = {};
     object_masses.clear();
     body_masses.clear();
@@ -3630,6 +3632,7 @@ void GCodeProcessor::enable_stealth_time_estimator(bool enabled)
 
 void GCodeProcessor::reset()
 {
+    m_tool_axis_id = 0;
     m_units = EUnits::Millimeters;
     m_global_positioning_type = EPositioningType::Absolute;
     m_e_local_positioning_type = EPositioningType::Absolute;
@@ -4391,6 +4394,26 @@ void GCodeProcessor::process_tags(const std::string_view comment, bool producers
     if (boost::starts_with(comment, GCodeProcessor::Skippable_Type_Tag)) {
         std::string_view type = comment.substr(GCodeProcessor::Skippable_Type_Tag.length());
         set_skippable_type(type);
+        return;
+    }
+
+    // Multiplanar cut planes: the direction the following layer builds along. Entries are shared
+    // between moves with the same direction (a handful per print, one per tilted section).
+    if (boost::starts_with(comment, GCodeProcessor::Tool_Axis_Tag)) {
+        std::istringstream in{ std::string(comment.substr(GCodeProcessor::Tool_Axis_Tag.length())) };
+        Vec3f axis;
+        char  sep1 = 0, sep2 = 0;
+        if (in >> axis.x() >> sep1 >> axis.y() >> sep2 >> axis.z() && sep1 == ',' && sep2 == ',' && axis.norm() > 0.5f) {
+            axis.normalize();
+            auto it = std::find_if(m_result.tool_axes.begin(), m_result.tool_axes.end(),
+                                   [&axis](const Vec3f &a) { return (a - axis).squaredNorm() < 1e-8f; });
+            if (it == m_result.tool_axes.end() && m_result.tool_axes.size() < Max_Tool_Axes) {
+                m_result.tool_axes.push_back(axis);
+                it = m_result.tool_axes.end() - 1;
+            }
+            m_tool_axis_id = it == m_result.tool_axes.end() ? 0 : uint16_t(it - m_result.tool_axes.begin());
+        } else
+            BOOST_LOG_TRIVIAL(error) << "GCodeProcessor encountered an invalid value for Tool_Axis (" << comment << ").";
         return;
     }
 
@@ -7273,7 +7296,8 @@ void GCodeProcessor::store_move_vertex(EMoveType type, EMovePathType path_type, 
         std::max<unsigned int>(1, m_layer_id) - 1,
         internal_only,
         m_object_label_id,
-        m_print_z
+        m_print_z,
+        m_tool_axis_id
     });
 
     if (type == EMoveType::Seam) {

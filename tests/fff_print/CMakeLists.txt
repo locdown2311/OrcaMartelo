@@ -31,6 +31,7 @@ add_executable(${_TEST_NAME}_tests
 	test_texture_displacement.cpp
 	test_tree_support.cpp
 	test_segment_support_cascade.cpp
+	test_multiplanar_gcode.cpp
 	test_trianglemesh.cpp
 	test_wipe.cpp
 	test_wipe_tower.cpp

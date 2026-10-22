@@ -262,6 +262,9 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             //BBS
             int  object_label_id{-1};
             float print_z{0.0f};
+            // Index into GCodeProcessorResult::tool_axes of the direction this move's layer builds
+            // along; 0 (+Z) for every planar layer. Keep last: moves are aggregate-initialised.
+            uint16_t tool_axis_id{0};
 
             float volumetric_rate() const { return feedrate * mm3_per_mm; }
             float actual_volumetric_rate() const { return actual_feedrate * mm3_per_mm; }
@@ -309,6 +312,8 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         std::string filename;
         unsigned int id;
         std::vector<MoveVertex> moves;
+        // Palette of build directions referenced by MoveVertex::tool_axis_id. Entry 0 is always +Z.
+        std::vector<Vec3f> tool_axes{ Vec3f::UnitZ() };
         ObjectMass plate_mass;
         // One per object instance, and one per connected body of the instances of several, when the sliced objects were at hand.
         std::vector<ObjectMass> object_masses;
@@ -402,6 +407,7 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             filename = std::forward<Other>(other).filename;
             id = std::forward<Other>(other).id;
             moves = std::forward<Other>(other).moves;
+            tool_axes = std::forward<Other>(other).tool_axes;
             plate_mass = std::forward<Other>(other).plate_mass;
             object_masses = std::forward<Other>(other).object_masses;
             body_masses = std::forward<Other>(other).body_masses;
@@ -563,6 +569,12 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         static const std::string Skippable_Start_Tag;
         static const std::string Skippable_End_Tag;
         static const std::string Skippable_Type_Tag;
+        // Multiplanar cut planes: " TOOL_AXIS:x,y,z", the unit direction (bed frame) the following
+        // layer builds along. Emitted only for tilted segments; drives PathVertex::tool_axis_id.
+        static const std::string Tool_Axis_Tag;
+        // Distinct build directions the palette holds; later ones fall back to +Z. Matches the
+        // tool_axes uniform array of the libvgcode shaders.
+        static constexpr size_t Max_Tool_Axes = 64;
         // Orca: usage-block builder markers (MACHINE_START_GCODE_END / MACHINE_END_GCODE_START /
         // NOZZLE_CHANGE_START / NOZZLE_CHANGE_END / CP_TOOLCHANGE_WIPE), stored as static strings (the
         // FLUSH/SKIPPABLE idiom above) rather than extending the Reserved_Tags arrays — these are
@@ -1181,6 +1193,8 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         bool m_skippable{false};
         SkipType m_skippable_type{SkipType::stNone};
         int m_object_label_id{-1};
+        // Current entry of m_result.tool_axes (see Tool_Axis_Tag).
+        uint16_t m_tool_axis_id{0};
         MassLocator m_mass_locator;
         float m_print_z{0.0f};
         std::vector<float> m_remaining_volume;

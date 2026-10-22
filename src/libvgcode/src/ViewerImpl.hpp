@@ -322,6 +322,11 @@ private:
     // cpu buffer to store vertices
     //
     std::vector<PathVertex> m_vertices;
+    // Multiplanar cut planes: the build directions PathVertex::tool_axis_id indexes, entry 0 = +Z.
+    // Uploaded as the shaders' tool_axes[] uniform array, so at most MAX_TOOL_AXES entries.
+    static constexpr size_t MAX_TOOL_AXES = 64;
+    std::vector<Vec3> m_tool_axes{ Vec3{ 0.0f, 0.0f, 1.0f } };
+    void set_tool_axes_uniform(int location) const;
 
     // Cache for the colors to reduce the need to recalculate colors of all the vertices.
     std::vector<float> m_vertices_colors;
@@ -381,6 +386,8 @@ private:
         int reverse_order{ -1 };
         int instances_count{ -1 };
         int clipping_plane{ -1 };
+        // Multiplanar cut planes: the build-direction palette (tool_axes[], see ViewerImpl::m_tool_axes)
+        int tool_axes{ -1 };
 
         void init(unsigned int shader_id);
     };
@@ -414,6 +421,7 @@ private:
     int m_uni_options_colors_tex_id{ -1 };
     int m_uni_options_segment_index_tex_id{ -1 };
     int m_uni_options_clipping_plane_id{ -1 };
+    int m_uni_options_tool_axes_id{ -1 };
     LayerColorsUniforms m_uni_options_layer_colors;
 #if VGCODE_ENABLE_COG_AND_TOOL_MARKERS
     //

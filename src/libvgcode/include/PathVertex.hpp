@@ -103,6 +103,13 @@ struct PathVertex
     // Jerk value
     //
     float jerk{ 0.0f };
+    //
+    // Multiplanar cut planes: index into GCodeInputData::tool_axes of the direction this move's
+    // layer builds along, the "up" its extrusion cross-section is built around, so a tilted layer
+    // renders in its own plane. 0 is always +Z, so a planar print leaves every vertex at 0.
+    // Keep last: PathVertex is aggregate-initialised positionally (LibVGCodeWrapper.cpp).
+    //
+    uint16_t tool_axis_id{ 0 };
 
     //
     // Return true if the segment is an extrusion move

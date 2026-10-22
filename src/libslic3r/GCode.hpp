@@ -925,6 +925,12 @@ protected:
     // G-code (bed-frame) point.
     Vec3d       frame_point(const Point &point, double z) const;
     std::string frame_travel_to(const Point &point, ExtrusionRole role, const std::string &comment, double z);
+    // A ";TOOL_AXIS:x,y,z" comment for the G-code viewer whenever the direction the current layer
+    // builds along (the slice frame's +Z in the bed frame) differs from the last one announced, so
+    // the preview can draw a tilted layer's beads in their own plane. Empty otherwise, so a print
+    // without tilted segments is unchanged.
+    std::string preview_tool_axis_tag();
+    Vec3d       m_preview_tool_axis = Vec3d::UnitZ();
     int m_start_gcode_filament = -1;
     std::string m_filament_instances_code;
 

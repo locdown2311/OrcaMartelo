@@ -6677,6 +6677,7 @@ LayerResult GCode::process_layer(
     // BBS: don't use lazy_raise when enable spiral vase
     // A tilted cut-plane segment is always printed alone (Print::validate() requires "By object").
     this->reset_slice_frame();
+    gcode += this->preview_tool_axis_tag();
     gcode += this->change_layer(print_z, layer.object()->is_tilted_segment());  // this will increase m_layer_index
     update_layer_related_config(m_layer_index);
     update_placeholder_parser_with_variant_params();
@@ -7467,6 +7468,7 @@ LayerResult GCode::process_layer(
     {
         // Skirt, tool changes and the wipe tower are emitted in the bed frame.
         this->reset_slice_frame();
+        gcode += this->preview_tool_axis_tag();
         if (print.config().skirt_type == stCombined && !print.skirt_brim_groups().empty()) {
             for (size_t group_idx = 0; group_idx < print.skirt_brim_groups().size(); ++group_idx) {
                 const Print::SkirtBrimGroup& group = print.skirt_brim_groups()[group_idx];
@@ -7674,6 +7676,7 @@ LayerResult GCode::process_layer(
                 this->on_set_origin(&instance_to_print.print_object, offset);
                 // A tilted cut-plane segment's support and islands are emitted in its slice frame.
                 this->set_slice_frame(instance_to_print.print_object);
+                gcode += this->preview_tool_axis_tag();
                 if (visit.first_visit && instance_to_print.object_by_extruder.support != nullptr) {
                     m_layer = layers[instance_to_print.layer_id].support_layer;
                     m_object_layer_over_raft = false;
@@ -7791,6 +7794,7 @@ LayerResult GCode::process_layer(
                 }
 
                 this->reset_slice_frame();
+                gcode += this->preview_tool_axis_tag();
                 if (this->config().gcode_label_objects) {
                     gcode += std::string("; stop printing object ") +
                              instance_to_print.print_object.model_object()->name +
@@ -7904,6 +7908,7 @@ LayerResult GCode::process_layer(
                 // the belt transform (BeltGCode::on_set_origin).
                 this->on_set_origin(&instance_to_print.print_object, offset);
                 this->set_slice_frame(instance_to_print.print_object);
+                gcode += this->preview_tool_axis_tag();
 
                 // --- Build emission plan ---
                 // Each entry represents one travel_to_z + extrude pass. Per-object mode produces
@@ -8168,6 +8173,7 @@ LayerResult GCode::process_layer(
     }
 
     this->reset_slice_frame();
+    gcode += this->preview_tool_axis_tag();
     // A tilted cut-plane segment's print_z is a distance along its build normal, not a bed height.
     // m_max_layer_z feeds the end G-code and the moves between sequential objects, which must clear
     // what was actually printed.
@@ -10696,6 +10702,17 @@ void GCode::set_slice_frame(const PrintObject &object)
     m_slice_frame      = object.post_trafo_inverse();
     m_last_slice_frame = m_slice_frame;
     m_wipe.reset_path();
+}
+
+std::string GCode::preview_tool_axis_tag()
+{
+    const Vec3d axis = m_slice_frame ? Vec3d((m_slice_frame->linear() * Vec3d::UnitZ()).normalized()) : Vec3d::UnitZ();
+    if (axis.isApprox(m_preview_tool_axis, 1e-9))
+        return {};
+    m_preview_tool_axis = axis;
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), ";%s%.6f,%.6f,%.6f\n", GCodeProcessor::Tool_Axis_Tag.c_str(), axis.x(), axis.y(), axis.z());
+    return buf;
 }
 
 Vec3d GCode::frame_point(const Point &point, double z) const

@@ -31,6 +31,11 @@ struct GCodeInputData
     // Palette for color print colors
     //
     Palette color_print_colors;
+    //
+    // Multiplanar cut planes: palette of unit build directions referenced by
+    // PathVertex::tool_axis_id. Entry 0 must be +Z; left empty, the viewer supplies { +Z }.
+    //
+    std::vector<Vec3> tool_axes;
 };
 
 } // namespace libvgcode
