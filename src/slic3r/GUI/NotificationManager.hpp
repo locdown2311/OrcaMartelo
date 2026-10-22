@@ -197,6 +197,8 @@ enum class NotificationType
     // Active preset references a capability the installed+loaded plugin does not provide (outdated
     // plugin). Informational; cannot be auto-resolved; persistent, blocks slicing.
     OrcaPluginCapabilityUnavailableError,
+    // An object is larger than the printable volume in every orientation; offers to split it to fit.
+    OrcaObjectTooLargeForBed,
     NotificationTypeCount
 
 };

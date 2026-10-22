@@ -1176,6 +1176,10 @@ void MenuFactory::append_menu_item_scale_selection_to_fit_print_volume(wxMenu* m
 {
     append_menu_item(menu, wxID_ANY, _L("Scale to build volume"), _L("Scale an object to fit the build volume"),
         [](wxCommandEvent&) { plater()->scale_selection_to_fit_print_volume(); }, "", menu);
+    append_menu_item(menu, wxID_ANY, _L("Split to fit build volume") + dots,
+        _L("Cut an object too large for the build volume into pieces that fit, joined by connectors"),
+        [](wxCommandEvent&) { plater()->split_selection_to_fit_bed(); }, "", menu,
+        []() { return plater()->can_split_to_fit_bed(); }, m_parent);
 }
 
 void MenuFactory::append_menu_items_flush_options(wxMenu* menu)

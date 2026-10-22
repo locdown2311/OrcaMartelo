@@ -17,6 +17,7 @@
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/Technologies.hpp"
 #include "libslic3r/Model.hpp"
+#include "libslic3r/ObjectID.hpp"
 #include "libvgcode/include/Types.hpp"
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Line.hpp"
@@ -632,6 +633,9 @@ public:
 
 private:
     bool m_is_dark = false;
+    // The object (and its instance) the "split to fit" notification is shown for; invalid when none.
+    ObjectID m_too_large_object;
+    int      m_too_large_instance { -1 };
     wxGLCanvas* m_canvas;
     wxGLContext* m_context;
     SceneRaycaster m_scene_raycaster;
@@ -1469,6 +1473,8 @@ private:
     bool _is_shown_on_screen() const;
 
     void _update_slice_error_status();
+    // Offer to split an object larger than the printable volume in every orientation.
+    void _update_too_large_object_notification();
 
     void _switch_toolbars_icon_filename();
     bool _init_toolbars();

@@ -295,6 +295,7 @@
 #include "StepMeshDialog.hpp"
 #include "FilamentMapDialog.hpp"
 #include "CloneDialog.hpp"
+#include "FitToBedDialog.hpp"
 #include "PurgeModeDialog.hpp"
 
 #include "DeviceCore/DevFilaSystem.h"
@@ -19710,6 +19711,24 @@ bool Plater::is_selection_empty() const
 void Plater::scale_selection_to_fit_print_volume()
 {
     p->scale_selection_to_fit_print_volume();
+}
+
+void Plater::split_selection_to_fit_bed()
+{
+    if (! can_split_to_fit_bed())
+        return;
+    const Selection &selection = p->get_selection();
+    split_object_to_fit_bed(size_t(selection.get_object_idx()), selection.get_instance_idx());
+}
+
+bool Plater::can_split_to_fit_bed() const
+{
+    const Selection &selection = p->get_selection();
+    if (printer_technology() != ptFFF || ! selection.is_single_full_instance())
+        return false;
+    const int obj_idx = selection.get_object_idx();
+    return obj_idx >= 0 && obj_idx < int(p->model.objects.size()) &&
+           ! instance_fits_printable_volume(*p->model.objects[obj_idx], selection.get_instance_idx());
 }
 
 void Plater::convert_unit(ConversionType conv_type)

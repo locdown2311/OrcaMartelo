@@ -169,6 +169,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/Field.hpp
     GUI/FileArchiveDialog.cpp
     GUI/FileArchiveDialog.hpp
+    GUI/FitToBedDialog.cpp
+    GUI/FitToBedDialog.hpp
     GUI/format.hpp
     GUI/GCodeViewer.cpp
     GUI/GCodeViewer.hpp

@@ -1,13 +1,21 @@
 #include "FitToBed.hpp"
 
 #include "ClipperUtils.hpp"
+#include "CutUtils.hpp"
 #include "ExPolygon.hpp"
+#include "Geometry.hpp"
+#include "Model.hpp"
+#include "ObjectID.hpp"
 #include "Polygon.hpp"
 #include "TriangleMeshSlicer.hpp"
+
+#include <Eigen/Geometry>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <string>
+#include <utility>
 
 namespace Slic3r {
 
@@ -179,6 +187,9 @@ struct Planner
     Vec3d                       volume;     // printable volume minus the margins
     FitToBedPlan               &plan;
     size_t                      leaves { 1 };
+    // Each cut's face, in the 2D frame axis_to_z() gives its plane; the connectors go on it once
+    // every cut is known (place_all_connectors()).
+    std::vector<ExPolygons>     faces;
 
     // Split pieces[index] (the model inside `region`) until every piece fits. False when it gave up.
     bool split(int index, const Region &region)
@@ -275,9 +286,6 @@ struct Planner
         cut.axis         = axis;
         cut.position     = zs[best];
         cut.section_area = areas[best];
-        const Transform3d from_z = params.trafo.inverse();
-        for (const Point &p : place_connectors(sections[best], options))
-            cut.connectors.push_back(from_z * Vec3d(unscale<double>(p.x()), unscale<double>(p.y()), double(zs[best])));
 
         const int cut_index = int(plan.cuts.size());
         plan.pieces[index].cut = cut_index;
@@ -286,10 +294,42 @@ struct Planner
         cut.upper = int(plan.pieces.size());
         plan.pieces.push_back({ upper_bb, false, -1 });
         plan.cuts.push_back(std::move(cut));
+        faces.push_back(std::move(sections[best]));
         ++ leaves;
 
         const int lower_index = plan.cuts[cut_index].lower, upper_index = plan.cuts[cut_index].upper;
         return split(lower_index, lower_region) && split(upper_index, upper_region);
+    }
+
+    // Connectors on every cut face, kept clear of the later cuts that cross the face: a connector
+    // straddling one would be cut in two along with the piece. Splitting the face along each such
+    // cut is enough, since place_connectors() keeps a wall's width from every edge of the face.
+    void place_all_connectors()
+    {
+        for (size_t i = 0; i < plan.cuts.size(); ++ i) {
+            FitToBedCut      &cut  = plan.cuts[i];
+            const Transform3d to_z = axis_to_z(cut.axis);
+            ExPolygons        face = std::move(faces[i]);
+            for (size_t j = i + 1; j < plan.cuts.size() && ! face.empty(); ++ j) {
+                const FitToBedCut &later = plan.cuts[j];
+                BoundingBoxf3      box   = plan.pieces[later.piece].bbox;
+                if (later.axis == cut.axis || box.min(cut.axis) > cut.position + EPSILON || box.max(cut.axis) < cut.position - EPSILON)
+                    continue;
+                box.min(later.axis) = later.position - 0.01;
+                box.max(later.axis) = later.position + 0.01;
+                BoundingBox strip;
+                for (int corner = 0; corner < 8; ++ corner) {
+                    const Vec3d p = to_z * Vec3d(corner & 1 ? box.max.x() : box.min.x(), corner & 2 ? box.max.y() : box.min.y(), corner & 4 ? box.max.z() : box.min.z());
+                    strip.merge(Point::new_scale(p.x(), p.y()));
+                }
+                Polygon rect;
+                rect.points = { strip.min, Point(strip.max.x(), strip.min.y()), strip.max, Point(strip.min.x(), strip.max.y()) };
+                face = diff_ex(face, Polygons{ rect });
+            }
+            const Transform3d from_z = to_z.inverse();
+            for (const Point &p : place_connectors(face, options))
+                cut.connectors.push_back(from_z * Vec3d(unscale<double>(p.x()), unscale<double>(p.y()), cut.position));
+        }
     }
 };
 
@@ -310,9 +350,170 @@ FitToBedPlan plan_fit_to_bed(const indexed_triangle_set &world_mesh, const FitTo
         return plan;
     }
     plan.status = FitToBedStatus::Ok;
-    if (! planner.split(0, Region{}) && plan.status == FitToBedStatus::Ok)
-        plan.status = FitToBedStatus::NoVolume;
+    if (! planner.split(0, Region{})) {
+        if (plan.status == FitToBedStatus::Ok)
+            plan.status = FitToBedStatus::NoVolume;
+        return plan;
+    }
+    planner.place_all_connectors();
     return plan;
+}
+
+namespace {
+
+// The rotation pointing `outward` straight down, so the face it leaves lies on the bed.
+Transform3d face_down(const Vec3d &outward)
+{
+    Transform3d t = Transform3d::Identity();
+    t.linear() = Eigen::Quaterniond::FromTwoVectors(outward, -Vec3d::UnitZ()).toRotationMatrix();
+    return t;
+}
+
+// Turn the only instance of `piece` (left unrotated by the cut) so it rests on one of `faces`
+// (area and outward normal, best first) where it fits the volume and stands steadily, or else on
+// whichever side of its box lets it fit, the way it was first.
+void stand_on_face(ModelObject &piece, std::vector<std::pair<double, Vec3d>> faces, const Vec3d &volume)
+{
+    for (int axis : { 2, 0, 1 })
+        for (double sign : { -1., 1. })
+            faces.emplace_back(std::numeric_limits<double>::max(), sign * Vec3d::Unit(axis));
+    ModelInstance &instance = *piece.instances.front();
+    for (const auto &[area, outward] : faces)
+        for (const double z_angle : { 0., 0.5 * PI }) {
+            const Transform3d rotation = Geometry::rotation_transform(z_angle * Vec3d::UnitZ()) * face_down(outward);
+            instance.set_rotation(Geometry::Transformation(rotation).get_rotation());
+            piece.invalidate_bounding_box();
+            const Vec3d size = piece.instance_bounding_box(0).size();
+            // Standing on a cut face is for a piece no taller than three times the face is wide.
+            if (size.x() <= volume.x() + EPSILON && size.y() <= volume.y() + EPSILON && size.z() <= volume.z() + EPSILON &&
+                size.z() <= 3. * std::sqrt(area)) {
+                piece.ensure_on_bed();
+                return;
+            }
+        }
+    instance.set_rotation(Vec3d::Zero());
+    piece.invalidate_bounding_box();
+    piece.ensure_on_bed();
+}
+
+} // namespace
+
+ModelObjectPtrs apply_fit_to_bed_plan(const ModelObject &object, int instance, const FitToBedPlan &plan,
+                                      const FitToBedOptions &options, const FitToBedJointOptions &joint, Model &out)
+{
+    if (plan.status != FitToBedStatus::Ok || instance < 0 || instance >= int(object.instances.size()))
+        return {};
+
+    // The cuts are where this instance is; the pieces carry only it.
+    Model        work;
+    ModelObject *root = work.add_object(object);
+    for (int i = int(root->instances.size()) - 1; i >= 0; -- i)
+        if (i != instance)
+            root->delete_instance(size_t(i));
+
+    // The pieces share one cut id, as after cuts made with the Cut tool, so they stay known to belong together.
+    CutObjectBase cut_id = root->cut_id;
+    if (cut_id.id().invalid())
+        cut_id.init();
+
+    const CutConnectorType connector_type = joint.type == FitToBedJoint::Dowel ? CutConnectorType::Dowel : CutConnectorType::Plug;
+    const double           radius         = options.connector_radius;
+    // pieces[i] is plan.pieces[i] as an object once the cut making it is done; upper[i] is whether
+    // it is on the upper side of that cut.
+    std::vector<ModelObject*> pieces(plan.pieces.size(), nullptr);
+    std::vector<bool>         upper(plan.pieces.size(), false);
+    std::vector<int>          made_by(plan.pieces.size(), -1);
+    ModelObjectPtrs           dowels;
+    pieces[0] = root;
+
+    for (size_t i = 0; i < plan.cuts.size(); ++ i) {
+        const FitToBedCut &cut = plan.cuts[i];
+        ModelObject       *src = pieces[cut.piece];
+        if (src == nullptr)
+            return {};
+        // Cut works in the instance's frame without its offset; the plan is in world coordinates.
+        const Vec3d       offset   = src->instances.front()->get_offset();
+        const Vec3d       normal   = Vec3d::Unit(cut.axis);
+        const Transform3d rotation = axis_to_z(cut.axis).inverse();
+
+        // The connectors, as the Cut tool adds them: negative volumes centred on the face for a
+        // dowel, of twice the depth; shifted by half the depth into the upper side for a plug,
+        // which the lower piece keeps as a peg.
+        size_t n_dowels = 0;
+        if (joint.type != FitToBedJoint::None && ! cut.connectors.empty()) {
+            size_t connector_id = cut_id.connectors_cnt();
+            for (const Vec3d &c : cut.connectors) {
+                double height = joint.depth;
+                Vec3d  pos    = c - offset;
+                if (connector_type == CutConnectorType::Dowel)
+                    height *= 2.;
+                else
+                    pos += 0.5 * height * normal;
+                ModelVolume *volume = src->add_volume(TriangleMesh(its_make_cylinder(1., 1., 2. * PI / 360.)), ModelVolumeType::NEGATIVE_VOLUME);
+                volume->set_transformation(Geometry::translation_transform(pos) * rotation * Geometry::scale_transform(Vec3d(radius, radius, height)));
+                volume->cut_info = ModelVolume::CutInfo(connector_type, float(0.5 * joint.clearance), float(joint.depth_clearance));
+                volume->name     = "Connector-" + std::to_string(++ connector_id);
+            }
+            cut_id.increase_connectors_cnt(cut.connectors.size());
+            if (connector_type == CutConnectorType::Dowel)
+                n_dowels = cut.connectors.size();
+        }
+        cut_id.increase_check_sum(1 + n_dowels);
+        src->cut_id.copy(cut_id);
+
+        const ModelObjectCutAttributes attributes = ModelObjectCutAttribute::KeepUpper | ModelObjectCutAttribute::KeepLower |
+            only_if(n_dowels > 0, ModelObjectCutAttribute::CreateDowels) | only_if(joint.keep_paint, ModelObjectCutAttribute::KeepPaint);
+        Cut cutter(src, 0, Geometry::translation_transform(cut.position * normal - offset) * rotation, attributes);
+        // The upper part, the lower part, then the dowels.
+        const ModelObjectPtrs &result = cutter.perform_with_plane();
+        if (result.size() != 2 + n_dowels)
+            return {};
+        pieces[cut.upper] = work.add_object(*result[0]);
+        pieces[cut.lower] = work.add_object(*result[1]);
+        // The caps of a cut repeat the vertices along their border, which a second cut through the
+        // same border turns into open edges; merging them keeps the pieces closed.
+        for (ModelObject *piece : { pieces[cut.upper], pieces[cut.lower] })
+            for (ModelVolume *volume : piece->volumes)
+                if (indexed_triangle_set its = volume->mesh().its; its_merge_vertices(its) > 0)
+                    volume->set_mesh(std::move(its));
+        upper[cut.upper]   = true;
+        made_by[cut.upper] = made_by[cut.lower] = int(i);
+        for (size_t d = 2; d < result.size(); ++ d)
+            dowels.push_back(work.add_object(*result[d]));
+    }
+
+    const Vec3d     volume = options.volume_size - Vec3d(2. * options.margin, 2. * options.margin, options.margin);
+    ModelObjectPtrs result;
+    int             number = 0;
+    for (const int leaf : plan.leaves()) {
+        ModelObject *piece = pieces[leaf];
+        if (piece == nullptr)
+            return {};
+        // The faces this piece got from the cuts above it: those it can stand on are flat, so not
+        // where a plug left a peg nor where the plane only ran through a gap. Largest first.
+        std::vector<std::pair<double, Vec3d>> faces;
+        const BoundingBoxf3 &bb = plan.pieces[leaf].bbox;
+        for (int p = leaf; made_by[p] >= 0; p = plan.cuts[made_by[p]].piece) {
+            const FitToBedCut &cut     = plan.cuts[made_by[p]];
+            const bool         touches = std::abs((upper[p] ? bb.min(cut.axis) : bb.max(cut.axis)) - cut.position) < 1e-3;
+            const bool         peg     = ! upper[p] && joint.type == FitToBedJoint::Plug && ! cut.connectors.empty();
+            if (cut.section_area > 0. && touches && ! peg)
+                faces.emplace_back(cut.section_area, (upper[p] ? -1. : 1.) * Vec3d::Unit(cut.axis));
+        }
+        if (! joint.place_on_cut_face)
+            faces.clear();
+        std::stable_sort(faces.begin(), faces.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
+        stand_on_face(*piece, std::move(faces), volume);
+        piece->name = object.name + "-" + std::to_string(++ number);
+        piece->cut_id.copy(cut_id);
+        result.push_back(out.add_object(*piece));
+    }
+    for (ModelObject *dowel : dowels) {
+        dowel->cut_id.copy(cut_id);
+        dowel->ensure_on_bed();
+        result.push_back(out.add_object(*dowel));
+    }
+    return result;
 }
 
 } // namespace Slic3r

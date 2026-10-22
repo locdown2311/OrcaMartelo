@@ -1,10 +1,10 @@
 #ifndef slic3r_FitToBed_hpp_
 #define slic3r_FitToBed_hpp_
 
-// Split a model that does not fit the printer into pieces that do, with connector positions on
-// every cut face. This is the planning half: it decides where to cut and where the connectors go,
-// working on the world-space mesh of one instance. Applying the plan to a ModelObject (cutting with
-// Cut, adding the connectors, laying the pieces out) is the GUI's job.
+// Split a model that does not fit the printer into pieces that do, with connectors on every cut face.
+// plan_fit_to_bed() decides where to cut and where the connectors go, working on the world-space
+// mesh of one instance; apply_fit_to_bed_plan() cuts the ModelObject accordingly (with Cut) and
+// stands every piece on a cut face. Arranging the pieces on the plates is left to the caller.
 //
 // Cuts are planes perpendicular to a world axis. Each cut splits one piece into two, so a plan is a
 // tree: pieces[0] is the whole model, and cut i splits pieces[cuts[i].piece] into pieces[cuts[i].lower]
@@ -18,6 +18,10 @@
 #include <vector>
 
 namespace Slic3r {
+
+class Model;
+class ModelObject;
+using ModelObjectPtrs = std::vector<ModelObject*>;
 
 struct FitToBedOptions
 {
@@ -82,6 +86,34 @@ struct FitToBedPlan
 bool fits_printable_volume(const Vec3d &size, const Vec3d &volume);
 
 FitToBedPlan plan_fit_to_bed(const indexed_triangle_set &world_mesh, const FitToBedOptions &options);
+
+enum class FitToBedJoint
+{
+    None,   // flat faces, to be glued
+    Plug,   // a peg on one piece, a hole in the other
+    Dowel,  // a hole in both pieces and a separate pin
+};
+
+struct FitToBedJointOptions
+{
+    FitToBedJoint type { FitToBedJoint::Plug };
+    // How far a connector goes into a piece (mm); a dowel goes this far into each of the two.
+    double        depth { 6. };
+    // Extra room in the holes (mm): on the diameter, and on the depth.
+    double        clearance { 0.2 };
+    double        depth_clearance { 0.2 };
+    bool          keep_paint { true };
+    // Stand each piece on its largest cut face without a peg, where it fits and is not too tall for it.
+    bool          place_on_cut_face { true };
+};
+
+// Cut instance `instance` of `object` as `plan` says (a plan made from that instance's world mesh),
+// with the connectors of options.connector_radius, and turn every piece so it fits the volume,
+// standing on a cut face when joint.place_on_cut_face allows. Returns the pieces in the
+// order of plan.leaves(), followed by the separate dowels; they belong to `out`. Only that instance
+// is carried over. Empty when the plan cannot be applied.
+ModelObjectPtrs apply_fit_to_bed_plan(const ModelObject &object, int instance, const FitToBedPlan &plan,
+                                      const FitToBedOptions &options, const FitToBedJointOptions &joint, Model &out);
 
 } // namespace Slic3r
 

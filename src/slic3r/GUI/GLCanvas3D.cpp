@@ -10,6 +10,8 @@
 #include <vector>
 #include <utility>
 #include "libslic3r/Slicing.hpp"
+#include "libslic3r/FitToBed.hpp"
+#include "libslic3r/format.hpp"
 #include "slic3r/GUI/Gizmos/GLGizmosManager.hpp"
 #include <cstddef>
 #include <array>
@@ -95,6 +97,7 @@
 #include "GUI_Preview.hpp"
 #include "OpenGLManager.hpp"
 #include "Plater.hpp"
+#include "FitToBedDialog.hpp"
 #include "MainFrame.hpp"
 #include "WipeTowerDialog.hpp"
 #include "GUI_App.hpp"
@@ -3683,6 +3686,7 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
             bool is_flushing_volume_valid = is_flushing_matrix_error();
             _set_warning_notification(EWarning::FlushingVolumeZero, is_flushing_volume_valid);
             _set_warning_notification(EWarning::ObjectClashed, clash_flag);
+            _update_too_large_object_notification();
             _set_warning_notification(EWarning::LeftExtruderPrintableError, unprintable_flag.first);
             _set_warning_notification(EWarning::RightExtruderPrintableError, unprintable_flag.second);
             //_set_warning_notification(EWarning::ObjectLimited, objectLimited);
@@ -3721,6 +3725,7 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
         }
         else {
             _set_warning_notification(EWarning::ObjectOutside, false);
+            _update_too_large_object_notification();
             _set_warning_notification(EWarning::FlushingVolumeZero, false);
             _set_warning_notification(EWarning::ObjectClashed, false);
             _set_warning_notification(EWarning::LeftExtruderPrintableError, false);
@@ -7312,6 +7317,64 @@ void GLCanvas3D::render_thumbnail_legacy(ThumbnailData& thumbnail_data, unsigned
 }
 
 //BBS: GUI refractor
+
+void GLCanvas3D::_update_too_large_object_notification()
+{
+    Plater *plater = wxGetApp().plater();
+    if (plater == nullptr || m_model == nullptr || m_canvas_type != ECanvasType::CanvasView3D)
+        return;
+    // Each instance's box, from the cached hulls of its solid parts.
+    std::map<std::pair<int, int>, BoundingBoxf3> boxes;
+    if (current_printer_technology() == ptFFF)
+        for (GLVolume *volume : m_volumes.volumes) {
+            const int obj_idx = volume->object_idx(), vol_idx = volume->volume_idx();
+            if (obj_idx < 0 || vol_idx < 0 || obj_idx >= int(m_model->objects.size()) ||
+                vol_idx >= int(m_model->objects[obj_idx]->volumes.size()) || ! m_model->objects[obj_idx]->volumes[vol_idx]->is_model_part())
+                continue;
+            boxes[{ obj_idx, volume->instance_idx() }].merge(volume->transformed_convex_hull_bounding_box());
+        }
+    const Vec3d volume_size = m_bed.build_volume().bounding_volume().size();
+    ObjectID    object_id;
+    int         instance = -1;
+    for (const auto &[key, box] : boxes)
+        if (! fits_printable_volume(box.size(), volume_size)) {
+            object_id = m_model->objects[key.first]->id();
+            instance  = key.second;
+            break;
+        }
+    // Only on a change, so a notification the user closed stays closed while they move things around.
+    if (object_id == m_too_large_object && instance == m_too_large_instance)
+        return;
+    m_too_large_object   = object_id;
+    m_too_large_instance = instance;
+
+    NotificationManager &notifications = *plater->get_notification_manager();
+    notifications.close_slicing_customize_error_notification(NotificationType::OrcaObjectTooLargeForBed, NotificationManager::NotificationLevel::WarningNotificationLevel);
+    if (! object_id.valid())
+        return;
+    const ModelObject *object = nullptr;
+    for (const ModelObject *mo : m_model->objects)
+        if (mo->id() == object_id)
+            object = mo;
+    notifications.push_slicing_customize_error_notification(NotificationType::OrcaObjectTooLargeForBed, NotificationManager::NotificationLevel::WarningNotificationLevel,
+        // TRN %1%: object name.
+        format(_u8L("%1% does not fit the printable volume in any orientation."), object->name), _u8L("Split to fit"),
+        [object_id, instance](wxEvtHandler *) {
+            // Not from inside the notification's rendering: the dialog is modal.
+            wxGetApp().CallAfter([object_id, instance]() {
+                Plater *plater = wxGetApp().plater();
+                if (plater == nullptr)
+                    return;
+                const ModelObjectPtrs &objects = plater->model().objects;
+                for (size_t i = 0; i < objects.size(); ++ i)
+                    if (objects[i]->id() == object_id) {
+                        split_object_to_fit_bed(i, instance);
+                        return;
+                    }
+            });
+            return true;
+        });
+}
 
 void GLCanvas3D::_update_slice_error_status()
 {

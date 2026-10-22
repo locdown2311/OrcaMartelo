@@ -557,6 +557,8 @@ public:
     void fill_bed_with_instances();
     bool is_selection_empty() const;
     void scale_selection_to_fit_print_volume();
+    // Cut the selected object, too large for the printable volume, into pieces that fit (FitToBedDialog).
+    void split_selection_to_fit_bed();
     void convert_unit(ConversionType conv_type);
     // BBS: replace z with plane_points
     void cut(size_t obj_idx, size_t instance_idx, std::array<Vec3d, 4> plane_points, ModelObjectCutAttributes attributes);
@@ -788,6 +790,7 @@ public:
     bool can_set_instance_to_object() const;
     bool can_fix_through_cgal() const;
     bool can_simplify() const;
+    bool can_split_to_fit_bed() const;
     bool can_smooth_mesh() const;
     bool can_split_to_objects() const;
     bool can_split_to_volumes() const;
