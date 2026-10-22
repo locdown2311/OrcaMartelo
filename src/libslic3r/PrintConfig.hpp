@@ -142,6 +142,13 @@ enum class WipeTowerType3Shape {
     Box,
 };
 
+// How the box-shaped Type 3 tower is divided inside: the dividers also brace its side walls.
+enum class WipeTowerBoxCompartments {
+    One,
+    Two,
+    Four,
+};
+
 enum PrintHostType {
     htPrusaLink, htPrusaConnect, htOctoPrint, htDuet, htUltiMaker, htFlashAir, htAstroBox, htRepetier, htMKS, htESP3D, htCrealityPrint, htObico, htFlashforge, htSimplyPrint, htElegooLink, ht3DPrinterOS, htMoonraker, htAnycubic
 };
@@ -815,6 +822,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(FuzzySkinMode)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(TopSurfaceExpansionDirection)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerType3Shape)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerBoxCompartments)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(NoiseType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(InfillPattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(IroningType)
@@ -2180,6 +2188,7 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionEnum<WipeTowerType3Shape>, wipe_tower_type3_shape))
     ((ConfigOptionFloat,              wipe_tower_box_wall))
     ((ConfigOptionFloat,              wipe_tower_box_floor))
+    ((ConfigOptionEnum<WipeTowerBoxCompartments>, wipe_tower_box_compartments))
     ((ConfigOptionFloat,              wipe_tower_rib_width))
     ((ConfigOptionBool,               wipe_tower_fillet_wall))
     ((ConfigOptionInt,                wipe_tower_filament))

@@ -11,6 +11,7 @@
 #include <sstream>
 #include <utility>
 #include <algorithm>
+#include <array>
 #include <vector>
 
 #include "libslic3r/Point.hpp"
@@ -18,6 +19,7 @@
 #include "WipeTower.hpp"
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/TriangleMesh.hpp"
 namespace Slic3r
 {
 
@@ -41,11 +43,24 @@ public:
 	// Estimated total flush volume of a SEMM print with the given number of filaments,
 	// used to reserve wipe tower space before the tower is generated.
 	static float estimate_semm_flush_volume(const ConfigBase& config, size_t filaments_cnt);
+	// Shape of a box-shaped Type 3 tower, besides its outer size: an opening `cavity` wide and deep,
+	// centred, above a floor `floor` high, split into `compartments` (1, 2 side by side along X, or
+	// 2 x 2) by dividers `divider` thick.
+	struct BoxShape
+	{
+	    Vec2f cavity { Vec2f::Zero() };
+	    float floor { 0.f };
+	    int   compartments { 1 };
+	    float divider { 0.f };
+	    bool  valid() const { return cavity.x() > EPSILON && cavity.y() > EPSILON; }
+	};
 	// Opening of a Type 3 box tower `width` x `depth` with side walls `wall` thick inside its outer
 	// perimeter: width and depth of the hole, centred in the tower. The generator makes it square.
 	static Vec2f box_cavity_size(float width, float depth, float wall, float perimeter_width);
-	// The box tower: an outer box with that opening from `floor` up, the opening centred.
-	static indexed_triangle_set its_make_box_tower(float width, float depth, float height, const Vec2f &cavity, float floor);
+	// The solid blocks of a box tower, as (x, y, z, width, depth, height): the floor, the walls
+	// around the opening and the dividers, none overlapping another.
+	static std::vector<std::array<float, 6>> box_tower_blocks(float width, float depth, float height, const BoxShape &box);
+	static indexed_triangle_set its_make_box_tower(float width, float depth, float height, const BoxShape &box);
 
     
     // Construct ToolChangeResult from current state of WipeTower2 and WipeTowerWriter2.
@@ -87,9 +102,8 @@ public:
 	void generate(std::vector<std::vector<WipeTower::ToolChangeResult>> &result);
 
     float get_depth() const { return m_wipe_tower_depth; }
-    // Size of the opening and height of the floor of a box-shaped Type 3 tower; zero for any other.
-    Vec2f get_box_cavity() const { return m_is_box ? m_box_cavity : Vec2f::Zero(); }
-    float get_box_floor() const { return m_is_box ? m_box_floor : 0.f; }
+    // Shape of a box-shaped Type 3 tower; not valid() for any other.
+    BoxShape get_box_shape() const;
 	std::vector<std::pair<float, float>> get_z_and_depth_pairs() const;
     float get_brim_width() const { return m_wipe_tower_brim_width_real; }
 	float get_wipe_tower_height() const { return m_wipe_tower_height; }
@@ -243,6 +257,8 @@ private:
     float  m_box_wall           = 2.f;
     float  m_box_floor          = 1.6f;
     int    m_box_loops          = 0;
+    int    m_box_compartments   = 1;
+    static constexpr int BOX_DIVIDER_LINES = 3;
     Vec2f  m_box_cavity         = Vec2f::Zero();
     float  m_box_cavity_y       = 0.f;     // front edge of the opening, from the tower's front edge
     int    m_wipe_tower_filament = 0;   // 1-based config value, 0 means auto

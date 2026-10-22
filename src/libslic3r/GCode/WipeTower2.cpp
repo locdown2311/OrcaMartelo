@@ -1088,6 +1088,8 @@ WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& defau
             m_is_box    = true;
             m_box_wall  = float(config.wipe_tower_box_wall.value);
             m_box_floor = float(config.wipe_tower_box_floor.value);
+            m_box_compartments = config.wipe_tower_box_compartments.value == WipeTowerBoxCompartments::Four ? 4 :
+                                 config.wipe_tower_box_compartments.value == WipeTowerBoxCompartments::Two  ? 2 : 1;
             // Room for an opening at least 10 mm wide between the side walls.
             m_wipe_tower_width = std::max(m_wipe_tower_width, 2.f * (m_box_wall + 1.f) + 10.f);
         } else {
@@ -2925,23 +2927,51 @@ Vec2f WipeTower2::box_cavity_size(float width, float depth, float wall, float pe
     return Vec2f(side, std::max(0.f, std::min(side, depth - 2.f * (perimeter_width + wall))));
 }
 
-indexed_triangle_set WipeTower2::its_make_box_tower(float width, float depth, float height, const Vec2f &cavity, float floor)
+std::vector<std::array<float, 6>> WipeTower2::box_tower_blocks(float width, float depth, float height, const BoxShape &box)
 {
-    if (cavity.x() < EPSILON || cavity.y() < EPSILON || floor >= height)
-        return its_make_cube(width, depth, height);
-    // The floor, and the four walls around the opening above it.
-    const float x0 = 0.5f * (width - cavity.x()), y0 = 0.5f * (depth - cavity.y());
-    indexed_triangle_set out = its_make_cube(width, depth, floor);
-    auto add_block = [&out, floor, height](float x, float y, float w, float d) {
-        indexed_triangle_set block = its_make_cube(w, d, height - floor);
-        its_translate(block, Vec3f(x, y, floor));
+    if (! box.valid() || box.floor >= height)
+        return { { 0.f, 0.f, 0.f, width, depth, height } };
+    const float x0 = 0.5f * (width - box.cavity.x()), y0 = 0.5f * (depth - box.cavity.y());
+    const float h  = height - box.floor, z = box.floor;
+    std::vector<std::array<float, 6>> blocks {
+        { 0.f, 0.f, 0.f, width, depth, box.floor },
+        { 0.f, 0.f, z, width, y0, h },
+        { 0.f, depth - y0, z, width, y0, h },
+        { 0.f, y0, z, x0, box.cavity.y(), h },
+        { width - x0, y0, z, x0, box.cavity.y(), h } };
+    // A divider down the middle (along Y), and for four compartments one across it in two halves.
+    const float t = box.divider;
+    if (box.compartments >= 2 && t > EPSILON)
+        blocks.push_back({ 0.5f * (width - t), y0, z, t, box.cavity.y(), h });
+    if (box.compartments >= 4 && t > EPSILON) {
+        const float half = 0.5f * (box.cavity.x() - t);
+        blocks.push_back({ x0, 0.5f * (depth - t), z, half, t, h });
+        blocks.push_back({ 0.5f * (width + t), 0.5f * (depth - t), z, half, t, h });
+    }
+    return blocks;
+}
+
+indexed_triangle_set WipeTower2::its_make_box_tower(float width, float depth, float height, const BoxShape &box)
+{
+    indexed_triangle_set out;
+    for (const std::array<float, 6> &b : box_tower_blocks(width, depth, height, box)) {
+        indexed_triangle_set block = its_make_cube(b[3], b[4], b[5]);
+        its_translate(block, Vec3f(b[0], b[1], b[2]));
         its_merge(out, block);
-    };
-    add_block(0.f, 0.f, width, y0);
-    add_block(0.f, depth - y0, width, y0);
-    add_block(0.f, y0, x0, cavity.y());
-    add_block(width - x0, y0, x0, cavity.y());
+    }
     return out;
+}
+
+WipeTower2::BoxShape WipeTower2::get_box_shape() const
+{
+    BoxShape box;
+    if (m_is_box) {
+        box.cavity       = m_box_cavity;
+        box.floor        = m_box_floor;
+        box.compartments = m_box_compartments;
+        box.divider      = float(BOX_DIVIDER_LINES) * box_loop_spacing();
+    }
+    return box;
 }
 
 void WipeTower2::plan_box()
@@ -3012,8 +3042,32 @@ void WipeTower2::box_finish_layer(WipeTowerWriter2 &writer, float purge_end_y, f
         writer.travel(x0 - o, y0 - o, feedrate);
         writer.rectangle(Vec2f(x0 - o, y0 - o), x1 - x0 + 2.f * o, y1 - y0 + 2.f * o, feedrate);
     }
+    // The dividers above the floor, each a few lines thick and reaching into the innermost loop: one
+    // down the middle, and for four compartments one across it, in two halves either side of it.
+    const bool on_floor = first_layer || m_z_pos <= m_box_floor + WT_EPSILON;
+    if (! on_floor && m_box_compartments >= 2) {
+        const float half_thickness = 0.5f * float(BOX_DIVIDER_LINES) * spacing;
+        auto divider = [&](const Vec2f &from, const Vec2f &to, const Vec2f &across) {
+            for (int j = 0; j < BOX_DIVIDER_LINES; ++ j) {
+                const Vec2f shift = (float(j) + 0.5f) * spacing * across - half_thickness * across;
+                const Vec2f a = (j % 2 == 0 ? from : to) + shift, b = (j % 2 == 0 ? to : from) + shift;
+                if (j == 0)
+                    writer.travel(a.x(), a.y(), feedrate);
+                else
+                    writer.extrude(a.x(), a.y(), feedrate);
+                writer.extrude(b.x(), b.y(), feedrate);
+            }
+        };
+        const float reach = 0.5f * spacing;
+        const float xm = 0.5f * width, ym = 0.5f * depth;
+        divider(Vec2f(xm, y0 - reach), Vec2f(xm, y1 + reach), Vec2f::UnitX());
+        if (m_box_compartments >= 4) {
+            divider(Vec2f(x0 - reach, ym), Vec2f(xm - half_thickness, ym), Vec2f::UnitY());
+            divider(Vec2f(xm + half_thickness, ym), Vec2f(x1 + reach, ym), Vec2f::UnitY());
+        }
+    }
     // The floor, its lines turning by 90 degrees from layer to layer.
-    if (first_layer || m_z_pos <= m_box_floor + WT_EPSILON) {
+    if (on_floor) {
         const float inset = 0.5f * spacing;
         if (m_num_layer_changes % 2 == 0)
             fill_rect(x0 + inset, y0 + inset, x1 - inset, y1 - inset, true);

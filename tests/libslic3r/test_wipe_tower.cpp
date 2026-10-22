@@ -22,6 +22,7 @@
 #include "libslic3r/TriangleMesh.hpp"
 
 #include <memory>
+#include <tuple>
 
 using namespace Slic3r;
 using Catch::Matchers::WithinAbs;
@@ -396,8 +397,10 @@ TEST_CASE("Footprint padding covers the brim and the extrusion half width on eac
 
 // A Type 3 box tower for two filaments swapping on every layer, 0.2 mm layers, 45 mm3 per purge,
 // 40 mm wide with 2 mm walls and a 1 mm floor.
-static std::vector<std::vector<WipeTower::ToolChangeResult>> generate_box_tower(WipeTower2 *&tower, PrintConfig &config, PrintRegionConfig &region, size_t layers)
+static std::vector<std::vector<WipeTower::ToolChangeResult>> generate_box_tower(WipeTower2 *&tower, PrintConfig &config, PrintRegionConfig &region, size_t layers,
+                                                                              WipeTowerBoxCompartments compartments = WipeTowerBoxCompartments::One)
 {
+    config.wipe_tower_box_compartments.value = compartments;
     config.wipe_tower_type.value        = WipeTowerType::Type3;
     config.wipe_tower_type3_shape.value = WipeTowerType3Shape::Box;
     config.prime_tower_width.value      = 40.;
@@ -419,6 +422,24 @@ static std::vector<std::vector<WipeTower::ToolChangeResult>> generate_box_tower(
     return result;
 }
 
+// Extruded segments of a tower layer that run through `inside` (sampled), and those that do not.
+template<class Inside>
+static std::pair<size_t, size_t> count_segments(const std::vector<WipeTower::ToolChangeResult> &layer, Inside inside)
+{
+    size_t in = 0, out = 0;
+    for (const WipeTower::ToolChangeResult &tcr : layer)
+        for (size_t i = 1; i < tcr.extrusions.size(); ++ i) {
+            if (tcr.extrusions[i].width <= 0.f)
+                continue;
+            const Vec2f a = tcr.extrusions[i - 1].pos, b = tcr.extrusions[i].pos;
+            bool hit = false;
+            for (int s = 0; s <= 20 && ! hit; ++ s)
+                hit = inside(a + (b - a) * (float(s) / 20.f));
+            ++ (hit ? in : out);
+        }
+    return { in, out };
+}
+
 TEST_CASE("A box tower keeps its opening empty above the floor", "[WipeTower][Type3Box]") {
     PrintConfig       config;
     PrintRegionConfig region;
@@ -426,41 +447,67 @@ TEST_CASE("A box tower keeps its opening empty above the floor", "[WipeTower][Ty
     const auto        layers = generate_box_tower(tower, config, region, 30);
     std::unique_ptr<WipeTower2> owner(tower);
 
-    const Vec2f cavity = tower->get_box_cavity();
+    const WipeTower2::BoxShape box = tower->get_box_shape();
     const float width = tower->width(), depth = tower->get_depth();
-    REQUIRE(cavity.x() > 10.f);
+    REQUIRE(box.cavity.x() > 10.f);
     // A square opening, centred: the walls around it come out the same on opposite sides.
-    CHECK_THAT(cavity.y(), WithinAbs(cavity.x(), 1e-4));
-    CHECK(depth > cavity.y() + 2. * 2.);
-    const Vec2f lo(0.5f * (width - cavity.x()), 0.5f * (depth - cavity.y()));
-    const Vec2f hi = lo + cavity;
+    CHECK_THAT(box.cavity.y(), WithinAbs(box.cavity.x(), 1e-4));
+    CHECK(depth > box.cavity.y() + 2. * 2.);
+    const Vec2f lo(0.5f * (width - box.cavity.x()), 0.5f * (depth - box.cavity.y()));
+    const Vec2f hi = lo + box.cavity;
+    // Less half a line all round.
+    auto in_opening = [&](const Vec2f &p) { return p.x() > lo.x() + 0.3f && p.x() < hi.x() - 0.3f && p.y() > lo.y() + 0.3f && p.y() < hi.y() - 0.3f; };
 
     REQUIRE(layers.size() == 30);
     size_t floor_lines = 0;
     for (size_t l = 0; l < layers.size(); ++ l) {
-        const float z = 0.2f * float(l + 1);
-        for (const WipeTower::ToolChangeResult &tcr : layers[l])
-            for (size_t i = 1; i < tcr.extrusions.size(); ++ i) {
-                const WipeTower::Extrusion &e = tcr.extrusions[i];
-                if (e.width <= 0.f)
-                    continue;
-                // Sample the segment: does any of it run through the opening (less half a line)?
-                const Vec2f a = tcr.extrusions[i - 1].pos, b = e.pos;
-                bool inside = false;
-                for (int s = 0; s <= 20 && ! inside; ++ s) {
-                    const Vec2f p = a + (b - a) * (float(s) / 20.f);
-                    inside = p.x() > lo.x() + 0.3f && p.x() < hi.x() - 0.3f && p.y() > lo.y() + 0.3f && p.y() < hi.y() - 0.3f;
-                }
-                if (z <= tower->get_box_floor() + 1e-3f)
-                    floor_lines += inside;
-                else {
-                    INFO("layer " << l << " segment " << a.transpose() << " -> " << b.transpose());
-                    CHECK_FALSE(inside);
-                }
-            }
+        const size_t in = count_segments(layers[l], in_opening).first;
+        if (0.2f * float(l + 1) <= box.floor + 1e-3f)
+            floor_lines += in;
+        else {
+            INFO("layer " << l);
+            CHECK(in == 0);
+        }
     }
     // The floor fills the opening on its 5 layers.
     CHECK(floor_lines > 5 * 10);
+}
+
+TEST_CASE("Dividers split a box tower into compartments", "[WipeTower][Type3Box]") {
+    const auto row          = GENERATE(table<WipeTowerBoxCompartments, int>({ { WipeTowerBoxCompartments::Two, 2 }, { WipeTowerBoxCompartments::Four, 4 } }));
+    const auto compartments = std::get<0>(row);
+    const int  count        = std::get<1>(row);
+    PrintConfig       config;
+    PrintRegionConfig region;
+    WipeTower2       *tower  = nullptr;
+    const auto        layers = generate_box_tower(tower, config, region, 20, compartments);
+    std::unique_ptr<WipeTower2> owner(tower);
+
+    const WipeTower2::BoxShape box = tower->get_box_shape();
+    CHECK(box.compartments == count);
+    REQUIRE(box.divider > 0.f);
+    const float width = tower->width(), depth = tower->get_depth();
+    const Vec2f lo(0.5f * (width - box.cavity.x()), 0.5f * (depth - box.cavity.y()));
+    const Vec2f hi = lo + box.cavity;
+    const float half = 0.5f * box.divider + 0.3f;
+    auto on_divider = [&](const Vec2f &p) {
+        return std::abs(p.x() - 0.5f * width) < half || (count == 4 && std::abs(p.y() - 0.5f * depth) < half);
+    };
+    // Inside a compartment: in the opening, off the dividers.
+    auto in_compartment = [&](const Vec2f &p) {
+        return p.x() > lo.x() + 0.3f && p.x() < hi.x() - 0.3f && p.y() > lo.y() + 0.3f && p.y() < hi.y() - 0.3f && ! on_divider(p);
+    };
+    // Every layer above the floor prints the dividers and nothing else in the opening.
+    for (size_t l = 0; l < layers.size(); ++ l) {
+        if (0.2f * float(l + 1) <= box.floor + 1e-3f)
+            continue;
+        INFO("layer " << l);
+        CHECK(count_segments(layers[l], in_compartment).first == 0);
+        const auto divider_lines = count_segments(layers[l], [&](const Vec2f &p) {
+            return p.x() > lo.x() + 1.f && p.x() < hi.x() - 1.f && p.y() > lo.y() + 1.f && p.y() < hi.y() - 1.f && on_divider(p);
+        }).first;
+        CHECK(divider_lines >= size_t(count == 4 ? 3 * 3 : 3));
+    }
 }
 
 TEST_CASE("A box tower purges into its front and back walls by turns", "[WipeTower][Type3Box]") {
@@ -488,9 +535,17 @@ TEST_CASE("A box tower purges into its front and back walls by turns", "[WipeTow
 }
 
 TEST_CASE("The box tower mesh has the opening above its floor", "[WipeTower][Type3Box]") {
-    const indexed_triangle_set its = WipeTower2::its_make_box_tower(40.f, 50.f, 20.f, Vec2f(30.f, 30.f), 2.f);
+    WipeTower2::BoxShape box;
+    box.cavity = Vec2f(30.f, 30.f);
+    box.floor  = 2.f;
     // Solid volume: the box less the opening above the floor.
-    CHECK_THAT(its_volume(its), WithinAbs(40. * 50. * 20. - 30. * 30. * 18., 1e-2));
+    CHECK_THAT(its_volume(WipeTower2::its_make_box_tower(40.f, 50.f, 20.f, box)), WithinAbs(40. * 50. * 20. - 30. * 30. * 18., 1e-2));
+    // The dividers fill back a strip 1 mm wide across the opening, once or twice (less their crossing).
+    box.divider      = 1.f;
+    box.compartments = 2;
+    CHECK_THAT(its_volume(WipeTower2::its_make_box_tower(40.f, 50.f, 20.f, box)), WithinAbs(40. * 50. * 20. - 30. * 30. * 18. + 30. * 18., 1e-2));
+    box.compartments = 4;
+    CHECK_THAT(its_volume(WipeTower2::its_make_box_tower(40.f, 50.f, 20.f, box)), WithinAbs(40. * 50. * 20. - 30. * 30. * 18. + (30. + 29.) * 18., 1e-2));
     // Without an opening it is the plain box.
-    CHECK_THAT(its_volume(WipeTower2::its_make_box_tower(40.f, 50.f, 20.f, Vec2f::Zero(), 2.f)), WithinAbs(40. * 50. * 20., 1e-2));
+    CHECK_THAT(its_volume(WipeTower2::its_make_box_tower(40.f, 50.f, 20.f, WipeTower2::BoxShape{})), WithinAbs(40. * 50. * 20., 1e-2));
 }

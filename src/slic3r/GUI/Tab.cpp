@@ -3252,6 +3252,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("wipe_tower_type3_shape", "multimaterial_settings_prime_tower#type-3-shape");
         optgroup->append_single_option_line("wipe_tower_box_wall", "multimaterial_settings_prime_tower#box-wall-thickness");
         optgroup->append_single_option_line("wipe_tower_box_floor", "multimaterial_settings_prime_tower#box-floor-thickness");
+        optgroup->append_single_option_line("wipe_tower_box_compartments", "multimaterial_settings_prime_tower#box-compartments");
         optgroup->append_single_option_line("wipe_tower_no_sparse_layers", "multimaterial_settings_prime_tower#no-sparse-layers");
         optgroup->append_single_option_line("wipe_tower_sparse_layers_combination", "multimaterial_settings_prime_tower#combine-sparse-layers");
         optgroup->append_single_option_line("single_extruder_multi_material_priming", "multimaterial_settings_prime_tower#prime-all-printing-extruders");

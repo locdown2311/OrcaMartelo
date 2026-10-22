@@ -305,6 +305,13 @@ static t_config_enum_values s_keys_map_WipeTowerType3Shape {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(WipeTowerType3Shape)
 
+static t_config_enum_values s_keys_map_WipeTowerBoxCompartments {
+    { "one",  int(WipeTowerBoxCompartments::One) },
+    { "two",  int(WipeTowerBoxCompartments::Two) },
+    { "four", int(WipeTowerBoxCompartments::Four) }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(WipeTowerBoxCompartments)
+
 
 static t_config_enum_values s_keys_map_FuzzySkinMode {
     { "displacement",   int(FuzzySkinMode::Displacement) },
@@ -8958,6 +8965,23 @@ void PrintConfigDef::init_fff_params()
     def->max      = 10;
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(1.6));
+
+    def          = this->add("wipe_tower_box_compartments", coEnum);
+    def->label   = L("Box compartments");
+    def->tooltip = L("Dividers across the box's opening. Besides splitting it into compartments, they brace the side "
+                     "walls, so a tall box wobbles less under the nozzle.");
+    def->enum_keys_map = &ConfigOptionEnum<WipeTowerBoxCompartments>::get_enum_values();
+    def->enum_values.emplace_back("one");
+    def->enum_values.emplace_back("two");
+    def->enum_values.emplace_back("four");
+    // TRN Box compartments: no divider.
+    def->enum_labels.emplace_back(L("One"));
+    // TRN Box compartments: one divider, two compartments side by side.
+    def->enum_labels.emplace_back(L("Two"));
+    // TRN Box compartments: two crossed dividers.
+    def->enum_labels.emplace_back(L("Four (2 × 2)"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<WipeTowerBoxCompartments>(WipeTowerBoxCompartments::Two));
 
     def           = this->add("wipe_tower_rib_width", coFloat);
     def->label    = L("Rib width");

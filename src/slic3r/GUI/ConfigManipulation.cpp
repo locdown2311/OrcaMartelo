@@ -1189,6 +1189,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     const bool have_box = have_type3 && config->opt_enum<WipeTowerType3Shape>("wipe_tower_type3_shape") == WipeTowerType3Shape::Box;
     toggle_line("wipe_tower_box_wall", have_box);
     toggle_line("wipe_tower_box_floor", have_box);
+    toggle_line("wipe_tower_box_compartments", have_box);
 
     toggle_line("single_extruder_multi_material_priming", !bSEMM && have_prime_tower && supports_wipe_tower_2 && !is_belt_printer);
 

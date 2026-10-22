@@ -1006,20 +1006,18 @@ int GLVolumeCollection::load_wipe_tower_preview(
     const float stud_h = 1.8f;
     float body_h = is_lego ? std::max(0.1f, height - stud_h) : height;
     TriangleMesh wipe_tower_shell = make_cube(width, depth, body_h);
-    // A box tower as blocks (x, y, z, width, depth, height): the floor and the walls around the opening.
+    // A box tower as blocks (x, y, z, width, depth, height): the floor, the walls and the dividers.
     std::vector<std::array<float, 6>> box_blocks;
     if (is_box) {
-        // The perimeter width is a guess here (a 0.4 mm nozzle); the opening only needs to look right.
-        const float wall   = float(print_shape_cfg.opt_float("wipe_tower_box_wall"));
-        const float floor  = std::min(float(print_shape_cfg.opt_float("wipe_tower_box_floor")), height);
-        const Vec2f cavity = WipeTower2::box_cavity_size(width, depth, wall, 0.5f);
-        wipe_tower_shell   = TriangleMesh(WipeTower2::its_make_box_tower(width, depth, height, cavity, floor));
-        const float x0 = 0.5f * (width - cavity.x()), y0 = 0.5f * (depth - cavity.y());
-        box_blocks = { { 0.f, 0.f, 0.f, width, depth, floor },
-                       { 0.f, 0.f, floor, width, y0, height - floor },
-                       { 0.f, depth - y0, floor, width, y0, height - floor },
-                       { 0.f, y0, floor, x0, cavity.y(), height - floor },
-                       { width - x0, y0, floor, x0, cavity.y(), height - floor } };
+        // The perimeter width is a guess here (a 0.4 mm nozzle); the box only needs to look right.
+        WipeTower2::BoxShape box;
+        box.cavity = WipeTower2::box_cavity_size(width, depth, float(print_shape_cfg.opt_float("wipe_tower_box_wall")), 0.5f);
+        box.floor  = std::min(float(print_shape_cfg.opt_float("wipe_tower_box_floor")), height);
+        const WipeTowerBoxCompartments compartments = print_shape_cfg.opt_enum<WipeTowerBoxCompartments>("wipe_tower_box_compartments");
+        box.compartments = compartments == WipeTowerBoxCompartments::Four ? 4 : compartments == WipeTowerBoxCompartments::Two ? 2 : 1;
+        box.divider      = 1.4f;
+        box_blocks       = WipeTower2::box_tower_blocks(width, depth, height, box);
+        wipe_tower_shell = TriangleMesh(WipeTower2::its_make_box_tower(width, depth, height, box));
     } else if (is_lego) {
         const float pitch  = 8.0f;
         int num_x = std::max(1, int(std::round((width + 0.2f) / pitch)));

@@ -1456,6 +1456,7 @@ static std::vector<std::string> s_Preset_print_options{
     "wipe_tower_type3_shape",
     "wipe_tower_box_wall",
     "wipe_tower_box_floor",
+    "wipe_tower_box_compartments",
     "wipe_tower_rib_width",
     "wipe_tower_fillet_wall",
     "wipe_tower_filament",
