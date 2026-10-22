@@ -41,6 +41,11 @@ public:
 	// Estimated total flush volume of a SEMM print with the given number of filaments,
 	// used to reserve wipe tower space before the tower is generated.
 	static float estimate_semm_flush_volume(const ConfigBase& config, size_t filaments_cnt);
+	// Opening of a Type 3 box tower `width` x `depth` with side walls `wall` thick inside its outer
+	// perimeter: width and depth of the hole, centred in the tower. The generator makes it square.
+	static Vec2f box_cavity_size(float width, float depth, float wall, float perimeter_width);
+	// The box tower: an outer box with that opening from `floor` up, the opening centred.
+	static indexed_triangle_set its_make_box_tower(float width, float depth, float height, const Vec2f &cavity, float floor);
 
     
     // Construct ToolChangeResult from current state of WipeTower2 and WipeTowerWriter2.
@@ -82,6 +87,9 @@ public:
 	void generate(std::vector<std::vector<WipeTower::ToolChangeResult>> &result);
 
     float get_depth() const { return m_wipe_tower_depth; }
+    // Size of the opening and height of the floor of a box-shaped Type 3 tower; zero for any other.
+    Vec2f get_box_cavity() const { return m_is_box ? m_box_cavity : Vec2f::Zero(); }
+    float get_box_floor() const { return m_is_box ? m_box_floor : 0.f; }
 	std::vector<std::pair<float, float>> get_z_and_depth_pairs() const;
     float get_brim_width() const { return m_wipe_tower_brim_width_real; }
 	float get_wipe_tower_height() const { return m_wipe_tower_height; }
@@ -227,7 +235,16 @@ private:
 	bool   m_semm               = true; // Are we using a single extruder multimaterial printer?
 	bool   m_enable_filament_ramming = true;
 	bool   m_is_mk4mmu3         = false;
-    bool   m_is_lego            = false;
+    bool   m_is_lego            = false;    // Type 3 shaped as a Lego brick
+    // Type 3 shaped as an open box: the toolchanges purge into the front and back walls (the layers
+    // alternate them, being turned by 180 degrees), and an opening `m_box_cavity` wide stays empty
+    // in the middle above a floor `m_box_floor` high. Side walls are m_box_loops loops thick.
+    bool   m_is_box             = false;
+    float  m_box_wall           = 2.f;
+    float  m_box_floor          = 1.6f;
+    int    m_box_loops          = 0;
+    Vec2f  m_box_cavity         = Vec2f::Zero();
+    float  m_box_cavity_y       = 0.f;     // front edge of the opening, from the tower's front edge
     int    m_wipe_tower_filament = 0;   // 1-based config value, 0 means auto
     Vec2f  m_wipe_tower_pos; 			// Left front corner of the wipe tower in mm.
 	float  m_wipe_tower_width; 			// Width of the wipe tower.
@@ -449,6 +466,14 @@ private:
     Polygon generate_rib_polygon(const WipeTower::box_coordinates& wt_box);
 
     void extrude_studs(WipeTowerWriter2 &writer, float feedrate);
+
+    // Spacing of the loops around the box's opening.
+    float box_loop_spacing() const { return 0.92f * m_perimeter_width; }
+    // Lay out the box around the deepest purge of any layer (plan_tower()).
+    void plan_box();
+    // Everything of a box layer but the purge and the outer wall: the infill of the front and back
+    // walls beside the purge, the loops around the opening, and the floor.
+    void box_finish_layer(WipeTowerWriter2 &writer, float purge_end_y, float feedrate, bool solid, bool first_layer);
 
     void compute_wall_skip_points();
 

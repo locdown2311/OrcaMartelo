@@ -19,6 +19,9 @@
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/TriangleMesh.hpp"
+
+#include <memory>
 
 using namespace Slic3r;
 using Catch::Matchers::WithinAbs;
@@ -389,4 +392,105 @@ TEST_CASE("Footprint padding covers the brim and the extrusion half width on eac
     CHECK_THAT(compacted_tower_footprint_padding(cfg, 0.), WithinAbs(2. * 0.4, 1e-9));
     // Callers whose outline already carries the brim pass zero, and a negative one cannot shrink it.
     CHECK_THAT(compacted_tower_footprint_padding(cfg, -5.), WithinAbs(2. * 0.4, 1e-9));
+}
+
+// A Type 3 box tower for two filaments swapping on every layer, 0.2 mm layers, 45 mm3 per purge,
+// 40 mm wide with 2 mm walls and a 1 mm floor.
+static std::vector<std::vector<WipeTower::ToolChangeResult>> generate_box_tower(WipeTower2 *&tower, PrintConfig &config, PrintRegionConfig &region, size_t layers)
+{
+    config.wipe_tower_type.value        = WipeTowerType::Type3;
+    config.wipe_tower_type3_shape.value = WipeTowerType3Shape::Box;
+    config.prime_tower_width.value      = 40.;
+    config.wipe_tower_box_wall.value    = 2.;
+    config.wipe_tower_box_floor.value   = 1.;
+    config.nozzle_diameter.values       = { 0.4, 0.4 };
+    tower = new WipeTower2(config, region, 0, Vec3d::Zero(), { { 0.f, 45.f }, { 45.f, 0.f } }, 0);
+    tower->set_extruder(0, config);
+    tower->set_extruder(1, config);
+    size_t tool = 0;
+    for (size_t i = 0; i < layers; ++ i) {
+        const float z = 0.2f * float(i + 1);
+        tower->plan_toolchange(z, 0.2f, tool, tool, 0.f);
+        tower->plan_toolchange(z, 0.2f, tool, 1 - tool, 45.f);
+        tool = 1 - tool;
+    }
+    std::vector<std::vector<WipeTower::ToolChangeResult>> result;
+    tower->generate(result);
+    return result;
+}
+
+TEST_CASE("A box tower keeps its opening empty above the floor", "[WipeTower][Type3Box]") {
+    PrintConfig       config;
+    PrintRegionConfig region;
+    WipeTower2       *tower  = nullptr;
+    const auto        layers = generate_box_tower(tower, config, region, 30);
+    std::unique_ptr<WipeTower2> owner(tower);
+
+    const Vec2f cavity = tower->get_box_cavity();
+    const float width = tower->width(), depth = tower->get_depth();
+    REQUIRE(cavity.x() > 10.f);
+    // A square opening, centred: the walls around it come out the same on opposite sides.
+    CHECK_THAT(cavity.y(), WithinAbs(cavity.x(), 1e-4));
+    CHECK(depth > cavity.y() + 2. * 2.);
+    const Vec2f lo(0.5f * (width - cavity.x()), 0.5f * (depth - cavity.y()));
+    const Vec2f hi = lo + cavity;
+
+    REQUIRE(layers.size() == 30);
+    size_t floor_lines = 0;
+    for (size_t l = 0; l < layers.size(); ++ l) {
+        const float z = 0.2f * float(l + 1);
+        for (const WipeTower::ToolChangeResult &tcr : layers[l])
+            for (size_t i = 1; i < tcr.extrusions.size(); ++ i) {
+                const WipeTower::Extrusion &e = tcr.extrusions[i];
+                if (e.width <= 0.f)
+                    continue;
+                // Sample the segment: does any of it run through the opening (less half a line)?
+                const Vec2f a = tcr.extrusions[i - 1].pos, b = e.pos;
+                bool inside = false;
+                for (int s = 0; s <= 20 && ! inside; ++ s) {
+                    const Vec2f p = a + (b - a) * (float(s) / 20.f);
+                    inside = p.x() > lo.x() + 0.3f && p.x() < hi.x() - 0.3f && p.y() > lo.y() + 0.3f && p.y() < hi.y() - 0.3f;
+                }
+                if (z <= tower->get_box_floor() + 1e-3f)
+                    floor_lines += inside;
+                else {
+                    INFO("layer " << l << " segment " << a.transpose() << " -> " << b.transpose());
+                    CHECK_FALSE(inside);
+                }
+            }
+    }
+    // The floor fills the opening on its 5 layers.
+    CHECK(floor_lines > 5 * 10);
+}
+
+TEST_CASE("A box tower purges into its front and back walls by turns", "[WipeTower][Type3Box]") {
+    PrintConfig       config;
+    PrintRegionConfig region;
+    WipeTower2       *tower  = nullptr;
+    const auto        layers = generate_box_tower(tower, config, region, 10);
+    std::unique_ptr<WipeTower2> owner(tower);
+    const float centre = 0.5f * tower->get_depth();
+
+    // Each layer's tool change is turned by 180 degrees from the last one's.
+    std::vector<bool> front;
+    for (const auto &layer : layers)
+        for (const WipeTower::ToolChangeResult &tcr : layer)
+            if (tcr.initial_tool != tcr.new_tool && ! tcr.extrusions.empty()) {
+                float y = 0.f;
+                for (const WipeTower::Extrusion &e : tcr.extrusions)
+                    y += e.pos.y();
+                front.push_back(y / float(tcr.extrusions.size()) < centre);
+                break;
+            }
+    REQUIRE(front.size() >= 4);
+    for (size_t i = 1; i < front.size(); ++ i)
+        CHECK(front[i] != front[i - 1]);
+}
+
+TEST_CASE("The box tower mesh has the opening above its floor", "[WipeTower][Type3Box]") {
+    const indexed_triangle_set its = WipeTower2::its_make_box_tower(40.f, 50.f, 20.f, Vec2f(30.f, 30.f), 2.f);
+    // Solid volume: the box less the opening above the floor.
+    CHECK_THAT(its_volume(its), WithinAbs(40. * 50. * 20. - 30. * 30. * 18., 1e-2));
+    // Without an opening it is the plain box.
+    CHECK_THAT(its_volume(WipeTower2::its_make_box_tower(40.f, 50.f, 20.f, Vec2f::Zero(), 2.f)), WithinAbs(40. * 50. * 20., 1e-2));
 }

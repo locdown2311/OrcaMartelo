@@ -299,6 +299,12 @@ static t_config_enum_values s_keys_map_WipeTowerType {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(WipeTowerType)
 
+static t_config_enum_values s_keys_map_WipeTowerType3Shape {
+    { "brick", int(WipeTowerType3Shape::Brick) },
+    { "box",   int(WipeTowerType3Shape::Box) }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(WipeTowerType3Shape)
+
 
 static t_config_enum_values s_keys_map_FuzzySkinMode {
     { "displacement",   int(FuzzySkinMode::Displacement) },
@@ -8920,6 +8926,38 @@ void PrintConfigDef::init_fff_params()
     def->max      = 300;
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0));
+
+    def          = this->add("wipe_tower_type3_shape", coEnum);
+    def->label   = L("Type 3 shape");
+    def->tooltip = L("Shape of the Type 3 prime tower.\n"
+                     "Lego brick: a solid brick with studs on top.\n"
+                     "Box: an open box to keep small parts in. The purge goes into its front and back walls, "
+                     "which grow thicker the more is purged.");
+    def->enum_keys_map = &ConfigOptionEnum<WipeTowerType3Shape>::get_enum_values();
+    def->enum_values.emplace_back("brick");
+    def->enum_values.emplace_back("box");
+    def->enum_labels.emplace_back(L("Lego brick"));
+    def->enum_labels.emplace_back(L("Box"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<WipeTowerType3Shape>(WipeTowerType3Shape::Brick));
+
+    def           = this->add("wipe_tower_box_wall", coFloat);
+    def->label    = L("Box wall thickness");
+    def->tooltip  = L("Thickness of the box's side walls, and of the front and back walls besides the room the purge takes in them.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min      = 0.8;
+    def->max      = 10;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(2.));
+
+    def           = this->add("wipe_tower_box_floor", coFloat);
+    def->label    = L("Box floor thickness");
+    def->tooltip  = L("Height of the solid floor at the bottom of the box.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min      = 0.4;
+    def->max      = 10;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.6));
 
     def           = this->add("wipe_tower_rib_width", coFloat);
     def->label    = L("Rib width");

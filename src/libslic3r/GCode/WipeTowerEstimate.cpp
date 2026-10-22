@@ -199,7 +199,19 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeT
     // With nothing to purge, plan_tower_new sizes the tower for wrapping detection or the
     // stability minimum; WipeTower2 only knows the latter.
     const double idle_depth = (type1 && wrapping && !smooth_timelapse) ? WipeTower::get_wrapping_detection_depth() : min_depth;
-    if (is_lego) {
+    const bool is_box = is_lego && opt_enum("wipe_tower_type3_shape", int(WipeTowerType3Shape::Brick)) == int(WipeTowerType3Shape::Box);
+    if (is_box) {
+        // WipeTower2::plan_box(): front and back walls as deep as the purge plus the side wall,
+        // around a square opening.
+        const double wall      = opt_float("wipe_tower_box_wall");
+        const double box_width = std::max(width, 2. * (wall + 1.) + 10.);
+        double purge = volume / (layer_height * box_width);
+        if (!semm_flush)
+            purge *= extra_spacing;
+        const double side = std::max(0., box_width - 2. * (perimeter_width + wall));
+        footprint.width   = box_width;
+        footprint.depth   = 2. * (purge + perimeter_width + wall) + side;
+    } else if (is_lego) {
         const double pitch = 8.0;
         double configured_w = width;
         if (configured_w < 10.0) configured_w = 31.8;

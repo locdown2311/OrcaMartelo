@@ -1083,10 +1083,19 @@ WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& defau
         m_sparse_layers_skipped = false;
         m_sparse_layers_combined = false;
 
-        const float pitch = 8.0f;
-        // Default to a classic 2x4 Lego brick: 4 studs in X (31.8 mm)
-        int num_x = std::max(4, int(std::round((m_wipe_tower_width + 0.2f) / pitch)));
-        m_wipe_tower_width = float(num_x) * pitch - 0.2f;
+        if (config.wipe_tower_type3_shape.value == WipeTowerType3Shape::Box) {
+            m_is_lego   = false;
+            m_is_box    = true;
+            m_box_wall  = float(config.wipe_tower_box_wall.value);
+            m_box_floor = float(config.wipe_tower_box_floor.value);
+            // Room for an opening at least 10 mm wide between the side walls.
+            m_wipe_tower_width = std::max(m_wipe_tower_width, 2.f * (m_box_wall + 1.f) + 10.f);
+        } else {
+            const float pitch = 8.0f;
+            // Default to a classic 2x4 Lego brick: 4 studs in X (31.8 mm)
+            int num_x = std::max(4, int(std::round((m_wipe_tower_width + 0.2f) / pitch)));
+            m_wipe_tower_width = float(num_x) * pitch - 0.2f;
+        }
     }
     // Read absolute value of first layer speed, if given as percentage,
     // it is taken over following default. Speeds from config are not
@@ -2040,7 +2049,13 @@ WipeTower::ToolChangeResult WipeTower2::finish_layer()
                               (m_wipe_tower_height - m_z_pos <= stud_height + roof_thickness) &&
                               (m_wipe_tower_height - m_z_pos > stud_height);
 
-    if (is_lego_roof) {
+    if (m_is_box) {
+        const bool solid = (first_layer && m_adhesion) ||
+            (m_layer_info + 1 != m_plan.end() &&
+             std::any_of((m_layer_info + 1)->tool_changes.begin(), (m_layer_info + 1)->tool_changes.end(),
+                         [this](const WipeTowerInfo::ToolChange &tch) { return m_filpar[tch.new_tool].is_soluble || m_filpar[tch.old_tool].is_soluble; }));
+        box_finish_layer(writer, fill_box.ld.y(), feedrate, solid, first_layer);
+    } else if (is_lego_roof) {
         // Complete solid top roof for the Lego brick body!
         // Seal the entire top face with 100% solid rectilinear infill lines.
         const float x_min = m_perimeter_width;
@@ -2395,7 +2410,9 @@ void WipeTower2::plan_tower()
 				m_plan[i].depth = this_layer_depth;
 		}
 	}
-    if (m_is_lego) {
+    if (m_is_box)
+        plan_box();
+    else if (m_is_lego) {
         const float pitch = 8.0f;
         int num_y = std::max(2, int(std::ceil((m_wipe_tower_depth + 0.2f) / pitch)));
         m_wipe_tower_depth = float(num_y) * pitch - 0.2f;
@@ -2551,7 +2568,7 @@ void WipeTower2::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> 
     }
 #endif
 
-    if (!m_is_lego && m_wall_type == (int)wtwRib) {
+    if (!m_is_lego && !m_is_box && m_wall_type == (int)wtwRib) {
         // Rib wall: force a square tower like WipeTower::plan_tower_new(), ignoring the
         // configured prime_tower_width (the GUI greys it out in rib mode). The planned depths
         // already include the extra-spacing factors, so sqrt(depth * width) preserves the
@@ -2576,7 +2593,7 @@ void WipeTower2::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> 
             m_rib_length = std::max(m_rib_length, min_depth * (float)std::sqrt(2.f));
     }
 
-    if (!m_is_lego) {
+    if (!m_is_lego && !m_is_box) {
         const float diagonal = std::sqrt(m_wipe_tower_depth * m_wipe_tower_depth + m_wipe_tower_width * m_wipe_tower_width);
         m_rib_length = std::max(m_rib_length, diagonal);
         m_rib_length += m_extra_rib_length;
@@ -2615,7 +2632,7 @@ void WipeTower2::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> 
         set_layer(layer.z, layer.height, 0, false/*layer.z == m_plan.front().z*/, layer.z == m_plan.back().z);
         m_internal_rotation += 180.f;
 
-        if (m_is_lego)
+        if (m_is_lego || m_is_box)
             m_y_shift = 0.f;
         else if (m_layer_info->depth < m_wipe_tower_depth - m_perimeter_width)
 			m_y_shift = (m_wipe_tower_depth-m_layer_info->depth-m_perimeter_width)/2.f;
@@ -2902,4 +2919,118 @@ void WipeTower2::extrude_studs(WipeTowerWriter2 &writer, float feedrate)
     }
     writer.append("; LEGO STUDS END\n");
 }
+Vec2f WipeTower2::box_cavity_size(float width, float depth, float wall, float perimeter_width)
+{
+    const float side = std::max(0.f, width - 2.f * (perimeter_width + wall));
+    return Vec2f(side, std::max(0.f, std::min(side, depth - 2.f * (perimeter_width + wall))));
+}
+
+indexed_triangle_set WipeTower2::its_make_box_tower(float width, float depth, float height, const Vec2f &cavity, float floor)
+{
+    if (cavity.x() < EPSILON || cavity.y() < EPSILON || floor >= height)
+        return its_make_cube(width, depth, height);
+    // The floor, and the four walls around the opening above it.
+    const float x0 = 0.5f * (width - cavity.x()), y0 = 0.5f * (depth - cavity.y());
+    indexed_triangle_set out = its_make_cube(width, depth, floor);
+    auto add_block = [&out, floor, height](float x, float y, float w, float d) {
+        indexed_triangle_set block = its_make_cube(w, d, height - floor);
+        its_translate(block, Vec3f(x, y, floor));
+        its_merge(out, block);
+    };
+    add_block(0.f, 0.f, width, y0);
+    add_block(0.f, depth - y0, width, y0);
+    add_block(0.f, y0, x0, cavity.y());
+    add_block(width - x0, y0, x0, cavity.y());
+    return out;
+}
+
+void WipeTower2::plan_box()
+{
+    // The purge fills the front of every layer from y = 0 up to its toolchanges' depth, so the
+    // front wall is as deep as the deepest of them plus the loops around the opening. The layers
+    // are turned by 180 degrees one after the other: a box symmetric about its centre has the
+    // purge in its front wall on one layer and in its back wall on the next, and the opening and
+    // the side walls in the same place on all of them.
+    float purge_depth = 0.f;
+    for (const WipeTowerInfo &layer : m_plan)
+        purge_depth = std::max(purge_depth, layer.toolchanges_depth());
+    m_box_loops = std::max(1, int(std::round(m_box_wall / box_loop_spacing())));
+    const float loops = float(m_box_loops) * box_loop_spacing();
+    m_box_cavity_y    = purge_depth + m_perimeter_width + loops;
+    const float side  = std::max(0.f, m_wipe_tower_width - 2.f * (m_perimeter_width + loops));
+    m_box_cavity      = Vec2f(side, side);
+    m_wipe_tower_depth = 2.f * m_box_cavity_y + side;
+    for (WipeTowerInfo &layer : m_plan)
+        layer.depth = m_wipe_tower_depth - m_perimeter_width;
+}
+
+void WipeTower2::box_finish_layer(WipeTowerWriter2 &writer, float purge_end_y, float feedrate, bool solid, bool first_layer)
+{
+    const float width   = m_wipe_tower_width;
+    const float depth   = m_wipe_tower_depth;
+    const float spacing = box_loop_spacing();
+    const float loops   = float(m_box_loops) * spacing;
+    const float x0 = 0.5f * (width - m_box_cavity.x()), x1 = width - x0;
+    const float y0 = m_box_cavity_y, y1 = depth - y0;
+
+    // Lines filling a rectangle: solid, or the sparse grid of the plain tower (a perimeter and
+    // lines across it no farther apart than the bridging distance).
+    auto fill_rect = [&](float xl, float yl, float xr, float yr, bool solid_fill) {
+        if (xr - xl < m_perimeter_width || yr - yl < 0.5f * m_perimeter_width)
+            return;
+        if (solid_fill) {
+            const int   n  = std::max(1, int(std::floor((yr - yl) / spacing)));
+            const float dy = n > 1 ? (yr - yl) / float(n - 1) : 0.f;
+            writer.travel(xl, yl, feedrate);
+            for (int i = 0; i < n; ++ i) {
+                const float y = n > 1 ? yl + dy * float(i) : 0.5f * (yl + yr);
+                if (i > 0)
+                    writer.extrude(writer.x(), y, feedrate);
+                writer.extrude(i % 2 == 0 ? xr : xl, y, feedrate);
+            }
+            return;
+        }
+        writer.travel(xl, yl, feedrate);
+        writer.rectangle(Vec2f(xl, yl), xr - xl, yr - yl, feedrate);
+        const int   n  = 1 + int((xr - xl) / m_bridging);
+        const float dx = (xr - xl) / float(n);
+        for (int i = 1; i < n; ++ i) {
+            const float x = xl + dx * float(i);
+            writer.travel(x, i % 2 ? yl : yr, feedrate);
+            writer.extrude(x, i % 2 ? yr : yl, feedrate);
+        }
+    };
+
+    writer.append(";--------------------\n"
+                  "; CP BOX START\n");
+    // What the purge left of the front wall, and the back wall, purged into on the next layer.
+    fill_rect(m_perimeter_width, purge_end_y, width - m_perimeter_width, y0 - loops, solid);
+    fill_rect(m_perimeter_width, y1 + loops, width - m_perimeter_width, depth - m_perimeter_width, solid);
+    // The loops around the opening, from the inside out.
+    for (int i = 0; i < m_box_loops; ++ i) {
+        const float o = (float(i) + 0.5f) * spacing;
+        writer.travel(x0 - o, y0 - o, feedrate);
+        writer.rectangle(Vec2f(x0 - o, y0 - o), x1 - x0 + 2.f * o, y1 - y0 + 2.f * o, feedrate);
+    }
+    // The floor, its lines turning by 90 degrees from layer to layer.
+    if (first_layer || m_z_pos <= m_box_floor + WT_EPSILON) {
+        const float inset = 0.5f * spacing;
+        if (m_num_layer_changes % 2 == 0)
+            fill_rect(x0 + inset, y0 + inset, x1 - inset, y1 - inset, true);
+        else {
+            const int   n  = std::max(1, int(std::floor((x1 - x0 - 2.f * inset) / spacing)));
+            const float dx = n > 1 ? (x1 - x0 - 2.f * inset) / float(n - 1) : 0.f;
+            writer.travel(x0 + inset, y0 + inset, feedrate);
+            for (int i = 0; i < n; ++ i) {
+                const float x = x0 + inset + dx * float(i);
+                if (i > 0)
+                    writer.extrude(x, writer.y(), feedrate);
+                writer.extrude(x, i % 2 == 0 ? y1 - inset : y0 + inset, feedrate);
+            }
+        }
+    }
+    writer.append("; CP BOX END\n"
+                  ";------------------\n");
+}
+
 } // namespace Slic3r

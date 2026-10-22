@@ -136,6 +136,12 @@ enum class WipeTowerType {
     Type3,
 };
 
+// What the Type 3 tower is shaped as: a Lego brick, or an open box whose walls take the purge.
+enum class WipeTowerType3Shape {
+    Brick,
+    Box,
+};
+
 enum PrintHostType {
     htPrusaLink, htPrusaConnect, htOctoPrint, htDuet, htUltiMaker, htFlashAir, htAstroBox, htRepetier, htMKS, htESP3D, htCrealityPrint, htObico, htFlashforge, htSimplyPrint, htElegooLink, ht3DPrinterOS, htMoonraker, htAnycubic
 };
@@ -808,6 +814,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(FuzzySkinType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(FuzzySkinMode)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(TopSurfaceExpansionDirection)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerType)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerType3Shape)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(NoiseType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(InfillPattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(IroningType)
@@ -2170,6 +2177,9 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionFloat,              wipe_tower_max_purge_speed))
     ((ConfigOptionEnum<WipeTowerWallType>,    wipe_tower_wall_type))
     ((ConfigOptionFloat,              wipe_tower_extra_rib_length))
+    ((ConfigOptionEnum<WipeTowerType3Shape>, wipe_tower_type3_shape))
+    ((ConfigOptionFloat,              wipe_tower_box_wall))
+    ((ConfigOptionFloat,              wipe_tower_box_floor))
     ((ConfigOptionFloat,              wipe_tower_rib_width))
     ((ConfigOptionBool,               wipe_tower_fillet_wall))
     ((ConfigOptionInt,                wipe_tower_filament))

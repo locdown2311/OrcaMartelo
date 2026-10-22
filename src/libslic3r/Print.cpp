@@ -490,6 +490,9 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "wipe_tower_max_purge_speed"
             || opt_key == "wipe_tower_wall_type"
             || opt_key == "wipe_tower_extra_rib_length"
+            || opt_key == "wipe_tower_type3_shape"
+            || opt_key == "wipe_tower_box_wall"
+            || opt_key == "wipe_tower_box_floor"
             || opt_key == "wipe_tower_rib_width"
             || opt_key == "wipe_tower_fillet_wall"
             || opt_key == "wipe_tower_filament"
@@ -5951,7 +5954,8 @@ void Print::_make_wipe_tower()
                                          this->wipe_tower_type() == WipeTowerType::Type3 ? false : config().wipe_tower_fillet_wall.value,
                                          this->wipe_tower_type() == WipeTowerType::Type3 ? 0.f : (config().wipe_tower_wall_type.value == WipeTowerWallType::wtwCone ?
                                              (float) config().wipe_tower_cone_angle.value : 0.f),
-                                         this->wipe_tower_type() == WipeTowerType::Type3);
+                                         this->wipe_tower_type() == WipeTowerType::Type3,
+                                         wipe_tower.get_box_cavity(), wipe_tower.get_box_floor());
         const Vec3d origin                      = Vec3d::Zero();
         // FakeWipeTower::pos is a bed-frame translation applied after rotation
         // (getFakeExtrusionPathsFromWipeTower2 rotates about the local origin), so the
@@ -7552,12 +7556,19 @@ ExtrusionLayers FakeWipeTower::getTrueExtrusionLayersFromWipeTower() const
     }
     return wtels;
 }
-void WipeTowerData::construct_mesh(float width, float depth, float height, float brim_width, bool is_rib_wipe_tower, float rib_width, float rib_length,bool fillet_wall, float cone_angle, bool is_lego)
+void WipeTowerData::construct_mesh(float width, float depth, float height, float brim_width, bool is_rib_wipe_tower, float rib_width, float rib_length,bool fillet_wall, float cone_angle, bool is_lego,
+                                   const Vec2f &box_cavity, float box_floor)
 {
     wipe_tower_mesh_data = WipeTowerMeshData{};
     float first_layer_height=0.08; //brim height
     if (width < EPSILON || depth < EPSILON || height < EPSILON) return;
-    if (is_lego) {
+    if (box_cavity.x() > EPSILON) {
+        wipe_tower_mesh_data->real_wipe_tower_mesh = TriangleMesh(WipeTower2::its_make_box_tower(width, depth, height, box_cavity, box_floor));
+        wipe_tower_mesh_data->real_brim_mesh       = make_cube(width + 2 * brim_width, depth + 2 * brim_width, first_layer_height);
+        wipe_tower_mesh_data->real_brim_mesh.translate({-brim_width, -brim_width, 0});
+        wipe_tower_mesh_data->bottom = {scaled(Vec2f{-brim_width, -brim_width}), scaled(Vec2f{width + brim_width, -brim_width}),
+                                        scaled(Vec2f{width + brim_width, depth + brim_width}), scaled(Vec2f{-brim_width, depth + brim_width})};
+    } else if (is_lego) {
         indexed_triangle_set brick_its = its_make_cube(width, depth, height);
         const float stud_r = 2.4f;
         const float stud_h = 1.8f;

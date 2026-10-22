@@ -25,6 +25,7 @@
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/GCode/WipeTower.hpp"
+#include "libslic3r/GCode/WipeTower2.hpp"
 #include "libslic3r/GCode/WipeTowerEstimate.hpp"
 #include "libslic3r/Tesselate.hpp"
 #include "libslic3r/PrintConfig.hpp"
@@ -996,12 +997,30 @@ int GLVolumeCollection::load_wipe_tower_preview(
     GUI::PartPlateList& ppl = GUI::wxGetApp().plater()->get_partplate_list();
     std::vector<int> plate_extruders = ppl.get_plate(plate_idx)->get_extruders(true);
     const DynamicPrintConfig &printer_cfg = GUI::wxGetApp().preset_bundle->printers.get_edited_preset().config;
-    const bool is_lego = resolve_wipe_tower_type(printer_cfg) == WipeTowerType::Type3;
+    const DynamicPrintConfig &print_shape_cfg = GUI::wxGetApp().preset_bundle->prints.get_edited_preset().config;
+    const bool is_type3 = resolve_wipe_tower_type(printer_cfg) == WipeTowerType::Type3;
+    const bool is_box   = is_type3 && print_shape_cfg.has("wipe_tower_type3_shape") &&
+                          print_shape_cfg.opt_enum<WipeTowerType3Shape>("wipe_tower_type3_shape") == WipeTowerType3Shape::Box;
+    const bool is_lego  = is_type3 && ! is_box;
     const float stud_r = 2.4f;
     const float stud_h = 1.8f;
     float body_h = is_lego ? std::max(0.1f, height - stud_h) : height;
     TriangleMesh wipe_tower_shell = make_cube(width, depth, body_h);
-    if (is_lego) {
+    // A box tower as blocks (x, y, z, width, depth, height): the floor and the walls around the opening.
+    std::vector<std::array<float, 6>> box_blocks;
+    if (is_box) {
+        // The perimeter width is a guess here (a 0.4 mm nozzle); the opening only needs to look right.
+        const float wall   = float(print_shape_cfg.opt_float("wipe_tower_box_wall"));
+        const float floor  = std::min(float(print_shape_cfg.opt_float("wipe_tower_box_floor")), height);
+        const Vec2f cavity = WipeTower2::box_cavity_size(width, depth, wall, 0.5f);
+        wipe_tower_shell   = TriangleMesh(WipeTower2::its_make_box_tower(width, depth, height, cavity, floor));
+        const float x0 = 0.5f * (width - cavity.x()), y0 = 0.5f * (depth - cavity.y());
+        box_blocks = { { 0.f, 0.f, 0.f, width, depth, floor },
+                       { 0.f, 0.f, floor, width, y0, height - floor },
+                       { 0.f, depth - y0, floor, width, y0, height - floor },
+                       { 0.f, y0, floor, x0, cavity.y(), height - floor },
+                       { width - x0, y0, floor, x0, cavity.y(), height - floor } };
+    } else if (is_lego) {
         const float pitch  = 8.0f;
         int num_x = std::max(1, int(std::round((width + 0.2f) / pitch)));
         int num_y = std::max(1, int(std::round((depth + 0.2f) / pitch)));
@@ -1024,7 +1043,7 @@ int GLVolumeCollection::load_wipe_tower_preview(
         // The brim follows the real first-layer outline: a Type2 cone-wall tower's base bulges
         // past the body box. The wall type and angle are print settings, the planner a printer one.
         Polygon outline;
-        if (is_lego) {
+        if (is_type3) {
             outline.points = {Point::new_scale(Vec2d(0., 0.)), Point::new_scale(Vec2d(width, 0.)), Point::new_scale(Vec2d(width, depth)), Point::new_scale(Vec2d(0., depth))};
         } else {
             const DynamicPrintConfig &print_cfg = GUI::wxGetApp().preset_bundle->prints.get_edited_preset().config;
@@ -1053,6 +1072,18 @@ int GLVolumeCollection::load_wipe_tower_preview(
     for (size_t i = 0; i < slab_count; i++) {
         TriangleMesh color_part = make_cube(width, depth / slab_count, height);
         color_part.translate(Vec3f(0.f, float(depth * i / slab_count), 0.f));
+        if (is_box) {
+            // This slab's share of the box's blocks.
+            const float ya = float(depth * i / slab_count), yb = float(depth * (i + 1) / slab_count);
+            indexed_triangle_set part;
+            for (const std::array<float, 6> &b : box_blocks)
+                if (const float y_min = std::max(ya, b[1]), y_max = std::min(yb, b[1] + b[4]); y_max > y_min + EPSILON && b[5] > EPSILON) {
+                    indexed_triangle_set block = its_make_cube(b[3], y_max - y_min, b[5]);
+                    its_translate(block, Vec3f(b[0], y_min, b[2]));
+                    its_merge(part, block);
+                }
+            color_part = TriangleMesh(part);
+        }
         if (is_lego && i == slab_count - 1) {
             const float stud_r = 2.4f;
             const float stud_h = 1.8f;

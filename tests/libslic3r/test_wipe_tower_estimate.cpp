@@ -439,3 +439,14 @@ TEST_CASE("prime_tower_is_printed follows the option the user set", "[WipeTowerE
     config.set_key_value("enable_prime_tower", new ConfigOptionBool(true));
     CHECK(prime_tower_is_printed(config, 0, 1, false));
 }
+
+TEST_CASE("A box tower is as deep as two purge walls around a square opening", "[WipeTowerEstimate][Type3Box]") {
+    DynamicPrintConfig config = make_config();
+    config.set_deserialize_strict("wipe_tower_type3_shape", "box");
+    config.set_key_value("wipe_tower_box_wall", new ConfigOptionFloat(2.));
+    // Three filaments purge 200 mm3 a layer: 20 mm deep on a 50 mm wide tower at 0.2 mm. The
+    // opening is 50 - 2 * (0.5 + 2) = 45 mm square, with the purge and a 2 mm wall on either side.
+    const WipeTowerFootprint fp = estimate(config, 3, 0.2, 5., WipeTowerType::Type3);
+    CHECK_THAT(fp.width, WithinAbs(50., 1e-9));
+    CHECK_THAT(fp.depth, WithinAbs(2. * (20. + 0.5 + 2.) + 45., 1e-9));
+}

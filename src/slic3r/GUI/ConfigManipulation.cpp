@@ -1182,6 +1182,14 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("wipe_tower_fillet_wall", have_rib_wall);
     toggle_field("prime_tower_width", have_prime_tower && !have_rib_wall && !is_belt_printer);
 
+    // The Type 3 tower's shape, and the box's own sizes.
+    const bool have_type3 = have_prime_tower && !is_belt_printer && !is_BBL_Printer &&
+                            preset_bundle->printers.get_edited_preset().config.opt_enum<WipeTowerType>("wipe_tower_type") == WipeTowerType::Type3;
+    toggle_line("wipe_tower_type3_shape", have_type3);
+    const bool have_box = have_type3 && config->opt_enum<WipeTowerType3Shape>("wipe_tower_type3_shape") == WipeTowerType3Shape::Box;
+    toggle_line("wipe_tower_box_wall", have_box);
+    toggle_line("wipe_tower_box_floor", have_box);
+
     toggle_line("single_extruder_multi_material_priming", !bSEMM && have_prime_tower && supports_wipe_tower_2 && !is_belt_printer);
 
     bool use_cyclic_ordering = config->opt_enum<ToolChangeOrderingType>("toolchange_ordering") == ToolChangeOrderingType::Cyclic;
