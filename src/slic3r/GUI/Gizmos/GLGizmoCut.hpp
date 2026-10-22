@@ -39,6 +39,9 @@ namespace CommonGizmosDataObjects { class ObjectClipper; }
 
 class GLGizmoCut3D : public GLGizmoBase
 {
+    // Protected rather than private: GLGizmoCutPlanes reuses the plane pose, grabbers and panel
+    // helpers of this gizmo to author multiplanar cut planes without ever cutting the object.
+protected:
     enum GrabberID {
         X = 0,
         Y,
@@ -325,7 +328,7 @@ protected:
     void render_groove_int_input(const std::string& label, int& in_val, const int& init_val, int min_val, int max_val);
     bool render_angle_input(const std::string& label, float& in_val, const float& init_val, float min_val, float max_val);
     void render_snap_specific_input(const std::string& label, const wxString& tooltip, float& in_val, const float& init_val, const float min_val, const float max_val);
-    void render_cut_plane_input_window(CutConnectors &connectors, float x, float y, float bottom_limit);
+    virtual void render_cut_plane_input_window(CutConnectors &connectors, float x, float y, float bottom_limit);
     void init_input_window_data(CutConnectors &connectors);
     void render_input_window_warning() const;
     bool add_connector(CutConnectors&connectors, const Vec2d&mouse_position);
@@ -353,7 +356,6 @@ protected:
     void data_changed(bool is_serializing) override; 
     Transform3d get_cut_matrix(const Selection& selection);
 
-private:
     void set_center(const Vec3d&center, bool update_tbb = false);
     void switch_to_mode(size_t new_mode);
     bool render_cut_mode_combo();
@@ -370,13 +372,16 @@ private:
 
     bool can_perform_cut() const;
     bool has_valid_groove() const;
-    bool has_valid_contour() const;
+    // Does the editing plane cut the object? Virtual because it reads the object clipper, which a
+    // subclass that never renders the clipper (Cut Planes) has to replace with its own answer.
+    virtual bool has_valid_contour() const;
     void apply_connectors_in_model(ModelObject* mo, int &dowels_count);
     bool cut_line_processing() const;
     void discard_cut_line_processing();
 
     void apply_color_clip_plane_colors();
-    void render_cut_plane();
+    // Virtual so GLGizmoCutPlanes can replace the plane visual while keeping the grabbers.
+    virtual void render_cut_plane();
     static void render_model(GLModel& model, const ColorRGBA& color, Transform3d view_model_matrix);
     void render_line(GLModel& line_model, const ColorRGBA& color, Transform3d view_model_matrix, float width);
     void render_rotation_snapping(GrabberID axis, const ColorRGBA& color);
@@ -388,7 +393,7 @@ private:
     void update_bb();
     void init_picking_models();
     void init_rendering_items();
-    void render_clipper_cut();
+    virtual void render_clipper_cut();
     void clear_selection();
     void reset_connectors();
     void init_connector_shapes();

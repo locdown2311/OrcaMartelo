@@ -18,6 +18,7 @@
 #include "slic3r/GUI/Gizmos/GLGizmoFuzzySkin.hpp"
 #include "slic3r/GUI/Gizmos/GLGizmoBrimEars.hpp"
 #include "slic3r/GUI/Gizmos/GLGizmoCut.hpp"
+#include "slic3r/GUI/Gizmos/GLGizmoCutPlanes.hpp"
 //#include "slic3r/GUI/Gizmos/GLGizmoFaceDetector.hpp"
 //#include "slic3r/GUI/Gizmos/GLGizmoHollow.hpp"
 #include "slic3r/GUI/Gizmos/GLGizmoSeam.hpp"
@@ -204,6 +205,9 @@ void GLGizmosManager::switch_gizmos_icon_filename()
         case(EType::MeshBoolean):
             gizmo->set_icon_filename(m_is_dark ? "toolbar_meshboolean_dark.svg" : "toolbar_meshboolean.svg");
             break;
+        case(EType::CutPlanes):
+            gizmo->set_icon_filename(m_is_dark ? "toolbar_cut_planes_dark.svg" : "toolbar_cut_planes.svg");
+            break;
         case (EType::Measure):
             gizmo->set_icon_filename(m_is_dark ? "toolbar_measure_dark.svg" : "toolbar_measure.svg");
             break;
@@ -246,6 +250,7 @@ bool GLGizmosManager::init()
     m_gizmos.emplace_back(new GLGizmoFlatten(m_parent, m_is_dark ? "toolbar_flatten_dark.svg" : "toolbar_flatten.svg", EType::Flatten));
     m_gizmos.emplace_back(new GLGizmoCut3D(m_parent, m_is_dark ? "toolbar_cut_dark.svg" : "toolbar_cut.svg", EType::Cut));
     m_gizmos.emplace_back(new GLGizmoMeshBoolean(m_parent, m_is_dark ? "toolbar_meshboolean_dark.svg" : "toolbar_meshboolean.svg", EType::MeshBoolean));
+    m_gizmos.emplace_back(new GLGizmoCutPlanes(m_parent, m_is_dark ? "toolbar_cut_planes_dark.svg" : "toolbar_cut_planes.svg", EType::CutPlanes));
     m_gizmos.emplace_back(new GLGizmoFdmSupports(m_parent, m_is_dark ? "toolbar_support_dark.svg" : "toolbar_support.svg", EType::FdmSupports));
     m_gizmos.emplace_back(new GLGizmoSeam(m_parent, m_is_dark ? "toolbar_seam_dark.svg" : "toolbar_seam.svg", EType::Seam));
     m_gizmos.emplace_back(new GLGizmoFuzzySkin(m_parent, m_is_dark ? "toolbar_fuzzy_skin_paint_dark.svg" : "toolbar_fuzzy_skin_paint.svg", EType::FuzzySkin));
@@ -1455,6 +1460,10 @@ void GLGizmosManager::update_hover_state(const EType &type)
     const GLGizmoBase &hovered_gizmo = *m_gizmos[type];
     m_hover = hovered_gizmo.is_activable() ? type : Undefined;    
     m_tooltip = hovered_gizmo.get_name();
+    // Say why Cut Planes is greyed out: it needs a printer with multiplanar printing on. The canvas
+    // tooltip does not wrap, so the line break is part of the text.
+    if (type == CutPlanes && ! hovered_gizmo.is_activable() && m_parent.get_selection().get_object_idx() >= 0)
+        m_tooltip += "\n" + _u8L("Needs multiplanar printing: Printer settings > Motion ability >\nEnable multiplanar printing.");
 }
 
 bool GLGizmosManager::activate_gizmo(EType type)
@@ -1572,6 +1581,8 @@ std::string get_name_from_gizmo_etype(GLGizmosManager::EType type)
         return "Cut";
     case GLGizmosManager::EType::MeshBoolean:
         return "MeshBoolean";
+    case GLGizmosManager::EType::CutPlanes:
+        return "Cut Planes";
     case GLGizmosManager::EType::FdmSupports:
         return "FdmSupports";
     case GLGizmosManager::EType::Seam:

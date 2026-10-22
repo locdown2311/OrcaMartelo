@@ -91,6 +91,7 @@ public:
         Flatten,
         Cut,
         MeshBoolean,
+        CutPlanes,      // multiplanar cut planes (non-destructive)
         FdmSupports,
         Seam,
         FuzzySkin,
