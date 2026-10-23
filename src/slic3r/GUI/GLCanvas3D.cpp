@@ -11986,8 +11986,12 @@ std::optional<Vec3d> GLCanvas3D::get_camera_orbit_target(ECameraNavigationType n
     // Orca: Centralize the pre-existing pivot rules so orbiting and pan fallback cannot
     // choose different reference depths for the same canvas and active tool.
     const BoundingBoxf3 plate_box = _current_plate_box();
-    if (navigation_type == ECameraNavigationType::Gesture)
+    if (navigation_type == ECameraNavigationType::Gesture) {
+        // A touchpad twist turns around the selection too, as the mouse orbit does below.
+        if (m_canvas_type == ECanvasType::CanvasView3D && !m_selection.is_empty())
+            return m_selection.get_bounding_box().center();
         return plate_box.defined ? std::make_optional(plate_box.center()) : std::nullopt;
+    }
 
     const GLGizmosManager::EType gizmo_type = m_gizmos.get_current_type();
     const bool use_scene_target = m_canvas_type == ECanvasType::CanvasAssembleView ||
