@@ -3140,6 +3140,13 @@ void TabPrint::build()
         optgroup->append_single_option_line("accel_to_decel_enable", "speed_settings_acceleration#enable-accel-to-decel");
         optgroup->append_single_option_line("accel_to_decel_factor", "speed_settings_acceleration#accel-to-decel");
 
+        optgroup = page->new_optgroup(L("Tall prints"), L"param_acceleration", 15);
+        optgroup->append_single_option_line("slow_down_by_height", "speed_settings_tall_prints");
+        optgroup->append_single_option_line("slow_down_by_height_start", "speed_settings_tall_prints#start-height");
+        optgroup->append_single_option_line("slow_down_by_height_end", "speed_settings_tall_prints#end-height");
+        optgroup->append_single_option_line("slow_down_by_height_speed", "speed_settings_tall_prints#speed-at-end-height");
+        optgroup->append_single_option_line("slow_down_by_height_acceleration", "speed_settings_tall_prints#acceleration-at-end-height");
+
         optgroup = page->new_optgroup(L("Junction Deviation"), L"param_junction_deviation", 15);
         optgroup->append_single_option_line("default_junction_deviation", "speed_settings_jerk_xy#junction-deviation", 0);
 

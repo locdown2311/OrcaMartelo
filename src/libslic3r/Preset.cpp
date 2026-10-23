@@ -1454,6 +1454,8 @@ static std::vector<std::string> s_Preset_print_options{
     "wipe_tower_wall_type",
     "wipe_tower_extra_rib_length",
     "wipe_tower_type3_shape",
+    "slow_down_by_height", "slow_down_by_height_start", "slow_down_by_height_end", "slow_down_by_height_speed",
+    "slow_down_by_height_acceleration",
     "wipe_tower_box_wall",
     "wipe_tower_box_floor",
     "wipe_tower_box_compartments",

@@ -2179,6 +2179,13 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionFloats,             flush_volumes_matrix))
     ((ConfigOptionFloats,             flush_volumes_vector))
 
+    // Slow down tall prints (height_slowdown_ratio()).
+    ((ConfigOptionBool,               slow_down_by_height))
+    ((ConfigOptionFloat,              slow_down_by_height_start))
+    ((ConfigOptionFloat,              slow_down_by_height_end))
+    ((ConfigOptionPercent,            slow_down_by_height_speed))
+    ((ConfigOptionPercent,            slow_down_by_height_acceleration))
+
     // Orca: mmu support
     ((ConfigOptionFloat,              wipe_tower_cone_angle))
     ((ConfigOptionPercent,            wipe_tower_extra_spacing))

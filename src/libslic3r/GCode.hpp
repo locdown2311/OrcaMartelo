@@ -827,6 +827,8 @@ protected:
     // Support for G-Code Processor
     float                               m_last_height{ 0.0f };
     float                               m_last_layer_z{ 0.0f };
+    // Print speeds are scaled by this on the current layer (slow_down_by_height).
+    double                              m_height_speed_scale{ 1. };
     float                               m_max_layer_z{ 0.0f };
     float                               m_last_width{ 0.0f };
     // Bedslinger mass model: cumulative printed mass at the previous layer, used to derive

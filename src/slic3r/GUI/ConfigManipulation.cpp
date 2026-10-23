@@ -1186,6 +1186,10 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     const bool have_type3 = have_prime_tower && !is_belt_printer && !is_BBL_Printer &&
                             preset_bundle->printers.get_edited_preset().config.opt_enum<WipeTowerType>("wipe_tower_type") == WipeTowerType::Type3;
     toggle_line("wipe_tower_type3_shape", have_type3);
+
+    const bool slow_down_by_height = config->opt_bool("slow_down_by_height");
+    for (auto el : {"slow_down_by_height_start", "slow_down_by_height_end", "slow_down_by_height_speed", "slow_down_by_height_acceleration"})
+        toggle_line(el, slow_down_by_height);
     const bool have_box = have_type3 && config->opt_enum<WipeTowerType3Shape>("wipe_tower_type3_shape") == WipeTowerType3Shape::Box;
     toggle_line("wipe_tower_box_wall", have_box);
     toggle_line("wipe_tower_box_floor", have_box);

@@ -66,6 +66,8 @@ public:
     std::string set_temperature(unsigned int temperature, bool wait = false, int tool = -1) const;
     std::string set_bed_temperature(int temperature, bool wait = false);
     std::string set_chamber_temperature(int temperature, bool wait = false);
+    // Scales every acceleration set from now on (slowing down tall prints, see height_slowdown_ratio()).
+    void        set_acceleration_scale(double scale) { m_acceleration_scale = scale; }
     std::string set_print_acceleration(unsigned int acceleration)   { return set_acceleration_internal(Acceleration::Print, acceleration); }
     std::string set_travel_acceleration(unsigned int acceleration)  { return set_acceleration_internal(Acceleration::Travel, acceleration); }
     std::string set_jerk_xy(double jerk);
@@ -261,6 +263,8 @@ private:
     int        m_curr_extruder_id;
     unsigned int              m_last_acceleration;
     unsigned int              m_last_travel_acceleration;
+    double                    m_acceleration_scale { 1. };
+    unsigned int              scaled_acceleration(unsigned int acceleration) const;
     std::vector<unsigned int> m_max_travel_acceleration;
 
     // Limit for setting the acceleration, to respect the machine limits set for the Marlin firmware.
@@ -432,6 +436,11 @@ public:
     GCodeG2G3Formatter(const GCodeG2G3Formatter&) = delete;
     GCodeG2G3Formatter& operator=(const GCodeG2G3Formatter&) = delete;
 };
+
+// What tall prints are slowed down to at height `z`: 1 up to `start_z`, falling linearly to
+// `end_ratio` at `end_z` and staying there above it. A bed that moves under the print shakes a tall
+// part harder the higher it gets; lower speeds and accelerations keep it from wobbling or snapping off.
+double height_slowdown_ratio(double z, double start_z, double end_z, double end_ratio);
 
 } /* namespace Slic3r */
 

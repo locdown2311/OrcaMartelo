@@ -1774,3 +1774,51 @@ TEST_CASE("Initial filament start G-code tolerates a list shorter than the filam
 
     REQUIRE_NOTHROW(Slic3r::Test::gcode(print));
 }
+
+TEST_CASE("Tall prints slow down linearly between the start and end heights", "[GCodeWriter][SlowDownByHeight]")
+{
+    // From 50 mm, down to 40 % at 200 mm.
+    CHECK_THAT(height_slowdown_ratio(10., 50., 200., 0.4), Catch::Matchers::WithinAbs(1., 1e-12));
+    CHECK_THAT(height_slowdown_ratio(50., 50., 200., 0.4), Catch::Matchers::WithinAbs(1., 1e-12));
+    CHECK_THAT(height_slowdown_ratio(125., 50., 200., 0.4), Catch::Matchers::WithinAbs(0.7, 1e-12));
+    CHECK_THAT(height_slowdown_ratio(200., 50., 200., 0.4), Catch::Matchers::WithinAbs(0.4, 1e-12));
+    CHECK_THAT(height_slowdown_ratio(300., 50., 200., 0.4), Catch::Matchers::WithinAbs(0.4, 1e-12));
+    // An end at or below the start is a step at the start.
+    CHECK_THAT(height_slowdown_ratio(60., 50., 50., 0.4), Catch::Matchers::WithinAbs(0.4, 1e-12));
+}
+
+TEST_CASE("The acceleration scale applies to every acceleration the writer sets", "[GCodeWriter][SlowDownByHeight]")
+{
+    const GCodeFlavor flavor = GENERATE(gcfMarlinFirmware, gcfKlipper);
+    INFO("flavor " << int(flavor));
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("gcode_flavor", new ConfigOptionEnum<GCodeFlavor>(flavor));
+    config.set_key_value("accel_to_decel_enable", new ConfigOptionBool(false));
+    for (const char *limit : {"machine_max_acceleration_extruding", "machine_max_acceleration_travel", "machine_max_acceleration_x",
+                              "machine_max_acceleration_y", "machine_max_jerk_x", "machine_max_jerk_y"}) {
+        std::vector<double> &values = config.option<ConfigOptionFloats>(limit)->values;
+        std::fill(values.begin(), values.end(), 0.);
+    }
+    PrintConfig print_config;
+    print_config.apply(config, true);
+    GCodeWriter writer;
+    writer.apply_print_config(print_config);
+
+    // 40 % of 5000 mm/s2, and of 7000 for travel.
+    writer.set_acceleration_scale(0.4);
+    const std::string print  = writer.set_print_acceleration(5000);
+    const std::string travel = writer.set_travel_acceleration(7000);
+    INFO(print << travel);
+    CHECK_THAT(print, Catch::Matchers::ContainsSubstring(flavor == gcfKlipper ? "ACCEL=2000" : "M204 P2000"));
+    CHECK_THAT(travel, Catch::Matchers::ContainsSubstring(flavor == gcfKlipper ? "ACCEL=2800" : "M204 T2800"));
+    if (flavor == gcfKlipper)
+        CHECK_THAT(writer.set_accel_and_jerk(3000, 0.), Catch::Matchers::ContainsSubstring("ACCEL=1200"));
+    // In steps of 10 mm/s2: 41 % of 5000 is 2050, and so is 40.95 % (2047.5), so nothing new is sent.
+    writer.set_acceleration_scale(0.41);
+    CHECK_THAT(writer.set_print_acceleration(5000), Catch::Matchers::ContainsSubstring("2050"));
+    writer.set_acceleration_scale(0.4095);
+    CHECK(writer.set_print_acceleration(5000).empty());
+    // Back to full speed.
+    writer.set_acceleration_scale(1.);
+    CHECK_THAT(writer.set_print_acceleration(5000), Catch::Matchers::ContainsSubstring("5000"));
+}

@@ -8934,6 +8934,49 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0));
 
+    def          = this->add("slow_down_by_height", coBool);
+    def->label   = L("Slow down tall prints");
+    def->tooltip = L("Lower the print speed and the accelerations as the print gets taller. A bed that moves under "
+                     "the print shakes a tall part harder the higher it gets; going slower up there keeps it from "
+                     "wobbling, ringing or breaking off. Travel speed is left as it is.");
+    def->mode    = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def           = this->add("slow_down_by_height_start", coFloat);
+    def->label    = L("Start height");
+    def->tooltip  = L("Height where slowing down starts. Below it, everything prints as set.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min      = 0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(50.));
+
+    def           = this->add("slow_down_by_height_end", coFloat);
+    def->label    = L("End height");
+    def->tooltip  = L("Height where the speed and accelerations reach the values below; they stay there above it. "
+                      "Between the two heights they go down steadily.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min      = 0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(200.));
+
+    def           = this->add("slow_down_by_height_speed", coPercent);
+    def->label    = L("Speed at end height");
+    def->tooltip  = L("Print speeds at the end height, as a percentage of the speeds set for each feature.");
+    def->sidetext = "%";
+    def->min      = 10;
+    def->max      = 100;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionPercent(70.));
+
+    def           = this->add("slow_down_by_height_acceleration", coPercent);
+    def->label    = L("Acceleration at end height");
+    def->tooltip  = L("Accelerations at the end height, travel included, as a percentage of the accelerations set.");
+    def->sidetext = "%";
+    def->min      = 10;
+    def->max      = 100;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionPercent(40.));
+
     def          = this->add("wipe_tower_type3_shape", coEnum);
     def->label   = L("Type 3 shape");
     def->tooltip = L("Shape of the Type 3 prime tower.\n"

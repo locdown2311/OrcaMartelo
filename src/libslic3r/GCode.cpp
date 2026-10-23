@@ -6593,6 +6593,15 @@ LayerResult GCode::process_layer(
     // A non-root cut-plane segment's first layer rests on printed plastic, not on the bed.
     bool                 first_layer   = (layer.id() == 0 && abs(layer.bottom_z()) < EPSILON) && layer.object()->is_root_segment();
     m_writer.set_is_first_layer(first_layer);
+    // Tall prints: speeds (in _extrude()) and accelerations (in the writer) go down with the height.
+    if (m_config.slow_down_by_height.value) {
+        const double start = m_config.slow_down_by_height_start.value, end = m_config.slow_down_by_height_end.value;
+        m_height_speed_scale = height_slowdown_ratio(print_z, start, end, m_config.slow_down_by_height_speed.value / 100.);
+        m_writer.set_acceleration_scale(height_slowdown_ratio(print_z, start, end, m_config.slow_down_by_height_acceleration.value / 100.));
+    } else {
+        m_height_speed_scale = 1.;
+        m_writer.set_acceleration_scale(1.);
+    }
     unsigned int         first_extruder_id = layer_tools.extruders.front();
 
     // Initialize config with the 1st object to be printed at this layer.
@@ -9786,6 +9795,12 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
         }
         requires_segmented_extrusion = false;
         new_points.clear();
+    }
+
+    if (m_height_speed_scale < 1.) {
+        speed *= m_height_speed_scale;
+        for (ProcessedPoint &point : new_points)
+            point.speed *= float(m_height_speed_scale);
     }
 
     double F = speed * 60;  // convert mm/sec to mm/min

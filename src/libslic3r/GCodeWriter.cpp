@@ -425,8 +425,26 @@ std::string GCodeWriter::set_chamber_temperature(int temperature, bool wait)
                   ((OPT).empty() ? 0 : *std::max_element((OPT).cbegin(), (OPT).cend())))
 
 // copied from PrusaSlicer
+double height_slowdown_ratio(double z, double start_z, double end_z, double end_ratio)
+{
+    if (z <= start_z)
+        return 1.;
+    if (end_z <= start_z || z >= end_z)
+        return end_ratio;
+    return 1. + (end_ratio - 1.) * (z - start_z) / (end_z - start_z);
+}
+
+unsigned int GCodeWriter::scaled_acceleration(unsigned int acceleration) const
+{
+    if (acceleration == 0 || m_acceleration_scale >= 1.)
+        return acceleration;
+    // In steps of 10 mm/s2, so a slow change from layer to layer is not a new command on every layer.
+    return std::max(10u, (unsigned int)(std::round(double(acceleration) * m_acceleration_scale / 10.)) * 10u);
+}
+
 std::string GCodeWriter::set_acceleration_internal(Acceleration type, unsigned int acceleration)
 {
+    acceleration = scaled_acceleration(acceleration);
     // Clamp the acceleration to the allowed maximum.
     if (type == Acceleration::Print && EXTRUDER_LIMIT(m_max_acceleration) > 0 && acceleration > EXTRUDER_LIMIT(m_max_acceleration))
         acceleration = EXTRUDER_LIMIT(m_max_acceleration);
@@ -532,6 +550,7 @@ std::string GCodeWriter::set_accel_and_jerk(unsigned int acceleration, double je
     if(FLAVOR_IS_NOT(gcfKlipper))
         throw std::runtime_error(_u8L("set_accel_and_jerk() is only supported by Klipper"));
 
+    acceleration = scaled_acceleration(acceleration);
     // Clamp the acceleration to the allowed maximum.
     if (EXTRUDER_LIMIT(m_max_acceleration) > 0 && acceleration > EXTRUDER_LIMIT(m_max_acceleration))
         acceleration = EXTRUDER_LIMIT(m_max_acceleration);
