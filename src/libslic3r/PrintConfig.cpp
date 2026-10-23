@@ -2663,6 +2663,25 @@ void PrintConfigDef::init_fff_params()
     def->enum_values   = def_top_fill_pattern->enum_values;
     def->enum_labels   = def_top_fill_pattern->enum_labels;
     def->set_default_value(new ConfigOptionEnum<InfillPattern>(ipMonotonic));
+
+    def           = this->add("enable_sub_top_surface_pattern", coBool);
+    def->label    = L("Separate pattern below the top surface");
+    def->category = L("Strength");
+    def->tooltip  = L("Fill the internal solid layer right under a top surface with a pattern of its own, instead of "
+                      "the internal solid infill pattern. That layer is what the top surface is laid on, so its "
+                      "pattern shows through the top surface and decides how flat it comes out.");
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def                = this->add("sub_top_surface_pattern", coEnum);
+    def->label         = L("Pattern below the top surface");
+    def->category      = L("Strength");
+    def->tooltip       = L("Line pattern of the internal solid layer right under a top surface.");
+    def->enum_keys_map = &ConfigOptionEnum<InfillPattern>::get_enum_values();
+    def->enum_values   = def_top_fill_pattern->enum_values;
+    def->enum_labels   = def_top_fill_pattern->enum_labels;
+    def->mode          = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<InfillPattern>(ipRectilinear));
     
     def = this->add("outer_wall_line_width", coFloatOrPercent);
     def->label = L("Outer wall");

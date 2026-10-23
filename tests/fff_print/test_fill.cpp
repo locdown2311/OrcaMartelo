@@ -2353,3 +2353,66 @@ TEST_CASE("Adaptive TPMS anchors match the printed infill", "[Fill][InternalBrid
             max_distance = std::max(max_distance, printed_tree.distance_from_lines<false>(point));
     CHECK(unscale<double>(max_distance) <= 0.012);
 }
+
+// Share of a layer's solid infill length that runs along its most common direction: close to 1 for
+// lines all one way (monotonic), about a half for concentric squares.
+static double dominant_solid_direction_share(const Layer &layer)
+{
+    std::map<int, double> weight_per_degree;
+    double                total = 0.;
+    auto account = [&](const ExtrusionPath &path) {
+        if (!solid_role(path.role()) || path.role() == erTopSolidInfill)
+            return;
+        const Points3 &pts = path.polyline.points;
+        for (size_t i = 1; i < pts.size(); ++i) {
+            const double dx = double(pts[i].x() - pts[i - 1].x()), dy = double(pts[i].y() - pts[i - 1].y());
+            const double len = std::hypot(dx, dy);
+            int deg = int(std::lround(Geometry::rad2deg(std::atan2(dy, dx)))) % 180;
+            if (deg < 0)
+                deg += 180;
+            weight_per_degree[deg] += len;
+            total += len;
+        }
+    };
+    for (const LayerRegion *region : layer.regions())
+        for (const ExtrusionEntity *entity : region->fills.flatten().entities) {
+            if (auto *path = dynamic_cast<const ExtrusionPath *>(entity))
+                account(*path);
+            else if (auto *multi = dynamic_cast<const ExtrusionMultiPath *>(entity))
+                for (const ExtrusionPath &p : multi->paths)
+                    account(p);
+            else if (auto *loop = dynamic_cast<const ExtrusionLoop *>(entity))
+                for (const ExtrusionPath &p : loop->paths)
+                    account(p);
+        }
+    if (total <= 0.)
+        return 0.;
+    return std::max_element(weight_per_degree.begin(), weight_per_degree.end(),
+                            [](const auto &a, const auto &b) { return a.second < b.second; })->second / total;
+}
+
+TEST_CASE("The solid layer under a top surface can take a pattern of its own", "[Fill]")
+{
+    const bool enabled = GENERATE(false, true);
+    CAPTURE(enabled);
+    Print print;
+    // A 20 mm cube at 0.2 mm: 100 layers, the top one at index 99 and three internal solid ones
+    // under it (4 top shell layers), filled with straight monotonic lines unless asked otherwise.
+    Slic3r::Test::init_and_process_print({Slic3r::Test::cube(20)}, print,
+                                        {{"layer_height", 0.2},
+                                         {"top_shell_layers", 4},
+                                         {"sparse_infill_density", "15%"},
+                                         {"internal_solid_infill_pattern", "monotonic"},
+                                         {"enable_sub_top_surface_pattern", enabled ? "1" : "0"},
+                                         {"sub_top_surface_pattern", "concentric"}});
+    const auto layers = print.objects().front()->layers();
+    REQUIRE(layers.size() == 100);
+    // Straight lines further down either way.
+    CHECK(dominant_solid_direction_share(*layers[96]) > 0.85);
+    CHECK(dominant_solid_direction_share(*layers[97]) > 0.85);
+    const double under_top = dominant_solid_direction_share(*layers[98]);
+    if (enabled)
+        CHECK(under_top < 0.7);
+    else
+        CHECK(under_top > 0.85);
+}

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <optional>
 #include <assert.h>
 #include <regex>
 #include <cstdlib>
@@ -948,6 +949,26 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
             it->second.push_back(exp);
     };
 
+	// The top surfaces of the layer above, gathered on first use: the internal solid infill under
+	// them can take a pattern of its own (enable_sub_top_surface_pattern).
+	std::optional<Polygons> upper_top_surfaces;
+	auto is_under_top_surface = [&layer, &upper_top_surfaces](const Surface &surface) {
+		if (! upper_top_surfaces) {
+			upper_top_surfaces.emplace();
+			if (layer.upper_layer != nullptr)
+				for (const LayerRegion *region : layer.upper_layer->regions())
+					for (const Surface &upper : region->fill_surfaces.surfaces)
+						if (upper.surface_type == stTop)
+							polygons_append(*upper_top_surfaces, to_polygons(upper.expolygon));
+		}
+		if (upper_top_surfaces->empty())
+			return false;
+		// Mostly under it: a solid surface is one piece of fill, and the layer under a top surface
+		// is usually just that top surface's footprint, so most of it or none of it.
+		const double surface_area = surface.expolygon.area();
+		return surface_area > 0. && area(intersection(to_polygons(surface.expolygon), *upper_top_surfaces)) >= 0.5 * surface_area;
+	};
+
 	auto append_density_param = [](std::map<float, ExPolygons> &density_params, float density, const ExPolygon &exp) {
         auto it = density_params.find(density);
         if (it == density_params.end())
@@ -998,6 +1019,8 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                     } else if (surface.is_solid_infill()) {
                         params.pattern = region_config.internal_solid_infill_pattern.value;
                         params.density = 100.f;
+                        if (region_config.enable_sub_top_surface_pattern.value && is_under_top_surface(surface))
+                            params.pattern = region_config.sub_top_surface_pattern.value;
                         // Orca: wave-overhang Hilbert floor. When the region opts in via
                         // wave_overhang_floor_use_hilbert and this surface lies inside the
                         // layer's wave_overhang_shadow polygon and we are within the bottom

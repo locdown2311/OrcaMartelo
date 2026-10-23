@@ -941,6 +941,8 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
         toggle_field(el, have_infill || has_solid_infill);
     for (auto el : { "sparse_infill_speed", "bridge_speed", "internal_bridge_speed"})
         toggle_field(el, have_infill || has_solid_infill, variant_index);
+    toggle_field("enable_sub_top_surface_pattern", have_infill || has_solid_infill);
+    toggle_line("sub_top_surface_pattern", config->opt_bool("enable_sub_top_surface_pattern"));
 
     toggle_field("top_shell_thickness", ! has_spiral_vase && has_top_shell_layers);
     toggle_field("bottom_shell_thickness", ! has_spiral_vase && has_bottom_shell);
