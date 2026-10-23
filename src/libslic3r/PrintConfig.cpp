@@ -12994,6 +12994,12 @@ void DynamicPrintConfig::update_diff_values_to_child_config(DynamicPrintConfig& 
                 if (opt_vec_src->size() != variant_index.size() * size_t(stride)) {
                     opt_src->set(opt_target);
                 }
+                // A filament override that is nil was turned off. set_only_diff() takes a nil for "the same
+                // as the parent", which is what Preset::save() writes for a multi-variant value, but a
+                // one-variant value is saved as it is: there the nil is the user's, and skipping it brought
+                // back the parent's override (a system filament that sets its own retraction speed, say).
+                else if (opt_vec_src->size() == 1 && opt_vec_dest->size() == 1 && is_filament_extruder_override_key(opt))
+                    opt_src->set(opt_target);
                 else
                     opt_vec_src->set_only_diff(opt_vec_dest, variant_index, stride);
             }

@@ -1665,3 +1665,42 @@ TEST_CASE("Default options of enum lists get their definition's keys map", "[Con
     }
     CHECK(enum_lists > 0);
 }
+
+TEST_CASE("A filament override turned off stays off when its parent sets it", "[Config][Variant][Regression]") {
+    // A system filament that overrides the retraction speed, and a user filament inheriting it that
+    // turned that override off (nil) and the retraction length one on.
+    Slic3r::DynamicPrintConfig parent;
+    parent.set_key_value("filament_retraction_speed", new Slic3r::ConfigOptionFloatsNullable({80.}));
+    parent.set_key_value("filament_retraction_length", new Slic3r::ConfigOptionFloatsNullable({Slic3r::ConfigOptionFloatsNullable::nil_value()}));
+    parent.set_key_value("filament_extruder_variant", new Slic3r::ConfigOptionStrings({"Direct Drive Standard"}));
+
+    Slic3r::DynamicPrintConfig child;
+    child.set_key_value("filament_retraction_speed", new Slic3r::ConfigOptionFloatsNullable({Slic3r::ConfigOptionFloatsNullable::nil_value()}));
+    child.set_key_value("filament_retraction_length", new Slic3r::ConfigOptionFloatsNullable({0.2}));
+    child.set_key_value("filament_extruder_variant", new Slic3r::ConfigOptionStrings({"Direct Drive Standard"}));
+
+    std::set<std::string> key_set1 = Slic3r::filament_options_with_variant, key_set2;
+    parent.update_diff_values_to_child_config(child, "", "filament_extruder_variant", key_set1, key_set2);
+
+    CHECK(parent.option<Slic3r::ConfigOptionFloatsNullable>("filament_retraction_speed")->is_nil(0));
+    REQUIRE_FALSE(parent.option<Slic3r::ConfigOptionFloatsNullable>("filament_retraction_length")->is_nil(0));
+    CHECK(parent.option<Slic3r::ConfigOptionFloatsNullable>("filament_retraction_length")->values[0] == 0.2);
+}
+
+TEST_CASE("A nil in a multi-variant filament value still means the same as the parent", "[Config][Variant]") {
+    // Preset::save() writes a variant equal to the parent's as nil: loading keeps the parent's value there.
+    Slic3r::DynamicPrintConfig parent;
+    parent.set_key_value("filament_retraction_speed", new Slic3r::ConfigOptionFloatsNullable({80., 60.}));
+    parent.set_key_value("filament_extruder_variant", new Slic3r::ConfigOptionStrings({"Direct Drive Standard", "Bowden Standard"}));
+
+    Slic3r::DynamicPrintConfig child;
+    child.set_key_value("filament_retraction_speed", new Slic3r::ConfigOptionFloatsNullable({Slic3r::ConfigOptionFloatsNullable::nil_value(), 40.}));
+    child.set_key_value("filament_extruder_variant", new Slic3r::ConfigOptionStrings({"Direct Drive Standard", "Bowden Standard"}));
+
+    std::set<std::string> key_set1 = Slic3r::filament_options_with_variant, key_set2;
+    parent.update_diff_values_to_child_config(child, "", "filament_extruder_variant", key_set1, key_set2);
+
+    const auto *speed = parent.option<Slic3r::ConfigOptionFloatsNullable>("filament_retraction_speed");
+    CHECK(speed->values[0] == 80.);
+    CHECK(speed->values[1] == 40.);
+}
