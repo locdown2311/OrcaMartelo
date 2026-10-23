@@ -7,11 +7,13 @@
 #include <boost/log/trivial.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
+#include <nlohmann/json.hpp>
 #include <wx/string.h>
 #include <utility>
 #include <wx/arrstr.h>
 
 #include "PrintHost.hpp"
+#include "AnycubicLink.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "slic3r/GUI/I18N.hpp"
 #include "slic3r/GUI/format.hpp"
@@ -211,6 +213,75 @@ bool Moonraker::start_print(wxString &error_msg, const std::string &filename) co
     return res;
 }
 
+bool Moonraker::fetch_rinkhals_ace_slots(std::vector<AnycubicMaterialSlot> &slots) const
+{
+    // Reply: {"result": {"status": {"mmu": {"enabled", "gate_status": [..], "gate_material": [..],
+    // "gate_color": ["RRGGBBAA", ..]}}}}, with one entry per ACE gate (4 per unit).
+    slots.clear();
+    bool found = false;
+    auto http = Http::get(make_url("server/mmu-ace"));
+    set_auth(http);
+    http.timeout_connect(2)
+        .timeout_max(4)
+        .on_complete([&](std::string body, unsigned) {
+            const auto reply = nlohmann::json::parse(body, nullptr, false);
+            const nlohmann::json::json_pointer mmu_path("/result/status/mmu");
+            if (!reply.is_object() || !reply.contains(mmu_path) || !reply.at(mmu_path).is_object())
+                return;
+            const auto &mmu = reply.at(mmu_path);
+            found = true;
+            if (!mmu.value("enabled", false))
+                return;
+            const auto list = [&mmu](const char *key) {
+                const auto it = mmu.find(key);
+                return it != mmu.end() && it->is_array() ? *it : nlohmann::json::array();
+            };
+            const auto status = list("gate_status"), material = list("gate_material"), color = list("gate_color");
+            for (size_t gate = 0; gate < status.size(); ++gate) {
+                AnycubicMaterialSlot slot;
+                slot.slot_id  = int(gate);
+                slot.box_id   = int(gate / 4);
+                slot.box_slot = int(gate % 4);
+                slot.loaded   = status[gate].is_number_integer() && status[gate].get<int>() >= 1;
+                if (gate < material.size() && material[gate].is_string())
+                    slot.type = material[gate].get<std::string>();
+                if (gate < color.size() && color[gate].is_string())
+                    slot.color = "#" + color[gate].get<std::string>().substr(0, 6);
+                slots.push_back(std::move(slot));
+            }
+        })
+        .on_error([&](std::string, std::string error, unsigned status) {
+            BOOST_LOG_TRIVIAL(debug) << boost::format("%1%: no Rinkhals ACE endpoint: %2%, HTTP %3%") % get_name() % error % status;
+        })
+#ifdef WIN32
+        .ssl_revoke_best_effort(m_ssl_revoke_best_effort)
+#endif
+        .perform_sync();
+    return found;
+}
+
+bool Moonraker::run_gcode(wxString &error_msg, const std::string &script) const
+{
+    bool res = true;
+    auto url = make_url("printer/gcode/script");
+    BOOST_LOG_TRIVIAL(info) << boost::format("%1%: Running `%2%`") % get_name() % script;
+    auto http = Http::post(std::move(url));
+    set_auth(http);
+    http.header("Content-Type", "application/json")
+        .set_post_body(nlohmann::json{{"script", script}}.dump())
+        .on_error([&](std::string body, std::string error, unsigned status) {
+            BOOST_LOG_TRIVIAL(error) << boost::format("%1%: Error running `%2%`: %3%, HTTP %4%, body: `%5%`")
+                % get_name() % script % error % status % body;
+            res = false;
+            error_msg = format_error(body, error, status);
+        })
+#ifdef WIN32
+        .ssl_revoke_best_effort(m_ssl_revoke_best_effort)
+#endif
+        .perform_sync();
+    return res;
+}
+
 bool Moonraker::upload(PrintHostUpload upload_data, ProgressFn progress_fn, ErrorFn error_fn, InfoFn info_fn) const
 {
     // POST /server/files/upload with `print=true` so Moonraker starts the print
@@ -238,6 +309,17 @@ bool Moonraker::upload(PrintHostUpload upload_data, ProgressFn progress_fn, Erro
     const std::string root = upload_data.storage.empty() ? std::string("gcodes") : upload_data.storage;
 
     const bool want_start = upload_data.post_action == PrintHostPostUploadAction::StartPrint;
+
+    // Rinkhals builds the ACE slot mapping of a print from its tool-to-gate map, so set the map the
+    // Remote Print dialog chose before the upload starts the print.
+    const std::string ttg_map = upload_data.extended("ttg_map");
+    if (want_start && !ttg_map.empty()) {
+        wxString map_msg;
+        if (!run_gcode(map_msg, "MMU_TTG_MAP MAP=" + ttg_map)) {
+            error_fn(std::move(map_msg));
+            return false;
+        }
+    }
 
     std::string url = make_url("server/files/upload");
     bool result = true;

@@ -296,7 +296,8 @@ public:
                                 bool switch_to_device_tab,
                                 const Slic3r::AnycubicLink* host,
                                 std::vector<Slic3r::AnycubicMaterialSlot> slots,
-                                std::vector<Slic3r::AnycubicToolFilament> project_filaments);
+                                std::vector<Slic3r::AnycubicToolFilament> project_filaments,
+                                bool rinkhals_moonraker = false);
 
     void init() override;
     void EndModal(int ret) override;
@@ -312,6 +313,9 @@ private:
     std::vector<Slic3r::AnycubicMaterialSlot> m_slots;
     std::vector<Slic3r::AnycubicToolFilament> m_project_filaments;
     std::vector<BitmapComboBox*> m_slot_combos;
+    // Sending through Rinkhals' Moonraker: only the color mapping applies, as a tool-to-gate map;
+    // leveling and calibrations follow the Rinkhals Moonraker app settings.
+    bool m_rinkhals_moonraker {false};
     bool m_auto_leveling {false};
     bool m_resonance_compensation {false};
     bool m_flow_calibration {false};

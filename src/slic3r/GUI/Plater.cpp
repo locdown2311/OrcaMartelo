@@ -200,6 +200,7 @@
 #include "wxExtensions.hpp"
 #include "../Utils/PrintHost.hpp"
 #include "../Utils/AnycubicLink.hpp"
+#include "../Utils/Moonraker.hpp"
 #include "MainFrame.hpp"
 #ifdef SLIC3R_CAD
 #include "slic3r/GUI/CAD/DesignPanel.hpp"
@@ -21356,6 +21357,40 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
         const bool flashforge_local_api = host_type == htFlashforge && ff_serial_opt != nullptr && !ff_serial_opt->value.empty() &&
                                           ff_code_opt != nullptr && !ff_code_opt->value.empty();
 
+        // Remote Print dialog inputs shared by the Anycubic host and Rinkhals' Moonraker: the filaments the plate uses.
+        auto anycubic_project_filaments = [this, preset_bundle, resolved_plate_idx]() {
+            std::vector<int> used_extruders;
+            if (PartPlate* plate = get_partplate_list().get_plate(resolved_plate_idx); plate != nullptr) {
+                used_extruders = plate->get_extruders();
+                std::sort(used_extruders.begin(), used_extruders.end());
+                used_extruders.erase(std::unique(used_extruders.begin(), used_extruders.end()), used_extruders.end());
+            }
+            DynamicPrintConfig cfg = preset_bundle->full_config();
+            const auto* colors = cfg.option<ConfigOptionStrings>("filament_colour");
+            const auto* types = cfg.option<ConfigOptionStrings>("filament_type");
+            std::vector<AnycubicToolFilament> project_filaments;
+            for (int extruder : used_extruders) {
+                if (extruder < 1)
+                    continue;
+                const size_t idx = static_cast<size_t>(extruder - 1);
+                project_filaments.push_back({
+                    static_cast<int>(idx),
+                    types && idx < types->values.size() ? types->values[idx] : "Unknown",
+                    colors && idx < colors->values.size() ? colors->values[idx] : "#FFFFFF"
+                });
+            }
+            return project_filaments;
+        };
+        Moonraker* rinkhals_host = nullptr;
+        std::vector<AnycubicMaterialSlot> rinkhals_slots;
+        if (host_type == htMoonraker) {
+            if (auto* moonraker = dynamic_cast<Moonraker*>(upload_job.printhost.get()); moonraker != nullptr) {
+                wxBusyCursor wait;
+                if (moonraker->fetch_rinkhals_ace_slots(rinkhals_slots))
+                    rinkhals_host = moonraker;
+            }
+        }
+
         std::unique_ptr<PrintHostSendDialog> pDlg;
         if (host_type == htElegooLink) {
             pDlg = std::make_unique<ElegooPrintHostSendDialog>(default_output_file, upload_job.printhost->get_post_upload_actions(), groups,
@@ -21380,39 +21415,29 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
                 anycubic_host->fetch_material_slots(slots, msg);
             }
 
-            std::vector<int> used_extruders;
-            if (PartPlate* plate = get_partplate_list().get_plate(resolved_plate_idx); plate != nullptr) {
-                used_extruders = plate->get_extruders();
-                std::sort(used_extruders.begin(), used_extruders.end());
-                used_extruders.erase(std::unique(used_extruders.begin(), used_extruders.end()), used_extruders.end());
-            }
-
+            std::vector<AnycubicToolFilament> project_filaments = anycubic_project_filaments();
             // Only block if this is a multi-material print that requires an ACE/multi-material unit
             // but no material slots were found.
-            if (slots.empty() && used_extruders.size() > 1) {
+            if (slots.empty() && project_filaments.size() > 1) {
                 show_error(this, _L("This multi-color print requires an ACE unit or material changer. Please connect an ACE unit or slice as a single-material print."), false);
                 return;
-            }
-
-            DynamicPrintConfig cfg = preset_bundle->full_config();
-            const auto* colors = cfg.option<ConfigOptionStrings>("filament_colour");
-            const auto* types = cfg.option<ConfigOptionStrings>("filament_type");
-            std::vector<AnycubicToolFilament> project_filaments;
-            for (int extruder : used_extruders) {
-                if (extruder < 1)
-                    continue;
-                const size_t idx = static_cast<size_t>(extruder - 1);
-                project_filaments.push_back({
-                    static_cast<int>(idx),
-                    types && idx < types->values.size() ? types->values[idx] : "Unknown",
-                    colors && idx < colors->values.size() ? colors->values[idx] : "#FFFFFF"
-                });
             }
 
             pDlg = std::make_unique<AnycubicPrintHostSendDialog>(default_output_file, upload_job.printhost->get_post_upload_actions(), groups,
                                                                  storage_paths, storage_names,
                                                                  config->get_bool("open_device_tab_post_upload"),
                                                                  anycubic_host, std::move(slots), std::move(project_filaments));
+        } else if (rinkhals_host != nullptr) {
+            std::vector<AnycubicToolFilament> project_filaments = anycubic_project_filaments();
+            if (rinkhals_slots.empty() && project_filaments.size() > 1) {
+                show_error(this, _L("This multi-color print requires an ACE unit or material changer. Please connect an ACE unit or slice as a single-material print."), false);
+                return;
+            }
+            pDlg = std::make_unique<AnycubicPrintHostSendDialog>(default_output_file, upload_job.printhost->get_post_upload_actions(), groups,
+                                                                 storage_paths, storage_names,
+                                                                 config->get_bool("open_device_tab_post_upload"),
+                                                                 nullptr, std::move(rinkhals_slots), std::move(project_filaments),
+                                                                 /*rinkhals_moonraker=*/true);
         } else if (flashforge_local_api) {
             auto* flashforge_host = dynamic_cast<Flashforge*>(upload_job.printhost.get());
             if (flashforge_host == nullptr) {

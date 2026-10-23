@@ -2,6 +2,7 @@
 #define slic3r_Moonraker_hpp_
 
 #include <string>
+#include <vector>
 #include <wx/string.h>
 #include <wx/arrstr.h>
 
@@ -14,6 +15,7 @@ namespace Slic3r {
 
 class DynamicPrintConfig;
 class Http;
+struct AnycubicMaterialSlot;
 
 // Moonraker is the JSON / WebSocket gateway that ships in front of Klipper
 // (and on Klipper-API-compatible firmwares like the Prusa-Firmware-Buddy
@@ -26,6 +28,8 @@ class Http;
 //   POST /server/files/upload (multipart)  -- upload gcode (form fields: file, root, print,
 //                                             plateindex)
 //   POST /printer/print/start (json)       -- {"filename":"<name>.gcode"} starts print
+//   GET  /server/mmu-ace                   -- Rinkhals (Anycubic Kobra) only: ACE slots
+//   POST /printer/gcode/script (json)      -- MMU_TTG_MAP before a Rinkhals ACE print
 //
 // Auth: Send X-Api-Key when `printhost_apikey` is non-empty. Without a key,
 // requests rely on Moonraker's `[authorization] trusted_clients`; `force_logins`
@@ -51,6 +55,11 @@ public:
     const std::string& get_apikey() const { return m_apikey; }
     const std::string& get_cafile() const { return m_cafile; }
 
+    // Rinkhals (custom firmware for Anycubic Kobra printers) serves its ACE state at /server/mmu-ace.
+    // Returns false when the host has no such endpoint; otherwise fills `slots` with the ACE gates
+    // (empty when no ACE is connected).
+    bool fetch_rinkhals_ace_slots(std::vector<AnycubicMaterialSlot> &slots) const;
+
 protected:
     std::string m_host;
     std::string m_apikey;
@@ -60,6 +69,7 @@ protected:
     void set_auth(Http &http) const;
     std::string make_url(const std::string &path) const;
     bool start_print(wxString &error_msg, const std::string &filename) const;
+    bool run_gcode(wxString &error_msg, const std::string &script) const;
 };
 
 }

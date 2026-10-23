@@ -14,6 +14,7 @@
 
 #include "GUI.hpp"
 #include "GUI_App.hpp"
+#include "format.hpp"
 #include "I18N.hpp"
 #include "BitmapComboBox.hpp"
 #include "ExtraRenderers.hpp"
@@ -116,11 +117,13 @@ AnycubicPrintHostSendDialog::AnycubicPrintHostSendDialog(const fs::path& path,
                                                          bool switch_to_device_tab,
                                                          const Slic3r::AnycubicLink* host,
                                                          std::vector<Slic3r::AnycubicMaterialSlot> slots,
-                                                         std::vector<Slic3r::AnycubicToolFilament> project_filaments)
+                                                         std::vector<Slic3r::AnycubicToolFilament> project_filaments,
+                                                         bool rinkhals_moonraker)
     : PrintHostSendDialog(path, post_actions, groups, storage_paths, storage_names, switch_to_device_tab)
     , m_host(host)
     , m_slots(std::move(slots))
     , m_project_filaments(std::move(project_filaments))
+    , m_rinkhals_moonraker(rinkhals_moonraker)
 {
 }
 
@@ -245,6 +248,35 @@ void AnycubicPrintHostSendDialog::init()
             m_slot_combos.push_back(combo);
         }
         auto_assign_mappings();
+    }
+
+    auto add_start_cancel = [this]() {
+        auto* start = add_button(wxID_YES, true, _L("Start Print"));
+        start->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (validate_before_close()) {
+                post_upload_action = PrintHostPostUploadAction::StartPrint;
+                EndModal(wxID_OK);
+            }
+        });
+        add_button(wxID_CANCEL, false, _L("Cancel"));
+        finalize();
+        SetMinSize(wxSize(FromDIP(600), -1));
+        Fit();
+        SetSize(wxSize(FromDIP(620), -1));
+        CenterOnParent();
+    };
+
+    if (m_rinkhals_moonraker) {
+        auto* note = new wxStaticText(this, wxID_ANY,
+            _L("Sending through Rinkhals Moonraker: auto leveling and calibrations follow the Moonraker app settings in Rinkhals, "
+               "and Rinkhals loads the first mapped slot when no filament is loaded."));
+        note->SetFont(::Label::Body_10);
+        note->SetForegroundColour(wxColour(156, 163, 175));
+        note->Wrap(FromDIP(560));
+        content_sizer->AddSpacer(FromDIP(8));
+        content_sizer->Add(note, 0, wxBOTTOM, FromDIP(8));
+        add_start_cancel();
+        return;
     }
 
     auto add_toggle = [this](const char* config_key, const wxString& label, const wxString& tooltip, bool* value_ptr, std::function<void(bool)> on_change = {}) -> ::CheckBox* {
@@ -420,19 +452,7 @@ void AnycubicPrintHostSendDialog::init()
     m_cb_save_dev_copy = add_toggle(CONFIG_KEY_SAVE_DEV_COPY, _L("Save dev G-code copy"), _L("Save a copy of the final post-processed G-code/3MF to the OrcaCubic repository directory (last_remote_print_processed.gcode) for inspection."), &m_save_dev_copy);
 #endif
 
-    auto* start = add_button(wxID_YES, true, _L("Start Print"));
-    start->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-        if (validate_before_close()) {
-            post_upload_action = PrintHostPostUploadAction::StartPrint;
-            EndModal(wxID_OK);
-        }
-    });
-    add_button(wxID_CANCEL, false, _L("Cancel"));
-    finalize();
-    SetMinSize(wxSize(FromDIP(600), -1));
-    Fit();
-    SetSize(wxSize(FromDIP(620), -1));
-    CenterOnParent();
+    add_start_cancel();
 }
 
 void AnycubicPrintHostSendDialog::auto_assign_mappings()
@@ -461,11 +481,11 @@ bool AnycubicPrintHostSendDialog::slot_matches_tool(const AnycubicMaterialSlot& 
 
 bool AnycubicPrintHostSendDialog::validate_before_close()
 {
-    if (m_skip_first_toolchange && !m_pre_engage_filament) {
+    if (!m_rinkhals_moonraker && m_skip_first_toolchange && !m_pre_engage_filament) {
         show_error(this, _L("Skip First Tool Change requires Pre-engage Filament."));
         return false;
     }
-    if (m_skip_first_toolchange && m_txt_custom_gcode) {
+    if (!m_rinkhals_moonraker && m_skip_first_toolchange && m_txt_custom_gcode) {
         m_skip_first_toolchange_script = m_txt_custom_gcode->GetValue().ToStdString();
     }
     if (m_project_filaments.empty()) {
@@ -490,6 +510,13 @@ bool AnycubicPrintHostSendDialog::validate_before_close()
             return false;
         }
     }
+    if (m_rinkhals_moonraker) {
+        for (const auto& tool : m_project_filaments)
+            if (tool.tool_id < 0 || tool.tool_id >= static_cast<int>(m_slots.size())) {
+                show_error(this, format_wxstr(_L("Filament %1% has no matching ACE tool. Rinkhals maps at most one filament per ACE slot."), tool.tool_id + 1));
+                return false;
+            }
+    }
     if (m_project_filaments.size() > 1) {
         for (const auto* combo : m_slot_combos) {
             const int selection = combo->GetSelection();
@@ -505,6 +532,25 @@ bool AnycubicPrintHostSendDialog::validate_before_close()
 
 std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() const
 {
+    if (m_rinkhals_moonraker) {
+        if (m_slots.empty())
+            return {};
+        // MMU_TTG_MAP MAP=<gate of T0>,<gate of T1>,... with one entry per gate; unused tools keep their own gate.
+        std::vector<int> ttg_map(m_slots.size());
+        for (size_t gate = 0; gate < ttg_map.size(); ++gate)
+            ttg_map[gate] = static_cast<int>(gate);
+        for (size_t idx = 0; idx < m_project_filaments.size() && idx < m_slot_combos.size(); ++idx) {
+            const int tool     = m_project_filaments[idx].tool_id;
+            const int selected = m_slot_combos[idx]->GetSelection();
+            if (tool >= 0 && tool < static_cast<int>(ttg_map.size()) && selected >= 0 && selected < static_cast<int>(m_slots.size()))
+                ttg_map[tool] = m_slots[selected].slot_id;
+        }
+        std::string map;
+        for (const int gate : ttg_map)
+            map += (map.empty() ? "" : ",") + std::to_string(gate);
+        return {{"ttg_map", map}};
+    }
+
     if (m_slots.empty()) {
         return {
             {"ams_mapping", "[]"},
@@ -602,7 +648,7 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
 void AnycubicPrintHostSendDialog::EndModal(int ret)
 {
     AppConfig* config = wxGetApp().app_config;
-    if (config) {
+    if (config && !m_rinkhals_moonraker) {
         if (m_txt_custom_gcode) {
             m_skip_first_toolchange_script = m_txt_custom_gcode->GetValue().ToStdString();
         }
