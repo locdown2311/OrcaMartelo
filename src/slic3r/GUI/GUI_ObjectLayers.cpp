@@ -163,26 +163,20 @@ wxSizer* ObjectLayers::create_layer(const t_layer_height_range& range, PlusMinus
     auto sizer2 = new wxBoxSizer(wxHORIZONTAL);
     m_grid_sizer->Add(sizer2, 0, wxALIGN_CENTER_VERTICAL);
 
-    // BBS
-    // Add control for the "Layer height"
+    // Layer height of the range, on a row of its own under the range: the sidebar is too narrow
+    // for a sixth column. Slicing already takes it from the range (layer_height_profile_from_ranges())
+    // wherever the layer height has not been painted with the variable layer height tool.
+    auto height_text = new wxStaticText(m_og->ctrl_parent(), wxID_ANY, _L("Layer height"));
+    height_text->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    height_text->SetFont(wxGetApp().normal_font());
+    m_grid_sizer->Add(height_text, 0, wxALIGN_CENTER_VERTICAL);
 
-    //editor = new LayerRangeEditor(this, double_to_string(m_object->layer_config_ranges[range].option("layer_height")->getFloat()), etLayerHeight, set_focus_data,
-    //    [range](coordf_t layer_height, bool, bool)
-    //{
-    //    return wxGetApp().obj_list()->edit_layer_range(range, layer_height);
-    //});
-
-    //select_editor(editor, is_last_edited_range);
-
-    //auto sizer = new wxBoxSizer(wxHORIZONTAL);
-    //sizer->Add(editor);
-
-    //auto temp = new wxStaticText(m_parent, wxID_ANY, _L("mm"));
-    //temp->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    //temp->SetFont(wxGetApp().normal_font());
-    //sizer->Add(temp, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, wxGetApp().em_unit());
-
-    //m_grid_sizer->Add(sizer);
+    editor = new LayerRangeEditor(this, double_to_string(m_object->layer_config_ranges[range].opt_float("layer_height")), etLayerHeight, set_focus_data,
+        [range](coordf_t layer_height, bool, bool) { return wxGetApp().obj_list()->edit_layer_range(range, layer_height); });
+    editor->SetToolTip(_L("Layer height in this range. Painting the layer height with the variable layer height tool overrides it."));
+    m_grid_sizer->Add(editor, 1, wxEXPAND);
+    for (int i = 0; i < 3; ++ i)
+        m_grid_sizer->AddSpacer(0);
 
     return sizer2;
 }
