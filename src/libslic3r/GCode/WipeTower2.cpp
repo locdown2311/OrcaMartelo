@@ -3033,9 +3033,12 @@ void WipeTower2::box_finish_layer(WipeTowerWriter2 &writer, float purge_end_y, f
 
     writer.append(";--------------------\n"
                   "; CP BOX START\n");
-    // What the purge left of the front wall, and the back wall, purged into on the next layer.
-    fill_rect(m_perimeter_width, purge_end_y, width - m_perimeter_width, y0 - loops, solid);
-    fill_rect(m_perimeter_width, y1 + loops, width - m_perimeter_width, depth - m_perimeter_width, solid);
+    // What the purge left of the front wall, and the back wall, purged into on the next layer. These
+    // fills stop one line spacing short of the outermost loop: ending on its outer edge, their last
+    // line overlapped the loop by half its width along the whole wall, and the excess piled up layer
+    // after layer into a ridge the nozzle knocked against.
+    fill_rect(m_perimeter_width, purge_end_y, width - m_perimeter_width, y0 - loops - 0.5f * spacing, solid);
+    fill_rect(m_perimeter_width, y1 + loops + 0.5f * spacing, width - m_perimeter_width, depth - m_perimeter_width, solid);
     // The loops around the opening, from the inside out.
     for (int i = 0; i < m_box_loops; ++ i) {
         const float o = (float(i) + 0.5f) * spacing;

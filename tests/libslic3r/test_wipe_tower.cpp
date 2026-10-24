@@ -1,5 +1,6 @@
 #include <catch2/catch_all.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 #include "libslic3r/Polygon.hpp"
@@ -532,6 +533,35 @@ TEST_CASE("A box tower purges into its front and back walls by turns", "[WipeTow
     REQUIRE(front.size() >= 4);
     for (size_t i = 1; i < front.size(); ++ i)
         CHECK(front[i] != front[i - 1]);
+}
+
+TEST_CASE("Box tower lines lie a line spacing apart", "[WipeTower][Type3Box]") {
+    PrintConfig       config;
+    PrintRegionConfig region;
+    WipeTower2       *tower  = nullptr;
+    const auto        layers = generate_box_tower(tower, config, region, 12);
+    std::unique_ptr<WipeTower2> owner(tower);
+
+    // The lines across the tower (along x): two of them overlapping in x must be at least most of a
+    // line spacing apart in y, or the material doubles up along them and builds a ridge.
+    for (size_t l = 0; l < layers.size(); ++ l) {
+        struct Line { float y, x0, x1; };
+        std::vector<Line> lines;
+        for (const WipeTower::ToolChangeResult &tcr : layers[l])
+            for (size_t i = 1; i < tcr.extrusions.size(); ++ i) {
+                const Vec2f a = tcr.extrusions[i - 1].pos, b = tcr.extrusions[i].pos;
+                if (tcr.extrusions[i].width > 0.f && std::abs(a.y() - b.y()) < 1e-3f && std::abs(a.x() - b.x()) > 2.f)
+                    lines.push_back({ a.y(), std::min(a.x(), b.x()), std::max(a.x(), b.x()) });
+            }
+        for (size_t i = 0; i < lines.size(); ++ i)
+            for (size_t j = i + 1; j < lines.size(); ++ j) {
+                const float dy = std::abs(lines[i].y - lines[j].y);
+                if (dy < 1e-3f || std::min(lines[i].x1, lines[j].x1) - std::max(lines[i].x0, lines[j].x0) < 1.f)
+                    continue; // the same line drawn twice in a row, or lines side by side
+                INFO("layer " << l << ": lines at y = " << lines[i].y << " and " << lines[j].y);
+                CHECK(dy > 0.35f);
+            }
+    }
 }
 
 TEST_CASE("The box tower mesh has the opening above its floor", "[WipeTower][Type3Box]") {
