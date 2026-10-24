@@ -272,7 +272,7 @@ void AnycubicPrintHostSendDialog::init()
                "and Rinkhals loads the first mapped slot when no filament is loaded."));
         note->SetFont(::Label::Body_10);
         note->SetForegroundColour(wxColour(156, 163, 175));
-        note->Wrap(FromDIP(560));
+        note->Wrap(FromDIP(480));
         content_sizer->AddSpacer(FromDIP(8));
         content_sizer->Add(note, 0, wxBOTTOM, FromDIP(8));
         add_start_cancel();
@@ -439,11 +439,13 @@ void AnycubicPrintHostSendDialog::init()
         _L("💡 Recommended: the bed is probed at the first layer temperature. Uncheck only if your start G-code builds the bed mesh itself."));
     leveling_note->SetFont(::Label::Body_10);
     leveling_note->SetForegroundColour(wxColour(245, 158, 11));
-    leveling_note->Wrap(FromDIP(540));
+    // Wrap inside the content column: the 620 DIP dialog less the logo column (~110), the right margin
+    // and the 24 DIP indent. Wrapped wider, the text control is squeezed and its last line is cut off.
+    leveling_note->Wrap(FromDIP(450));
     leveling_note->InvalidateBestSize();
     auto* note_sizer = new wxBoxSizer(wxHORIZONTAL);
     note_sizer->AddSpacer(FromDIP(24));
-    note_sizer->Add(leveling_note, 1, wxEXPAND);
+    note_sizer->Add(leveling_note, 0);
     content_sizer->Add(note_sizer, 0, wxBOTTOM, FromDIP(8));
     m_cb_resonance = add_toggle(CONFIG_KEY_RESONANCE, _L("Resonance Compensation"), _L("Run vibration compensation before this print."), &m_resonance_compensation);
     m_cb_flow = add_toggle(CONFIG_KEY_FLOW, _L("Flow Calibration"), _L("Calibrate extrusion flow before this print."), &m_flow_calibration);
