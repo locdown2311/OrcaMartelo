@@ -4,7 +4,14 @@
 #define SLIC3R_APP_NAME "@SLIC3R_APP_NAME@"
 #define SLIC3R_APP_KEY "@SLIC3R_APP_KEY@"
 #define SLIC3R_VERSION "@SLIC3R_VERSION@"
-#define SoftFever_VERSION "@SoftFever_VERSION@"
+// The version changes with every build, so it is not a string literal here: this header sits in the
+// precompiled header, whose macros the CI compiler cache does not hash, and objects built for an older
+// version kept being reused (the splash screen showed a stale version after an update). The string
+// lives in the generated libslic3r_version.cpp, the one file that recompiles when it changes.
+#ifdef __cplusplus
+namespace Slic3r { const char* orca_version(); }
+#define SoftFever_VERSION (::Slic3r::orca_version())
+#endif
 #define WAVE_OVERHANGS_VERSION "@WAVE_OVERHANGS_VERSION@"
 #define SLIC3R_BUILD_ID "@SLIC3R_BUILD_ID@"
 //#define SLIC3R_RC_VERSION "@SLIC3R_VERSION@"

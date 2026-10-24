@@ -1,0 +1,7 @@
+#include "libslic3r_version.h"
+
+namespace Slic3r {
+
+const char* orca_version() { return "@SoftFever_VERSION@"; }
+
+} // namespace Slic3r

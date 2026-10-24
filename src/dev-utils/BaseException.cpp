@@ -48,7 +48,7 @@ CBaseException::CBaseException(HANDLE hProcess, WORD wPID, LPCTSTR lpSymbolPath,
 		output_file->open(log_filename, std::ios::out | std::ios::app);
 
 		// Output app build info in crash log so we could look for the correct PDB files
-        OutputString(_T("%s\n\n"), _T(SLIC3R_APP_NAME " " SoftFever_VERSION " Build " GIT_COMMIT_HASH GIT_COMMIT_SUFFIX));
+        OutputString(_T("%s %hs Build %s\n\n"), _T(SLIC3R_APP_NAME), SoftFever_VERSION, _T(GIT_COMMIT_HASH GIT_COMMIT_SUFFIX));
 	}
 }
 
