@@ -540,6 +540,15 @@ static bool ensure_anycubic_gcode_header_in_text(std::string& gcode)
         modified = true;
     }
 
+    // The printer takes the bed temperature from the first line starting with "; bed_temperature", so
+    // OrcaSlicer's "; bed_temperature_formula = by_highest_temp" made it read a word instead of a number:
+    // it showed that word as the bed temperature, called the G-code incomplete and left the bed off.
+    for (size_t pos; (pos = gcode.find("\n; bed_temperature_formula =")) != std::string::npos;) {
+        const size_t eol = gcode.find('\n', pos + 1);
+        gcode.erase(pos, eol == std::string::npos ? std::string::npos : eol - pos);
+        modified = true;
+    }
+
     const std::string config_start = "; CONFIG_BLOCK_START\n";
     const std::string config_end   = "; CONFIG_BLOCK_END\n";
     if (const size_t pos = gcode.find(config_start); pos != std::string::npos) {
