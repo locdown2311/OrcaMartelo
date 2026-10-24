@@ -21361,7 +21361,7 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
         auto anycubic_project_filaments = [this, preset_bundle, resolved_plate_idx]() {
             std::vector<int> used_extruders;
             if (PartPlate* plate = get_partplate_list().get_plate(resolved_plate_idx); plate != nullptr) {
-                used_extruders = plate->get_extruders();
+                used_extruders = plate->get_extruders(true);
                 std::sort(used_extruders.begin(), used_extruders.end());
                 used_extruders.erase(std::unique(used_extruders.begin(), used_extruders.end()), used_extruders.end());
             }
@@ -21537,7 +21537,7 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
 
             // Pass resolved plate extruders to upload_data for Anycubic ACE Pro mapping
             if (PartPlate* plate = get_partplate_list().get_plate(resolved_plate_idx); plate != nullptr) {
-                std::vector<int> used_extruders = plate->get_extruders();
+                std::vector<int> used_extruders = plate->get_extruders(true);
                 std::sort(used_extruders.begin(), used_extruders.end());
                 used_extruders.erase(std::unique(used_extruders.begin(), used_extruders.end()), used_extruders.end());
                 std::string extruders_str;
