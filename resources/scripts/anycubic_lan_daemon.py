@@ -1032,13 +1032,9 @@ def sanitize_print_filename(raw_name):
 
 
 def start_filename_for_print(filename):
-    """A local `.gcode.3mf` task starts under its inner `.gcode` name."""
-    target = filename
-    if target.lower().endswith(".3mf"):
-        target = target[:-4]
-    if not target.lower().endswith(".gcode"):
-        target += ".gcode"
-    return target
+    """The print starts under the uploaded name, `.gcode.3mf` included, as Anycubic Slicer Next does:
+    the printer then prepares the job from the 3MF metadata (e.g. heats the bed for the auto leveling)."""
+    return filename
 
 
 def _default_ams_mapping(use_ams=True):
@@ -1598,13 +1594,7 @@ class BridgeServer(BaseHTTPRequestHandler):
                     flow_calibration = 1 if requested_tasks.get("flow_calibration", 0) else 0
                     timelapse_status = 1 if requested_tasks.get("timelapse", 0) else 0
 
-                    is_3mf = filename.lower().endswith(".3mf")
-                    target_filename = filename
-                    if is_3mf:
-                        if target_filename.lower().endswith(".3mf"):
-                            target_filename = target_filename[:-4]
-                        if not target_filename.lower().endswith(".gcode"):
-                            target_filename += ".gcode"
+                    target_filename = start_filename_for_print(filename)
 
                     msg = {
                         "type": "print",

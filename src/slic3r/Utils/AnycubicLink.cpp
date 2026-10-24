@@ -1805,14 +1805,9 @@ bool AnycubicLink::start_print(wxString& error_msg, const std::string& filename,
         boost::algorithm::to_lower(file_md5);
     } catch (...) {}
 
-    bool is_3mf = boost::ends_with(boost::to_lower_copy(filename), ".3mf");
-    std::string internal_filename = filename;
-    if (is_3mf) {
-        if (boost::ends_with(boost::to_lower_copy(internal_filename), ".3mf"))
-            internal_filename.erase(internal_filename.size() - 4);
-        if (!boost::ends_with(boost::to_lower_copy(internal_filename), ".gcode"))
-            internal_filename += ".gcode";
-    }
+    // Like Anycubic Slicer Next, start a .gcode.3mf under its own name, so the printer prepares the job
+    // from the 3MF metadata.
+    const std::string& internal_filename = filename;
 
     json payload = {
         {"type", "print"},
