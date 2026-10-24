@@ -250,10 +250,12 @@ private:
 	bool   m_enable_filament_ramming = true;
 	bool   m_is_mk4mmu3         = false;
     bool   m_is_lego            = false;    // Type 3 shaped as a Lego brick
-    // Type 3 shaped as an open box: the toolchanges purge into the front and back walls (the layers
-    // alternate them, being turned by 180 degrees), and an opening `m_box_cavity` wide stays empty
-    // in the middle above a floor `m_box_floor` high. Side walls are m_box_loops loops thick.
+    // Type 3 shaped as an open box: the toolchanges purge into the walls around an opening
+    // `m_box_cavity` wide that stays empty in the middle above a floor `m_box_floor` high: all four of
+    // them with m_box_ring, else the front and back walls. The layers are turned by 180 degrees one
+    // after the other. The opening is lined by m_box_loops loops.
     bool   m_is_box             = false;
+    float  m_box_width          = 0.f;     // configured width: the box's size without any purge
     float  m_box_wall           = 2.f;
     float  m_box_floor          = 1.6f;
     int    m_box_loops          = 0;
@@ -261,6 +263,9 @@ private:
     static constexpr int BOX_DIVIDER_LINES = 3;
     Vec2f  m_box_cavity         = Vec2f::Zero();
     float  m_box_cavity_y       = 0.f;     // front edge of the opening, from the tower's front edge
+    // The purge wraps around the opening: a square tower whose rows beside the opening are split
+    // into a left and a right part, so all four walls take the purge (box_ring_possible()).
+    bool   m_box_ring           = false;
     int    m_wipe_tower_filament = 0;   // 1-based config value, 0 means auto
     Vec2f  m_wipe_tower_pos; 			// Left front corner of the wipe tower in mm.
 	float  m_wipe_tower_width; 			// Width of the wipe tower.
@@ -490,6 +495,22 @@ private:
     // Everything of a box layer but the purge and the outer wall: the infill of the front and back
     // walls beside the purge, the loops around the opening, and the floor.
     void box_finish_layer(WipeTowerWriter2 &writer, float purge_end_y, float feedrate, bool solid, bool first_layer);
+    // Ring purge needs every purge to be plain wipe rows: no ramming, cooling or loading moves
+    // laid across the tower, and no tower interface pre-extrusion.
+    bool box_ring_possible() const;
+    // Purge and infill rows (along X, centred at y) that run beside the opening are split in two:
+    // their centres lie strictly between box_core_lo() and box_core_hi(), and their parts end at
+    // box_core_left() and start at box_core_right(), one line spacing off the loops.
+    float box_core_lo() const { return m_box_cavity_y - float(m_box_loops) * box_loop_spacing() - 0.5f * box_loop_spacing(); }
+    float box_core_hi() const { return m_wipe_tower_depth - box_core_lo(); }
+    float box_core_left() const { return 0.5f * (m_wipe_tower_width - m_box_cavity.x()) - float(m_box_loops) * box_loop_spacing() - 0.5f * box_loop_spacing(); }
+    float box_core_right() const { return m_wipe_tower_width - box_core_left(); }
+    // Purge length the rows from y onwards hold, row centres dy apart, until `length` is reached:
+    // the number of rows, or -1 when they run past the tower's back edge.
+    int box_ring_rows(float y, float length, float dy) const;
+    // Purge `rows` rows of the ring from y: the full rows in front of the opening, the split rows
+    // up its left side and down its right side (crossing the opening once), the full rows behind it.
+    void box_ring_wipe(WipeTowerWriter2 &writer, float y, int rows, float dy, float target_speed);
 
     void compute_wall_skip_points();
 

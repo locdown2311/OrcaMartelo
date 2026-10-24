@@ -66,11 +66,14 @@ WipeTowerType resolve_wipe_tower_type(const ConfigBase &config)
 
 Polygon estimate_wipe_tower_first_layer_outline(const ConfigBase &config, WipeTowerType tower_type, double width, double depth, double height)
 {
-    // Type1 ignores the cone option. The wall type is read by value: a preset-shaped config
-    // holds it as ConfigOptionEnumGeneric, which a cast to ConfigOptionEnum<T> cannot see.
+    // Type1 ignores the cone option, and Type 3 uses it only as a box. The wall type is read by
+    // value: a preset-shaped config holds it as ConfigOptionEnumGeneric, which a cast to
+    // ConfigOptionEnum<T> cannot see.
     const ConfigOption *wall_type  = option_of(config, "wipe_tower_wall_type");
     const ConfigOption *cone_angle = option_of(config, "wipe_tower_cone_angle");
-    const bool          cone       = tower_type == WipeTowerType::Type2 && wall_type != nullptr &&
+    const ConfigOption *shape      = option_of(config, "wipe_tower_type3_shape");
+    const bool          box        = tower_type == WipeTowerType::Type3 && shape != nullptr && shape->getInt() == int(WipeTowerType3Shape::Box);
+    const bool          cone       = (tower_type == WipeTowerType::Type2 || box) && wall_type != nullptr &&
                          wall_type->getInt() == int(WipeTowerWallType::wtwCone) && cone_angle != nullptr;
     return WipeTower2::cone_base_polygon(width, depth, height, cone ? cone_angle->getFloat() : 0.);
 }
@@ -201,16 +204,25 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeT
     const double idle_depth = (type1 && wrapping && !smooth_timelapse) ? WipeTower::get_wrapping_detection_depth() : min_depth;
     const bool is_box = is_lego && opt_enum("wipe_tower_type3_shape", int(WipeTowerType3Shape::Brick)) == int(WipeTowerType3Shape::Box);
     if (is_box) {
-        // WipeTower2::plan_box(): front and back walls as deep as the purge plus the side wall,
-        // around a square opening.
         const double wall      = opt_float("wipe_tower_box_wall");
         const double box_width = std::max(width, 2. * (wall + 1.) + 10.);
-        double purge = volume / (layer_height * box_width);
+        double purge_area = volume / layer_height;
         if (!semm_flush)
-            purge *= extra_spacing;
-        const double side = std::max(0., box_width - 2. * (perimeter_width + wall));
-        footprint.width   = box_width;
-        footprint.depth   = 2. * (purge + perimeter_width + wall) + side;
+            purge_area *= extra_spacing;
+        // WipeTower2::box_ring_possible(): without ramming (or interface pre-extrusion) the purge
+        // wraps around the opening and the tower grows square around the configured box. Filament
+        // multi-tool ramming, which also rules it out, is not looked at here.
+        const bool ring = !(opt_bool("single_extruder_multi_material") && opt_bool("enable_filament_ramming")) &&
+                          !opt_bool("enable_tower_interface_features");
+        if (ring) {
+            // The band around the opening loses a little to the clearance beside it: a line more.
+            footprint.width = footprint.depth = std::sqrt(box_width * box_width + purge_area) + perimeter_width;
+        } else {
+            // Front and back walls as deep as the purge plus the side wall, around a square opening.
+            const double side = std::max(0., box_width - 2. * (perimeter_width + wall));
+            footprint.width   = box_width;
+            footprint.depth   = 2. * (purge_area / box_width + perimeter_width + wall) + side;
+        }
     } else if (is_lego) {
         const double pitch = 8.0;
         double configured_w = width;

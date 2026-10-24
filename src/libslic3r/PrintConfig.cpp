@@ -9012,7 +9012,8 @@ void PrintConfigDef::init_fff_params()
 
     def           = this->add("wipe_tower_box_wall", coFloat);
     def->label    = L("Box wall thickness");
-    def->tooltip  = L("Thickness of the box's side walls, and of the front and back walls besides the room the purge takes in them.");
+    def->tooltip  = L("Thickness of the walls lining the box's opening. The purge takes room around them: on all four sides, "
+                      "growing the box square, unless the filament is rammed, which keeps it in the front and back walls.");
     def->sidetext = L("mm");	// millimeters, CIS languages need translation
     def->min      = 0.8;
     def->max      = 10;
@@ -9021,7 +9022,7 @@ void PrintConfigDef::init_fff_params()
 
     def           = this->add("wipe_tower_box_floor", coFloat);
     def->label    = L("Box floor thickness");
-    def->tooltip  = L("Height of the solid floor at the bottom of the box.");
+    def->tooltip  = L("Height of the solid floor at the bottom of the box, and of the solid rim at the top of its walls.");
     def->sidetext = L("mm");	// millimeters, CIS languages need translation
     def->min      = 0.4;
     def->max      = 10;

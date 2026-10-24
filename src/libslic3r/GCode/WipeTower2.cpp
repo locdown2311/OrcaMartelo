@@ -1090,8 +1090,13 @@ WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& defau
             m_box_floor = float(config.wipe_tower_box_floor.value);
             m_box_compartments = config.wipe_tower_box_compartments.value == WipeTowerBoxCompartments::Four ? 4 :
                                  config.wipe_tower_box_compartments.value == WipeTowerBoxCompartments::Two  ? 2 : 1;
+            // The stabilization cone of the Cone wall type braces the box's base too: its outline
+            // bulges past the box's lower walls and its first layer is filled.
+            if (config.wipe_tower_wall_type.value == WipeTowerWallType::wtwCone && m_wipe_tower_cone_angle > EPSILON)
+                m_wall_type = (int)WipeTowerWallType::wtwCone;
             // Room for an opening at least 10 mm wide between the side walls.
             m_wipe_tower_width = std::max(m_wipe_tower_width, 2.f * (m_box_wall + 1.f) + 10.f);
+            m_box_width        = m_wipe_tower_width;
         } else {
             const float pitch = 8.0f;
             // Default to a classic 2x4 Lego brick: 4 studs in X (31.8 mm)
@@ -1452,7 +1457,17 @@ WipeTower::ToolChangeResult WipeTower2::tool_change(size_t tool)
                 writer.extrude_explicit(target_x, writer.y(), pre_len, 600.f);
             }
         }
-        toolchange_Wipe(writer, cleaning_box, wipe_volume, interface_layer, false, fill_box);     // Wipe the newly loaded filament until the end of the assigned wipe area.
+        if (m_box_ring) {
+            // Whole rows of the ring, as many as plan_box() gave this toolchange.
+            const float dy = wipe_row_spacing(is_first_layer());
+            writer.set_extrusion_flow(m_extrusion_flow * m_extra_flow)
+                  .change_analyzer_line_width(wipe_line_width())
+                  .append("; CP TOOLCHANGE WIPE\n");
+            box_ring_wipe(writer, m_perimeter_width + m_depth_traversed, int(std::lround(wipe_area / dy)), dy,
+                          is_first_layer() ? m_first_layer_speed * 60.f : std::min(m_wipe_tower_max_purge_speed * 60.f, m_infill_speed * 60.f));
+            writer.set_extrusion_flow(m_extrusion_flow).change_analyzer_line_width(m_perimeter_width);
+        } else
+            toolchange_Wipe(writer, cleaning_box, wipe_volume, interface_layer, false, fill_box);     // Wipe the newly loaded filament until the end of the assigned wipe area.
         if (interface_layer) {
             int interface_temp = m_filpar[tool].interface_print_temperature;
             if (!m_enable_tower_interface_cooldown_during_tower && interface_temp > 0 && interface_temp != base_temp)
@@ -2052,7 +2067,9 @@ WipeTower::ToolChangeResult WipeTower2::finish_layer()
                               (m_wipe_tower_height - m_z_pos > stud_height);
 
     if (m_is_box) {
-        const bool solid = (first_layer && m_adhesion) ||
+        // The walls' top, as thick as the floor, is solid: a firm rim for a box kept as a container.
+        const bool rim   = m_wipe_tower_height - m_z_pos < m_box_floor - WT_EPSILON;
+        const bool solid = (first_layer && m_adhesion) || rim ||
             (m_layer_info + 1 != m_plan.end() &&
              std::any_of((m_layer_info + 1)->tool_changes.begin(), (m_layer_info + 1)->tool_changes.end(),
                          [this](const WipeTowerInfo::ToolChange &tch) { return m_filpar[tch.new_tool].is_soluble || m_filpar[tch.old_tool].is_soluble; }));
@@ -2974,24 +2991,125 @@ WipeTower2::BoxShape WipeTower2::get_box_shape() const
     return box;
 }
 
+bool WipeTower2::box_ring_possible() const
+{
+    if (m_enable_tower_interface_features)
+        return false;
+    for (size_t tool = 0; tool < m_filpar.size(); ++ tool)
+        if (tool_ramming_enabled(tool))
+            return false;
+    return true;
+}
+
+int WipeTower2::box_ring_rows(float y, float length, float dy) const
+{
+    const float xa = m_perimeter_width, xb = m_wipe_tower_width - m_perimeter_width;
+    const float lo = box_core_lo(), hi = box_core_hi();
+    const float split = std::max(0.f, box_core_left() - xa) + std::max(0.f, xb - box_core_right());
+    int   rows = 0;
+    for (float done = 0.f; done < length - WT_EPSILON; ++ rows) {
+        const float row_y = y + float(rows) * dy;
+        if (row_y > m_wipe_tower_depth - m_perimeter_width + WT_EPSILON)
+            return -1;
+        done += row_y > lo + WT_EPSILON && row_y < hi - WT_EPSILON ? split : xb - xa;
+    }
+    return rows;
+}
+
 void WipeTower2::plan_box()
 {
+    m_box_loops = std::max(1, int(std::round(m_box_wall / box_loop_spacing())));
+    const float loops = float(m_box_loops) * box_loop_spacing();
+    m_box_ring = box_ring_possible();
+    if (m_box_ring) {
+        // The opening keeps the size the configured width gives it, and the purge rows wrap around
+        // it in a band as wide on all four sides: the tower stays square and grows, in steps of a
+        // loop spacing, until every layer's purge fits.
+        const float side = std::max(0.f, m_box_width - 2.f * (m_perimeter_width + loops));
+        m_box_cavity     = Vec2f(side, side);
+        for (float band = 0.f;; band += box_loop_spacing()) {
+            m_wipe_tower_width = m_wipe_tower_depth = m_box_width + 2.f * band;
+            m_box_cavity_y     = 0.5f * (m_wipe_tower_depth - side);
+            bool fits = true;
+            for (size_t idx = 0; idx < m_plan.size() && fits; ++ idx) {
+                WipeTowerInfo &layer = m_plan[idx];
+                const float    dy    = wipe_row_spacing(idx == m_first_layer_idx);
+                float          y     = m_perimeter_width;
+                for (WipeTowerInfo::ToolChange &tch : layer.tool_changes) {
+                    const int rows = box_ring_rows(y, volume_to_length(tch.wipe_volume, m_perimeter_width, layer.height) / m_extra_flow, dy);
+                    if (rows < 0) {
+                        fits = false;
+                        break;
+                    }
+                    tch.required_depth = float(rows) * dy;
+                    y += tch.required_depth;
+                }
+            }
+            if (fits || band > 500.f)
+                break;
+        }
+        for (WipeTowerInfo &layer : m_plan)
+            layer.depth = m_wipe_tower_depth - m_perimeter_width;
+        return;
+    }
+
     // The purge fills the front of every layer from y = 0 up to its toolchanges' depth, so the
     // front wall is as deep as the deepest of them plus the loops around the opening. The layers
     // are turned by 180 degrees one after the other: a box symmetric about its centre has the
     // purge in its front wall on one layer and in its back wall on the next, and the opening and
     // the side walls in the same place on all of them.
+    m_wipe_tower_width = m_box_width;
     float purge_depth = 0.f;
     for (const WipeTowerInfo &layer : m_plan)
         purge_depth = std::max(purge_depth, layer.toolchanges_depth());
-    m_box_loops = std::max(1, int(std::round(m_box_wall / box_loop_spacing())));
-    const float loops = float(m_box_loops) * box_loop_spacing();
     m_box_cavity_y    = purge_depth + m_perimeter_width + loops;
     const float side  = std::max(0.f, m_wipe_tower_width - 2.f * (m_perimeter_width + loops));
     m_box_cavity      = Vec2f(side, side);
     m_wipe_tower_depth = 2.f * m_box_cavity_y + side;
     for (WipeTowerInfo &layer : m_plan)
         layer.depth = m_wipe_tower_depth - m_perimeter_width;
+}
+
+void WipeTower2::box_ring_wipe(WipeTowerWriter2 &writer, float y, int rows, float dy, float target_speed)
+{
+    const float xa = m_perimeter_width, xb = m_wipe_tower_width - m_perimeter_width;
+    const float lo = box_core_lo(), hi = box_core_hi();
+    std::vector<float> before, beside, behind;
+    for (int i = 0; i < rows; ++ i) {
+        const float row_y = y + float(i) * dy;
+        (row_y <= lo + WT_EPSILON ? before : row_y >= hi - WT_EPSILON ? behind : beside).push_back(row_y);
+    }
+    // Slow at first, then up to the target speed, as toolchange_Wipe().
+    float speed = 0.33f * target_speed;
+    auto  speed_up = [&speed, target_speed]() {
+        if (speed < 0.34f * target_speed)       speed = 0.375f * target_speed;
+        else if (speed < 0.377f * target_speed) speed = 0.458f * target_speed;
+        else if (speed < 0.46f * target_speed)  speed = 0.875f * target_speed;
+        else                                    speed = std::min(target_speed, speed + 50.f);
+    };
+    // Rows from x_from to x_to, back and forth, starting at the end nearer the nozzle and joined
+    // at their ends.
+    auto zigzag = [&](const std::vector<float> &ys, float x_from, float x_to) {
+        if (ys.empty() || x_to - x_from < m_perimeter_width)
+            return;
+        bool to_right = std::abs(writer.x() - x_from) <= std::abs(writer.x() - x_to);
+        writer.travel(to_right ? x_from : x_to, ys.front());
+        for (size_t i = 0; i < ys.size(); ++ i) {
+            writer.extrude(to_right ? x_to : x_from, ys[i], speed);
+            speed_up();
+            if (i + 1 < ys.size())
+                writer.extrude(writer.x(), ys[i + 1], speed);
+            to_right = ! to_right;
+        }
+    };
+    zigzag(before, xa, xb);
+    zigzag(beside, xa, box_core_left());
+    zigzag(std::vector<float>(beside.rbegin(), beside.rend()), box_core_right(), xb);
+    zigzag(behind, xa, xb);
+
+    // We may be going back to the model: wipe the nozzle along the last row.
+    writer.add_wipe_point(writer.x(), writer.y())
+          .add_wipe_point(writer.x() + (writer.x() > 0.5f * m_wipe_tower_width ? -2.f : 2.f), writer.y());
 }
 
 void WipeTower2::box_finish_layer(WipeTowerWriter2 &writer, float purge_end_y, float feedrate, bool solid, bool first_layer)
@@ -3037,8 +3155,20 @@ void WipeTower2::box_finish_layer(WipeTowerWriter2 &writer, float purge_end_y, f
     // fills stop one line spacing short of the outermost loop: ending on its outer edge, their last
     // line overlapped the loop by half its width along the whole wall, and the excess piled up layer
     // after layer into a ridge the nozzle knocked against.
-    fill_rect(m_perimeter_width, purge_end_y, width - m_perimeter_width, y0 - loops - 0.5f * spacing, solid);
-    fill_rect(m_perimeter_width, y1 + loops + 0.5f * spacing, width - m_perimeter_width, depth - m_perimeter_width, solid);
+    if (m_box_ring) {
+        // The purge wraps around the opening: the rest of the band in front of it, beside it (left
+        // and right of the opening) and behind it, each a line spacing from the next.
+        const float lo = box_core_lo(), hi = box_core_hi();
+        if (purge_end_y <= lo + WT_EPSILON)
+            fill_rect(m_perimeter_width, purge_end_y, width - m_perimeter_width, lo, solid);
+        const float beside_from = std::max(purge_end_y, lo + spacing), beside_to = hi - spacing;
+        fill_rect(m_perimeter_width, beside_from, box_core_left(), beside_to, solid);
+        fill_rect(box_core_right(), beside_from, width - m_perimeter_width, beside_to, solid);
+        fill_rect(m_perimeter_width, std::max(purge_end_y, hi), width - m_perimeter_width, depth - m_perimeter_width, solid);
+    } else {
+        fill_rect(m_perimeter_width, purge_end_y, width - m_perimeter_width, y0 - loops - 0.5f * spacing, solid);
+        fill_rect(m_perimeter_width, y1 + loops + 0.5f * spacing, width - m_perimeter_width, depth - m_perimeter_width, solid);
+    }
     // The loops around the opening, from the inside out.
     for (int i = 0; i < m_box_loops; ++ i) {
         const float o = (float(i) + 0.5f) * spacing;

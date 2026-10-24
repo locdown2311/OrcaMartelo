@@ -398,9 +398,12 @@ TEST_CASE("Footprint padding covers the brim and the extrusion half width on eac
 
 // A Type 3 box tower for two filaments swapping on every layer, 0.2 mm layers, 45 mm3 per purge,
 // 40 mm wide with 2 mm walls and a 1 mm floor.
+// With `ring` the filament is not rammed, and the purge wraps around the opening.
 static std::vector<std::vector<WipeTower::ToolChangeResult>> generate_box_tower(WipeTower2 *&tower, PrintConfig &config, PrintRegionConfig &region, size_t layers,
-                                                                              WipeTowerBoxCompartments compartments = WipeTowerBoxCompartments::One)
+                                                                              WipeTowerBoxCompartments compartments = WipeTowerBoxCompartments::One,
+                                                                              bool ring = false)
 {
+    config.enable_filament_ramming.value     = ! ring;
     config.wipe_tower_box_compartments.value = compartments;
     config.wipe_tower_type.value        = WipeTowerType::Type3;
     config.wipe_tower_type3_shape.value = WipeTowerType3Shape::Box;
@@ -536,32 +539,144 @@ TEST_CASE("A box tower purges into its front and back walls by turns", "[WipeTow
 }
 
 TEST_CASE("Box tower lines lie a line spacing apart", "[WipeTower][Type3Box]") {
+    const bool        ring = GENERATE(false, true);
     PrintConfig       config;
     PrintRegionConfig region;
     WipeTower2       *tower  = nullptr;
-    const auto        layers = generate_box_tower(tower, config, region, 12);
+    const auto        layers = generate_box_tower(tower, config, region, 12, WipeTowerBoxCompartments::One, ring);
     std::unique_ptr<WipeTower2> owner(tower);
 
-    // The lines across the tower (along x): two of them overlapping in x must be at least most of a
-    // line spacing apart in y, or the material doubles up along them and builds a ridge.
-    for (size_t l = 0; l < layers.size(); ++ l) {
-        struct Line { float y, x0, x1; };
-        std::vector<Line> lines;
+    // Lines along an axis: two of them side by side must be at least most of a line spacing apart,
+    // or the material doubles up along them and builds a ridge.
+    for (int axis : { 0, 1 })
+        for (size_t l = 0; l < layers.size(); ++ l) {
+            struct Line { float at, from, to; };
+            std::vector<Line> lines;
+            for (const WipeTower::ToolChangeResult &tcr : layers[l])
+                for (size_t i = 1; i < tcr.extrusions.size(); ++ i) {
+                    const Vec2f a = tcr.extrusions[i - 1].pos, b = tcr.extrusions[i].pos;
+                    if (tcr.extrusions[i].width > 0.f && std::abs(a[1 - axis] - b[1 - axis]) < 1e-3f && std::abs(a[axis] - b[axis]) > 2.f)
+                        lines.push_back({ a[1 - axis], std::min(a[axis], b[axis]), std::max(a[axis], b[axis]) });
+                }
+            for (size_t i = 0; i < lines.size(); ++ i)
+                for (size_t j = i + 1; j < lines.size(); ++ j) {
+                    const float d = std::abs(lines[i].at - lines[j].at);
+                    if (d < 1e-3f || std::min(lines[i].to, lines[j].to) - std::max(lines[i].from, lines[j].from) < 1.f)
+                        continue; // the same line drawn twice in a row, or lines end to end
+                    INFO("ring " << ring << ", axis " << axis << ", layer " << l << ": lines at " << lines[i].at << " and " << lines[j].at);
+                    CHECK(d > 0.35f);
+                }
+        }
+}
+
+TEST_CASE("Without ramming a box tower purges around its opening", "[WipeTower][Type3Box]") {
+    PrintConfig       config;
+    PrintRegionConfig region;
+    WipeTower2       *tower  = nullptr;
+    const auto        layers = generate_box_tower(tower, config, region, 10, WipeTowerBoxCompartments::One, true);
+    std::unique_ptr<WipeTower2> owner(tower);
+
+    const WipeTower2::BoxShape box = tower->get_box_shape();
+    const float width = tower->width(), depth = tower->get_depth();
+    // Square, grown around the configured 40 mm box, whose opening keeps its size.
+    CHECK_THAT(depth, WithinAbs(width, 1e-4));
+    CHECK(width > 40.f);
+    CHECK_THAT(box.cavity.x(), WithinAbs(40.f - 2.f * (0.5f + 4.f * 0.46f), 1e-3));
+    const Vec2f lo(0.5f * (width - box.cavity.x()), 0.5f * (depth - box.cavity.y()));
+    const Vec2f hi = lo + box.cavity;
+    // The purges reach the walls left and right of the opening, besides the front and back ones.
+    size_t left = 0, right = 0, front = 0, back = 0;
+    for (const auto &layer : layers)
+        for (const WipeTower::ToolChangeResult &tcr : layer) {
+            if (tcr.initial_tool == tcr.new_tool)
+                continue;
+            for (size_t i = 1; i < tcr.extrusions.size(); ++ i) {
+                if (tcr.extrusions[i].width <= 0.f)
+                    continue;
+                const Vec2f p = 0.5f * (tcr.extrusions[i - 1].pos + tcr.extrusions[i].pos);
+                const bool beside = p.y() > lo.y() + 1.f && p.y() < hi.y() - 1.f;
+                left  += beside && p.x() < lo.x() - 2.f;
+                right += beside && p.x() > hi.x() + 2.f;
+                front += p.y() < lo.y() - 2.f;
+                back  += p.y() > hi.y() + 2.f;
+            }
+        }
+    CHECK(left > 0);
+    CHECK(right > 0);
+    CHECK(front > 0);
+    CHECK(back > 0);
+    // And the opening stays empty above the floor.
+    auto in_opening = [&](const Vec2f &p) { return p.x() > lo.x() + 0.3f && p.x() < hi.x() - 0.3f && p.y() > lo.y() + 0.3f && p.y() < hi.y() - 0.3f; };
+    for (size_t l = 0; l < layers.size(); ++ l)
+        if (0.2f * float(l + 1) > box.floor + 1e-3f) {
+            INFO("layer " << l);
+            CHECK(count_segments(layers[l], in_opening).first == 0);
+        }
+}
+
+TEST_CASE("With ramming a box tower purges into its front and back walls", "[WipeTower][Type3Box]") {
+    PrintConfig       config;
+    PrintRegionConfig region;
+    WipeTower2       *tower  = nullptr;
+    const auto        layers = generate_box_tower(tower, config, region, 10);
+    std::unique_ptr<WipeTower2> owner(tower);
+    // The configured width, and deeper for the purge walls in front of and behind the opening.
+    CHECK_THAT(tower->width(), WithinAbs(40.f, 1e-4));
+    CHECK(tower->get_depth() > tower->width() + 5.f);
+}
+
+TEST_CASE("A box tower's walls end in a solid rim", "[WipeTower][Type3Box]") {
+    PrintConfig       config;
+    PrintRegionConfig region;
+    WipeTower2       *tower  = nullptr;
+    // With ramming the purge stays in front, and the back wall of each layer is infill only.
+    const auto        layers = generate_box_tower(tower, config, region, 20);
+    std::unique_ptr<WipeTower2> owner(tower);
+    const float depth = tower->get_depth(), centre = 0.5f * depth;
+    // Lines across the wall the layer did not purge into (behind the opening as printed: the
+    // layers are turned by turns, so the wall facing away from that layer's purge).
+    auto infill_lines = [&](size_t l) {
+        bool   purge_front = true;
+        for (const WipeTower::ToolChangeResult &tcr : layers[l])
+            if (tcr.initial_tool != tcr.new_tool && ! tcr.extrusions.empty())
+                purge_front = tcr.extrusions.back().pos.y() < centre;
+        size_t lines = 0;
         for (const WipeTower::ToolChangeResult &tcr : layers[l])
             for (size_t i = 1; i < tcr.extrusions.size(); ++ i) {
                 const Vec2f a = tcr.extrusions[i - 1].pos, b = tcr.extrusions[i].pos;
-                if (tcr.extrusions[i].width > 0.f && std::abs(a.y() - b.y()) < 1e-3f && std::abs(a.x() - b.x()) > 2.f)
-                    lines.push_back({ a.y(), std::min(a.x(), b.x()), std::max(a.x(), b.x()) });
+                const bool far_wall = purge_front ? a.y() > depth - 3.f : a.y() < 3.f;
+                lines += tcr.extrusions[i].width > 0.f && far_wall && std::abs(a.y() - b.y()) < 1e-3f && std::abs(a.x() - b.x()) > 10.f;
             }
-        for (size_t i = 0; i < lines.size(); ++ i)
-            for (size_t j = i + 1; j < lines.size(); ++ j) {
-                const float dy = std::abs(lines[i].y - lines[j].y);
-                if (dy < 1e-3f || std::min(lines[i].x1, lines[j].x1) - std::max(lines[i].x0, lines[j].x0) < 1.f)
-                    continue; // the same line drawn twice in a row, or lines side by side
-                INFO("layer " << l << ": lines at y = " << lines[i].y << " and " << lines[j].y);
-                CHECK(dy > 0.35f);
-            }
-    }
+        return lines;
+    };
+    // Below the rim the far wall is the sparse infill's outline; within the top 1 mm (the floor
+    // thickness) it is solid.
+    CHECK(infill_lines(19) > infill_lines(10) + 2);
+}
+
+TEST_CASE("The Cone wall type braces a box tower's base", "[WipeTower][Type3Box]") {
+    PrintConfig       config;
+    PrintRegionConfig region;
+    config.wipe_tower_wall_type.value  = WipeTowerWallType::wtwCone;
+    config.wipe_tower_cone_angle.value = 90.;
+    WipeTower2 *tower  = nullptr;
+    // 40 mm high: the cone's radius, 40 mm at the bed, reaches past the ~44 mm box near the bed.
+    const auto  layers = generate_box_tower(tower, config, region, 200, WipeTowerBoxCompartments::One, true);
+    std::unique_ptr<WipeTower2> owner(tower);
+    // The outline bulges past the box near the bed (the cone's ellipse reaches out along the
+    // depth), and not at the top.
+    auto reach = [&](size_t l) {
+        float y_min = 0.f, y_max = 0.f;
+        for (const WipeTower::ToolChangeResult &tcr : layers[l])
+            for (size_t i = 1; i < tcr.extrusions.size(); ++ i)
+                if (tcr.extrusions[i].width > 0.f) {
+                    y_min = std::min(y_min, tcr.extrusions[i].pos.y());
+                    y_max = std::max(y_max, tcr.extrusions[i].pos.y());
+                }
+        return y_max - y_min;
+    };
+    CHECK(reach(1) > tower->get_depth() + 1.f);
+    CHECK(reach(199) < tower->get_depth() + 0.5f);
 }
 
 TEST_CASE("The box tower mesh has the opening above its floor", "[WipeTower][Type3Box]") {

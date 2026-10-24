@@ -5958,8 +5958,8 @@ void Print::_make_wipe_tower()
                                          this->wipe_tower_type() == WipeTowerType::Type3 ? false : (config().wipe_tower_wall_type.value == WipeTowerWallType::wtwRib),
                                          wipe_tower.get_rib_width(), wipe_tower.get_rib_length(),
                                          this->wipe_tower_type() == WipeTowerType::Type3 ? false : config().wipe_tower_fillet_wall.value,
-                                         this->wipe_tower_type() == WipeTowerType::Type3 ? 0.f : (config().wipe_tower_wall_type.value == WipeTowerWallType::wtwCone ?
-                                             (float) config().wipe_tower_cone_angle.value : 0.f),
+                                         (this->wipe_tower_type() == WipeTowerType::Type3 && ! wipe_tower.get_box_shape().valid()) ? 0.f :
+                                             (config().wipe_tower_wall_type.value == WipeTowerWallType::wtwCone ? (float) config().wipe_tower_cone_angle.value : 0.f),
                                          this->wipe_tower_type() == WipeTowerType::Type3,
                                          wipe_tower.get_box_shape());
         const Vec3d origin                      = Vec3d::Zero();
@@ -7570,10 +7570,18 @@ void WipeTowerData::construct_mesh(float width, float depth, float height, float
     if (width < EPSILON || depth < EPSILON || height < EPSILON) return;
     if (box.valid()) {
         wipe_tower_mesh_data->real_wipe_tower_mesh = TriangleMesh(WipeTower2::its_make_box_tower(width, depth, height, box));
-        wipe_tower_mesh_data->real_brim_mesh       = make_cube(width + 2 * brim_width, depth + 2 * brim_width, first_layer_height);
-        wipe_tower_mesh_data->real_brim_mesh.translate({-brim_width, -brim_width, 0});
-        wipe_tower_mesh_data->bottom = {scaled(Vec2f{-brim_width, -brim_width}), scaled(Vec2f{width + brim_width, -brim_width}),
-                                        scaled(Vec2f{width + brim_width, depth + brim_width}), scaled(Vec2f{-brim_width, depth + brim_width})};
+        if (cone_angle > EPSILON) {
+            // A box braced by a stabilization cone: as the cone tower below, the bottom carries its bulge.
+            wipe_tower_mesh_data->bottom = WipeTower2::cone_base_polygon(width, depth, height, cone_angle);
+            if (Polygons brim_bottom = offset(wipe_tower_mesh_data->bottom, scaled(brim_width)); ! brim_bottom.empty())
+                wipe_tower_mesh_data->bottom = brim_bottom.front();
+            wipe_tower_mesh_data->real_brim_mesh = WipeTower::its_make_rib_brim(wipe_tower_mesh_data->bottom, first_layer_height);
+        } else {
+            wipe_tower_mesh_data->real_brim_mesh = make_cube(width + 2 * brim_width, depth + 2 * brim_width, first_layer_height);
+            wipe_tower_mesh_data->real_brim_mesh.translate({-brim_width, -brim_width, 0});
+            wipe_tower_mesh_data->bottom = {scaled(Vec2f{-brim_width, -brim_width}), scaled(Vec2f{width + brim_width, -brim_width}),
+                                            scaled(Vec2f{width + brim_width, depth + brim_width}), scaled(Vec2f{-brim_width, depth + brim_width})};
+        }
     } else if (is_lego) {
         indexed_triangle_set brick_its = its_make_cube(width, depth, height);
         const float stud_r = 2.4f;
