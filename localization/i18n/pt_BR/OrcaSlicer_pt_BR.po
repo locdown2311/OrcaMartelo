@@ -37937,8 +37937,9 @@ msgstr ""
 msgid "Notice: Native auto-leveling probes with a cold bed. Keep unchecked if using heated bed leveling in start G-code."
 msgstr "Aviso: O nivelamento nativo mede com a mesa fria. Mantenha desmarcado se usar nivelamento quente no G-code inicial."
 
-msgid "Probe and compensate the build plate before this print.\nNotice: Native firmware routine probes with a cold bed. Keep unchecked if your start G-code levels with a heated bed."
-msgstr "Sonda e compensa a mesa antes desta impressão.\nAviso: A rotina nativa da impressora mede com a mesa fria. Mantenha desmarcado se o seu G-code inicial fizer nivelamento com a mesa quente."
+# AI Translated
+msgid "Probe the build plate and build a bed mesh before this print. The printer heats the bed to the first layer temperature before probing."
+msgstr "Mede a mesa e gera a malha de nivelamento antes desta impressão. A impressora aquece a mesa até a temperatura da primeira camada antes de medir."
 
 msgid "Print Job Name:"
 msgstr "Nome do Trabalho:"
@@ -37946,5 +37947,14 @@ msgstr "Nome do Trabalho:"
 msgid "Target Material Slot:"
 msgstr "Slot de Destino:"
 
-msgid "💡 Notice: Stock auto-leveling probes cold. Keep unchecked to use heated bed leveling from start G-code."
-msgstr "💡 Aviso: O nivelamento nativo mede com a mesa fria. Mantenha desmarcado para nivelar com a mesa quente no G-code inicial."
+# AI Translated
+msgid "💡 Recommended: the bed is probed at the first layer temperature. Uncheck only if your start G-code builds the bed mesh itself."
+msgstr "💡 Recomendado: a mesa é medida na temperatura da primeira camada. Desmarque só se o seu G-code inicial gerar a malha por conta própria."
+
+# AI Translated
+msgid "Sending through Rinkhals Moonraker: auto leveling and calibrations follow the Moonraker app settings in Rinkhals, and Rinkhals loads the first mapped slot when no filament is loaded."
+msgstr "Enviando pelo Moonraker do Rinkhals: o nivelamento automático e as calibrações seguem as configurações do app Moonraker no Rinkhals, e o Rinkhals carrega o primeiro slot mapeado quando não há filamento carregado."
+
+# AI Translated
+msgid "Filament %1% has no matching ACE tool. Rinkhals maps at most one filament per ACE slot."
+msgstr "O filamento %1% não tem ferramenta correspondente no ACE. O Rinkhals mapeia no máximo um filamento por slot do ACE."

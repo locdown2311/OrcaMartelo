@@ -136,7 +136,7 @@ void AnycubicPrintHostSendDialog::init()
         const std::string value = app_config->get("recent", key);
         return value == "1" || value == "true";
     };
-    m_auto_leveling = load_bool(CONFIG_KEY_LEVELING, false);
+    m_auto_leveling = load_bool(CONFIG_KEY_LEVELING, true);
     m_resonance_compensation = load_bool(CONFIG_KEY_RESONANCE, false);
     m_flow_calibration = load_bool(CONFIG_KEY_FLOW, false);
     m_timelapse = load_bool(CONFIG_KEY_TIMELAPSE, false);
@@ -432,11 +432,11 @@ void AnycubicPrintHostSendDialog::init()
     content_sizer->Add(calibration_title, 0, wxEXPAND | wxBOTTOM, FromDIP(10));
 
     m_cb_auto_leveling = add_toggle(CONFIG_KEY_LEVELING, _L("Auto Leveling"),
-        _L("Probe and compensate the build plate before this print.\nNotice: Native firmware routine probes with a cold bed. Keep unchecked if your start G-code levels with a heated bed."),
+        _L("Probe the build plate and build a bed mesh before this print. The printer heats the bed to the first layer temperature before probing."),
         &m_auto_leveling);
 
     auto* leveling_note = new wxStaticText(this, wxID_ANY,
-        _L("💡 Notice: Stock auto-leveling probes cold. Keep unchecked to use heated bed leveling from start G-code."));
+        _L("💡 Recommended: the bed is probed at the first layer temperature. Uncheck only if your start G-code builds the bed mesh itself."));
     leveling_note->SetFont(::Label::Body_10);
     leveling_note->SetForegroundColour(wxColour(245, 158, 11));
     leveling_note->Wrap(FromDIP(540));
