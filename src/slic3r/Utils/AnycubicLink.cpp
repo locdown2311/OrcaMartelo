@@ -608,6 +608,31 @@ static bool ensure_anycubic_gcode_header_in_text(std::string& gcode)
     return modified;
 }
 
+// Anycubic Slicer Next ships Metadata/plate_1.gcode.metadata next to the plate G-code: the G-code up to the
+// end of the start G-code (header, thumbnails, start sequence) followed by everything after
+// EXECUTABLE_BLOCK_END (statistics and config). The printer reads the job settings from this short file.
+static std::string anycubic_gcode_metadata(const std::string& gcode)
+{
+    size_t head_end = gcode.find("\n; EXECUTABLE_BLOCK_HEAD");
+    if (head_end == std::string::npos) {
+        // OrcaSlicer has no EXECUTABLE_BLOCK_HEAD: the start G-code ends with the extrusion mode line.
+        const std::string mode_line = "\nM83 ; use relative distances for extrusion";
+        head_end = gcode.find(mode_line);
+        if (head_end != std::string::npos)
+            head_end += mode_line.size();
+        else
+            head_end = gcode.find("\n;LAYER_CHANGE");
+    }
+    const std::string block_end = "; EXECUTABLE_BLOCK_END";
+    size_t tail_begin = gcode.rfind(block_end);
+    if (head_end == std::string::npos || tail_begin == std::string::npos || tail_begin < head_end)
+        return {};
+    tail_begin += block_end.size();
+    while (tail_begin < gcode.size() && (gcode[tail_begin] == '\n' || gcode[tail_begin] == '\r'))
+        ++tail_begin;
+    return gcode.substr(0, head_end) + "\n\n\n" + gcode.substr(tail_begin);
+}
+
 // Anycubic firmware expects the first plate's G-code at Metadata/plate_1.gcode
 // and the thumbnail at Metadata/plate_1.png (and/or Metadata/thumbnail.png).
 // When the user prints a different plate (e.g. plate 4), the 3MF contains
@@ -759,11 +784,13 @@ bool rename_plate_to_first_in_3mf(const boost::filesystem::path& src_path, boost
     }
 
     bool gcode_modified = false;
+    std::string plate_metadata_content;
     if (!plate_gcode_content.empty()) {
         gcode_modified = ensure_anycubic_gcode_header_in_text(plate_gcode_content);
         if (gcode_modified) {
             plate_md5_content = boost::to_upper_copy(md5_hex(plate_gcode_content));
         }
+        plate_metadata_content = anycubic_gcode_metadata(plate_gcode_content);
     }
 
     // Second pass: write all files, renaming the plate and thumbnails if found
@@ -778,6 +805,9 @@ bool rename_plate_to_first_in_3mf(const boost::filesystem::path& src_path, boost
             if (gcode_modified || plate_gcode_name != "Metadata/plate_1.gcode") any_renamed = true;
         } else if (entry_name == plate_gcode_name + ".md5") {
             writer_ok = mz_zip_writer_add_mem(&writer, "Metadata/plate_1.gcode.md5", plate_md5_content.data(), plate_md5_content.size(), MZ_DEFAULT_COMPRESSION) != 0;
+        } else if (boost::ends_with(entry_name, ".gcode.metadata") && !plate_metadata_content.empty()) {
+            // Replaced by the one written below, made from the final plate G-code.
+            any_renamed = true;
         } else if (!plate_png_name.empty() && entry_name == plate_png_name) {
             writer_ok = mz_zip_writer_add_mem(&writer, "Metadata/plate_1.png", plate_png_content.data(), plate_png_content.size(), MZ_DEFAULT_COMPRESSION) != 0;
             if (plate_png_name != "Metadata/plate_1.png") any_renamed = true;
@@ -788,6 +818,11 @@ bool rename_plate_to_first_in_3mf(const boost::filesystem::path& src_path, boost
         }
         if (!writer_ok)
             break;
+    }
+
+    if (writer_ok && !plate_metadata_content.empty()) {
+        writer_ok = mz_zip_writer_add_mem(&writer, "Metadata/plate_1.gcode.metadata", plate_metadata_content.data(), plate_metadata_content.size(), MZ_DEFAULT_COMPRESSION) != 0;
+        any_renamed = true;
     }
 
     // Ensure Metadata/thumbnail.png is present in 3MF archive
