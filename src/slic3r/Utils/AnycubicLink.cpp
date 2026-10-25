@@ -660,6 +660,27 @@ static bool ensure_anycubic_gcode_header_in_text(std::string& gcode)
     return modified;
 }
 
+// Anycubic Slicer Next adds the plate seen from above (Metadata/top_N.png, 512 x 512) to the G-code
+// header as a second thumbnail tagged "top". The printer's screen calls a G-code without it
+// incomplete when the file is chosen there.
+static bool anycubic_add_top_thumbnail(std::string& gcode, const std::string& png)
+{
+    if (png.empty() || gcode.find("; thumbnail begin 512x512") != std::string::npos)
+        return false;
+    const std::string block_end = "; THUMBNAIL_BLOCK_END\n";
+    const size_t      pos       = gcode.find(block_end);
+    if (pos == std::string::npos)
+        return false;
+    std::string encoded(boost::beast::detail::base64::encoded_size(png.size()), '\0');
+    encoded.resize(boost::beast::detail::base64::encode(encoded.data(), png.data(), png.size()));
+    std::string block = "\n; THUMBNAIL_BLOCK_START\n; thumbnail begin 512x512 " + std::to_string(encoded.size()) + " top\n";
+    for (size_t i = 0; i < encoded.size(); i += 78)
+        block += "; " + encoded.substr(i, 78) + "\n";
+    block += "; thumbnail end\n" + block_end;
+    gcode.insert(pos + block_end.size(), block);
+    return true;
+}
+
 // Anycubic Slicer Next ships Metadata/plate_1.gcode.metadata next to the plate G-code: the G-code up to the
 // end of the start G-code (header, thumbnails, start sequence) followed by everything after
 // EXECUTABLE_BLOCK_END (statistics and config). The printer reads the job settings from this short file.
@@ -741,6 +762,8 @@ bool rename_plate_to_first_in_3mf(const boost::filesystem::path& src_path, boost
     std::string plate_png_name;
     std::string plate_png_content;
     std::string plate_small_png_name;
+    std::string plate_top_png_name;
+    std::string plate_top_png_content;
     std::string plate_small_png_content;
     bool has_thumbnail_png = false;
 
@@ -802,6 +825,7 @@ bool rename_plate_to_first_in_3mf(const boost::filesystem::path& src_path, boost
         std::string plate_prefix = plate_gcode_name.substr(0, plate_gcode_name.length() - 6);
         plate_png_name = plate_prefix + ".png";
         plate_small_png_name = plate_prefix + "_small.png";
+        plate_top_png_name = "Metadata/top_" + plate_prefix.substr(std::string("Metadata/plate_").size()) + ".png";
     }
 
     // Extract thumbnail images if available
@@ -811,7 +835,13 @@ bool rename_plate_to_first_in_3mf(const boost::filesystem::path& src_path, boost
             continue;
 
         std::string entry_name = stat.m_filename;
-        if (!plate_png_name.empty() && entry_name == plate_png_name) {
+        if (!plate_top_png_name.empty() && entry_name == plate_top_png_name) {
+            size_t uncomp_size = 0;
+            if (void* data = mz_zip_reader_extract_file_to_heap(&reader, entry_name.c_str(), &uncomp_size, 0); data) {
+                plate_top_png_content = std::string(static_cast<const char*>(data), uncomp_size);
+                free(data);
+            }
+        } else if (!plate_png_name.empty() && entry_name == plate_png_name) {
             size_t uncomp_size = 0;
             void* data = mz_zip_reader_extract_file_to_heap(&reader, entry_name.c_str(), &uncomp_size, 0);
             if (data) {
@@ -838,7 +868,8 @@ bool rename_plate_to_first_in_3mf(const boost::filesystem::path& src_path, boost
     bool gcode_modified = false;
     std::string plate_metadata_content;
     if (!plate_gcode_content.empty()) {
-        gcode_modified = ensure_anycubic_gcode_header_in_text(plate_gcode_content);
+        gcode_modified = anycubic_add_top_thumbnail(plate_gcode_content, plate_top_png_content);
+        gcode_modified = ensure_anycubic_gcode_header_in_text(plate_gcode_content) || gcode_modified;
         if (gcode_modified) {
             plate_md5_content = boost::to_upper_copy(md5_hex(plate_gcode_content));
         }
