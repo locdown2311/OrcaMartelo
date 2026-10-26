@@ -51,6 +51,7 @@ add_executable(${_TEST_NAME}_tests
     test_segment_support_bounds.cpp
     test_fit_to_bed.cpp
     test_slicing.cpp
+    test_wipe_tower_placement.cpp
     test_minimum_spanning_tree.cpp
     test_nozzle_volume_type.cpp
     test_obj.cpp

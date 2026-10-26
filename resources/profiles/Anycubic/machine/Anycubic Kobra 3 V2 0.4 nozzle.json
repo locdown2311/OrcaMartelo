@@ -162,6 +162,7 @@
 	"preferred_orientation": "0",
 	"printer_flush_multiplier": "1",
 	"printer_notes": "",
+	"nozzle_wiper_position": "right",
 	"printer_structure": "i3",
 	"printhost_authorization_type": "key",
 	"printhost_ssl_ignore_revoke": "0",

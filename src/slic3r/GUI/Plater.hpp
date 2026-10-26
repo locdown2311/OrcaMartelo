@@ -559,6 +559,8 @@ public:
     void scale_selection_to_fit_print_volume();
     // Cut the selected object, too large for the printable volume, into pieces that fit (FitToBedDialog).
     void split_selection_to_fit_bed();
+    // Moves the current plate's wipe tower beside its parts, toward the nozzle wiper (WipeTowerPlacement.hpp).
+    void place_wipe_tower_beside_parts();
     void convert_unit(ConversionType conv_type);
     // BBS: replace z with plane_points
     void cut(size_t obj_idx, size_t instance_idx, std::array<Vec3d, 4> plane_points, ModelObjectCutAttributes attributes);
@@ -791,6 +793,7 @@ public:
     bool can_fix_through_cgal() const;
     bool can_simplify() const;
     bool can_split_to_fit_bed() const;
+    bool can_place_wipe_tower_beside_parts() const;
     bool can_smooth_mesh() const;
     bool can_split_to_objects() const;
     bool can_split_to_volumes() const;

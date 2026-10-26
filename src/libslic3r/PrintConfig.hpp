@@ -136,6 +136,17 @@ enum class WipeTowerType {
     Type3,
 };
 
+// Where the nozzle is wiped or purged on a filament change, seen from the front of the printer:
+// beside the bed at an end of the X axis, or at the back. The wipe tower is placed on the way from
+// there to the parts (WipeTowerPlacement.hpp).
+enum class NozzleWiperPosition {
+    None,
+    Left,
+    Right,
+    RearLeft,
+    RearRight,
+};
+
 // What the Type 3 tower is shaped as: a Lego brick, or an open box whose walls take the purge.
 enum class WipeTowerType3Shape {
     Brick,
@@ -822,6 +833,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(FuzzySkinMode)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(TopSurfaceExpansionDirection)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerType3Shape)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(NozzleWiperPosition)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerBoxCompartments)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(NoiseType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(InfillPattern)
@@ -1968,6 +1980,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloats,              filament_stamping_loading_speed))
     ((ConfigOptionFloats,              filament_stamping_distance))
     ((ConfigOptionEnum<WipeTowerType>, wipe_tower_type))
+    ((ConfigOptionEnum<NozzleWiperPosition>, nozzle_wiper_position))
     ((ConfigOptionBool,                purge_in_prime_tower))
     ((ConfigOptionBool,                enable_filament_ramming))
     ((ConfigOptionBool,                tool_change_on_wipe_tower))

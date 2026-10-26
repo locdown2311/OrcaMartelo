@@ -201,6 +201,7 @@
 #include "../Utils/PrintHost.hpp"
 #include "../Utils/AnycubicLink.hpp"
 #include "../Utils/Moonraker.hpp"
+#include "libslic3r/WipeTowerPlacement.hpp"
 #include "MainFrame.hpp"
 #ifdef SLIC3R_CAD
 #include "slic3r/GUI/CAD/DesignPanel.hpp"
@@ -19731,6 +19732,53 @@ bool Plater::can_split_to_fit_bed() const
     const int obj_idx = selection.get_object_idx();
     return obj_idx >= 0 && obj_idx < int(p->model.objects.size()) &&
            ! instance_fits_printable_volume(*p->model.objects[obj_idx], selection.get_instance_idx());
+}
+
+bool Plater::can_place_wipe_tower_beside_parts() const
+{
+    const int  plate_idx = p->partplate_list.get_curr_plate_index();
+    PartPlate *plate     = p->partplate_list.get_plate(plate_idx);
+    return printer_technology() == ptFFF && plate != nullptr && ! plate->empty() &&
+           bool(p->view3D->get_canvas3d()->get_wipe_tower_info(plate_idx));
+}
+
+void Plater::place_wipe_tower_beside_parts()
+{
+    if (! can_place_wipe_tower_beside_parts())
+        return;
+    const int                       plate_idx = p->partplate_list.get_curr_plate_index();
+    PartPlate                      *plate     = p->partplate_list.get_plate(plate_idx);
+    const GLCanvas3D::WipeTowerInfo wti       = p->view3D->get_canvas3d()->get_wipe_tower_info(plate_idx);
+    const DynamicPrintConfig        config    = wxGetApp().preset_bundle->full_config();
+
+    // The tower's size as arrange reserves it: the body, and around it the brim and any cone bulge.
+    Vec3d tower_pos, tower_size;
+    const arrangement::ArrangePolygon reserved = plate->estimate_wipe_tower_polygon(config, plate_idx, tower_pos, tower_size,
+                                                                                    int(plate->get_extruders(true).size()));
+    const BoundingBox reserved_bb = get_extents(reserved.poly.contour);
+
+    // In the plate's coordinates, as wipe_tower_x / wipe_tower_y.
+    const Vec3d         origin = plate->get_origin();
+    const BoundingBoxf3 parts  = plate->get_objects_bounding_box();
+    const Vec2d         size   = plate->get_size();
+    WipeTowerPlacementInput in;
+    in.parts        = BoundingBoxf(to_2d(parts.min - origin), to_2d(parts.max - origin));
+    in.parts_height = parts.max.z() - parts.min.z();
+    in.tower_size   = to_2d(tower_size);
+    in.tower_brim   = std::max(0., 0.5 * (unscaled(reserved_bb.size().x()) - tower_size.x()));
+    in.bed          = BoundingBoxf(Vec2d(WIPE_TOWER_MARGIN, WIPE_TOWER_MARGIN), size - Vec2d(WIPE_TOWER_MARGIN, WIPE_TOWER_MARGIN));
+    in.wiper        = config.opt_enum<NozzleWiperPosition>("nozzle_wiper_position");
+    in.bed_slinger  = config.opt_enum<PrinterStructure>("printer_structure") == PrinterStructure::psI3;
+    in.current      = to_2d(tower_pos);
+
+    const std::optional<Vec2d> pos = Slic3r::place_wipe_tower_beside_parts(in);
+    if (! pos) {
+        show_info(this, _L("There is no room on the plate for the prime tower beside the parts."), _L("Place prime tower"));
+        return;
+    }
+    take_snapshot("Place prime tower");
+    wti.apply_wipe_tower(*pos + to_2d(origin), wti.rotation());
+    update();
 }
 
 void Plater::convert_unit(ConversionType conv_type)

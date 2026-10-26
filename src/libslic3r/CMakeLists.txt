@@ -573,6 +573,8 @@ set(lisbslic3r_sources
     WaveOverhangs/IGenerator.hpp
     WaveOverhangs/AndersonsGenerator.cpp
     WaveOverhangs/AndersonsGenerator.hpp
+    WipeTowerPlacement.cpp
+    WipeTowerPlacement.hpp
     Zipper.cpp
     Zipper.hpp
     FilamentGroup.hpp

@@ -1937,6 +1937,11 @@ void MenuFactory::create_plate_menu()
             return !plate->get_objects().empty();
         }, m_parent);
 
+    append_menu_item(menu, wxID_ANY, _L("Place prime tower beside the parts"),
+        _L("Move the prime tower next to the parts, on the way from the nozzle wiper set in the printer settings"),
+        [](wxCommandEvent&) { plater()->place_wipe_tower_beside_parts(); }, "", nullptr,
+        []() { return plater()->can_place_wipe_tower_beside_parts(); }, m_parent);
+
     // arrange objects on current plate
     append_menu_item(menu, wxID_ANY, _L("Arrange"), _L("Arrange current plate"),
         [](wxCommandEvent&) {

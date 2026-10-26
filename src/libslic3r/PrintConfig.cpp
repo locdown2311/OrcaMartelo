@@ -305,6 +305,15 @@ static t_config_enum_values s_keys_map_WipeTowerType3Shape {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(WipeTowerType3Shape)
 
+static t_config_enum_values s_keys_map_NozzleWiperPosition {
+    { "none",       int(NozzleWiperPosition::None) },
+    { "left",       int(NozzleWiperPosition::Left) },
+    { "right",      int(NozzleWiperPosition::Right) },
+    { "rear_left",  int(NozzleWiperPosition::RearLeft) },
+    { "rear_right", int(NozzleWiperPosition::RearRight) }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(NozzleWiperPosition)
+
 static t_config_enum_values s_keys_map_WipeTowerBoxCompartments {
     { "one",  int(WipeTowerBoxCompartments::One) },
     { "two",  int(WipeTowerBoxCompartments::Two) },
@@ -7625,6 +7634,27 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.emplace_back(L("Type 3 (Lego Brick)"));
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<WipeTowerType>(WipeTowerType::Type2));
+
+    def = this->add("nozzle_wiper_position", coEnum);
+    def->label = L("Nozzle wiper position");
+    def->tooltip = L("Where the nozzle is wiped or purged on a filament change, seen from the front of the printer: "
+                     "beside the bed at the left or right end of the X axis, or at the back. "
+                     "\"Place prime tower beside the parts\" puts the tower on the way from there to the parts.");
+    def->enum_keys_map = &ConfigOptionEnum<NozzleWiperPosition>::get_enum_values();
+    def->enum_values.emplace_back("none");
+    def->enum_values.emplace_back("left");
+    def->enum_values.emplace_back("right");
+    def->enum_values.emplace_back("rear_left");
+    def->enum_values.emplace_back("rear_right");
+    def->enum_labels.emplace_back(L("Not set"));
+    // TRN: Position of the nozzle wiper, seen from the front of the printer.
+    def->enum_labels.emplace_back(L_CONTEXT("Left", "Nozzle wiper"));
+    // TRN: Position of the nozzle wiper, seen from the front of the printer.
+    def->enum_labels.emplace_back(L_CONTEXT("Right", "Nozzle wiper"));
+    def->enum_labels.emplace_back(L("Rear left"));
+    def->enum_labels.emplace_back(L("Rear right"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<NozzleWiperPosition>(NozzleWiperPosition::None));
 
     def = this->add("purge_in_prime_tower", coBool);
     def->label = L("Purge in prime tower");
