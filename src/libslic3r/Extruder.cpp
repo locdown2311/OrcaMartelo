@@ -5,6 +5,7 @@
 #include "libslic3r.h"
 #include <cassert>
 #include <algorithm>
+#include <string>
 #include <cmath>
 #include "Config.hpp"
 #include "I18N.hpp"
@@ -138,6 +139,12 @@ void Extruder::set_retracted(double retracted, double restart_extra)
     }
 }
 
+void Extruder::drop_retraction(double length)
+{
+    double &retracted = m_share_extruder ? m_share_retracted[extruder_id()] : m_retracted;
+    retracted = std::max(0., retracted - length);
+}
+
 // Used filament volume in mm^3.
 double Extruder::extruded_volume() const
 {
@@ -226,16 +233,18 @@ double Extruder::retract_restart_extra() const
     return m_config->retract_restart_extra.get_at(m_config_index);
 }
 
+bool Extruder::slicer_retracts_when_cut() const
+{
+    if (! m_config->long_retractions_when_cut.get_at(m_config_index) || m_config->retraction_distances_when_cut.get_at(m_config_index) <= 0)
+        return false;
+    const std::string &cfg = m_config->change_filament_gcode.value;
+    return cfg.find("retraction_distance_when_cut") == std::string::npos && cfg.find("retraction_distances_when_cut") == std::string::npos;
+}
+
 double Extruder::retract_length_toolchange() const
 {
-    if (m_config->long_retractions_when_cut.get_at(m_config_index) &&
-        m_config->retraction_distances_when_cut.get_at(m_config_index) > 0) {
-        const std::string& cfg = m_config->change_filament_gcode.value;
-        if (cfg.find("retraction_distance_when_cut") == std::string::npos &&
-            cfg.find("retraction_distances_when_cut") == std::string::npos) {
-            return m_config->retraction_distances_when_cut.get_at(m_config_index);
-        }
-    }
+    if (this->slicer_retracts_when_cut())
+        return m_config->retraction_distances_when_cut.get_at(m_config_index);
     return m_config->retract_length_toolchange.get_at(m_config_index);
 }
 

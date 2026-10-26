@@ -388,6 +388,56 @@ TEST_CASE("Toolchange gcode is bracketed against FanMover splitting its moves", 
     CHECK(count_occurrences(gcode_str, ";_FAN_MOVER_SKIP_START") <= 1);
 }
 
+// Long retraction when cut, with a change filament G-code that leaves it to the slicer (a bare
+// T<n>, the printer cutting and loading the filament itself): the slicer retracts that distance
+// before the tool change, and the new filament, which the printer loads to the nozzle, does not
+// push it back out on the wipe tower. With the option off nothing of it is emitted.
+TEST_CASE("The long retraction when cut is not undone after the printer loads the next filament", "[MultiFilament]")
+{
+    const bool long_retraction = GENERATE(false, true);
+    CAPTURE(long_retraction);
+    const std::vector<std::vector<Slic3r::ConfigBase::SetDeserializeItem>> per_object_overrides = {
+        { { "extruder", "1" } }, { { "extruder", "2" } }
+    };
+    DynamicPrintConfig config = multifilament_config(2, {
+        { "single_extruder_multi_material", true },
+        { "change_filament_gcode",          "T[next_extruder]\n" },
+        { "long_retractions_when_cut",      long_retraction ? "1" : "0" },
+        { "retraction_distances_when_cut",  "20" },
+        { "retract_length_toolchange",      "0" },
+        { "use_relative_e_distances",       true },
+        { "enable_prime_tower",             true },
+        { "wipe_tower_type",                "type2" },
+        { "prime_tower_width",              35 },
+        { "wipe_tower_x",                   120 },
+        { "wipe_tower_y",                   120 },
+        { "printable_area",                 "0x0,200x0,200x200,0x200" },
+        { "skirt_loops",                    0 },
+        { "brim_type",                      "no_brim" },
+    });
+    std::string gcode = slice_with_object_overrides({ cube(20), cube(20) }, config, per_object_overrides);
+    gcode.erase(gcode.find("; CONFIG_BLOCK_START"));
+
+    // Moves of the filament alone by the cut's retraction distance: the wipe tower's own ramming and
+    // loading moves are of other lengths.
+    size_t retractions = 0, restorations = 0;
+    std::istringstream lines(gcode);
+    std::string        line;
+    const std::regex   filament_only(R"(^G1 E(-?[0-9.]+)(\s.*)?$)");
+    std::smatch        m;
+    while (std::getline(lines, line))
+        if (std::regex_match(line, m, filament_only)) {
+            const double e = std::stod(m[1].str());
+            retractions  += std::abs(e + 20.) < 1e-3;
+            restorations += std::abs(e - 20.) < 1e-3;
+        }
+    CHECK(restorations == 0);
+    if (long_retraction)
+        CHECK(retractions > 0);
+    else
+        CHECK(retractions == 0);
+}
+
 // With wait_for_temp_on_wipe_tower the blocking M109 moves from right after the Tn command to
 // a stop point parked beside the wipe tower (heat-up drool falls next to the tower, not onto
 // its top): tagged with _WAIT_FOR_TEMP_ON_WIPE_TOWER, after the toolchange and before the

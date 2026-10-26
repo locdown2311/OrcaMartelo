@@ -11141,6 +11141,10 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
 
     // prepend retraction on the current extruder
     std::string gcode = this->retract(true, false);
+    // The retraction before a cut the slicer made itself, for the long retraction when cut.
+    const Extruder *old_filament   = m_writer.filament();
+    const double    cut_retraction = old_filament != nullptr && old_filament->is_share_extruder() && old_filament->slicer_retracts_when_cut() ?
+        old_filament->retract_length_toolchange() : 0.;
 
     // Always reset the extrusion path, even if the tool change retract is set to zero.
     m_wipe.reset_path();
@@ -11465,6 +11469,12 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
     std::string toolchange_command = m_writer.toolchange(new_filament_id, next_nozzle_id);
     if (Extruder *fil = m_writer.filament())
         fil->set_config_index((int)get_filament_config_index((int)fil->id()));
+    // With the long retraction when cut, the printer cuts the old filament and loads the new one to
+    // the nozzle itself: that retraction is not undone with the new filament, which would push its
+    // whole length out at one spot of the wipe tower.
+    if (cut_retraction > 0.)
+        if (Extruder *fil = m_writer.filament())
+            fil->drop_retraction(cut_retraction);
     // See imex_suppresses_bare_toolchange() — only suppress the print-start initial
     // T<n> in parallel modes (the user's imex_mode_gcode + machine_start_gcode owns
     // tool activation there). Mid-print T<n> emits normally; Print::validate blocks

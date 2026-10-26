@@ -67,6 +67,8 @@ public:
     void   set_position(double e) { m_E = e; }
     // Sets current retraction value & restart extra filament amount if retracted > 0.
     void   set_retracted(double retracted, double restart_extra);
+    // Takes length off the retraction still to be undone, without moving the filament.
+    void   drop_retraction(double length);
     
     double filament_diameter() const;
     double filament_crossection() const { return this->filament_diameter() * this->filament_diameter() * 0.25 * PI; }
@@ -82,6 +84,9 @@ public:
     int    deretract_speed() const;
     double retract_restart_extra() const;
     double retract_length_toolchange() const;
+    // Long retraction when cut is on and the change filament G-code leaves it to the slicer, which
+    // then retracts by that distance before the tool change.
+    bool   slicer_retracts_when_cut() const;
     double retract_restart_extra_toolchange() const;
     double travel_slope() const;
 
