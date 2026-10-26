@@ -379,6 +379,8 @@ private:
     // entry, the gap and the wipe scrub all share one opening.
     Vec2f toolchange_entry_pos(float depth_traversed, float ramming_depth, bool first_layer) const
     {
+        if (m_box_ring)
+            return box_ring_entry(m_perimeter_width + depth_traversed);
         Vec2f pos(m_perimeter_width / 2.f, m_perimeter_width / 2.f + depth_traversed);
         if (!m_semm && m_use_gap_wall && ramming_depth > 0.f)
             pos.y() += wipe_start_offset_after_ram(ramming_depth, first_layer);
@@ -511,6 +513,13 @@ private:
     // Purge `rows` rows of the ring from y: the full rows in front of the opening, the split rows
     // up its left side and down its right side (crossing the opening once), the full rows behind it.
     void box_ring_wipe(WipeTowerWriter2 &writer, float y, int rows, float dy, float target_speed);
+    // Where a ring purge starting on the row at y enters the tower, and the tool changes: a few mm
+    // along the row from its start, so the drool left by the change lands on the row the purge then
+    // runs over, not on the tower's corner, where it piled up into blobs.
+    Vec2f box_ring_entry(float y) const;
+    // Travel to (x, y) without crossing the box's opening above its floor, where the travel would
+    // leave strings: around a corner of the opening when the straight way crosses it.
+    void box_travel(WipeTowerWriter2 &writer, float x, float y, float feedrate = 0.f) const;
 
     void compute_wall_skip_points();
 

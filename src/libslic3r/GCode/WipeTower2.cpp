@@ -12,6 +12,7 @@
 #include <map>
 #include <string>
 #include <math.h>
+#include <array>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -1440,7 +1441,8 @@ WipeTower::ToolChangeResult WipeTower2::tool_change(size_t tool)
                                 (is_first_layer() || m_filpar[tool].temperature == 0 ? m_filpar[tool].first_layer_temperature : m_filpar[tool].temperature);
         toolchange_Change(writer, tool, m_filpar[tool].material, wait_for_temp, true); // Change the tool, set a speed override for soluble and flex materials.
         toolchange_Load(writer, cleaning_box);
-        writer.travel(writer.x(), writer.y()-m_perimeter_width); // cooling and loading were done a bit down the road
+        if (! m_box_ring) // the ring purge starts where the tool changed
+            writer.travel(writer.x(), writer.y()-m_perimeter_width); // cooling and loading were done a bit down the road
         int base_temp = is_first_layer() ? m_filpar[tool].first_layer_temperature : m_filpar[tool].temperature;
         if (interface_layer) {
             int interface_temp = m_filpar[tool].interface_print_temperature;
@@ -1463,6 +1465,8 @@ WipeTower::ToolChangeResult WipeTower2::tool_change(size_t tool)
             writer.set_extrusion_flow(m_extrusion_flow * m_extra_flow)
                   .change_analyzer_line_width(wipe_line_width())
                   .append("; CP TOOLCHANGE WIPE\n");
+            // Nothing above moved the nozzle off the entry, where the tool changed: the purge starts there.
+            writer.set_position(box_ring_entry(m_perimeter_width + m_depth_traversed));
             box_ring_wipe(writer, m_perimeter_width + m_depth_traversed, int(std::lround(wipe_area / dy)), dy,
                           is_first_layer() ? m_first_layer_speed * 60.f : std::min(m_wipe_tower_max_purge_speed * 60.f, m_infill_speed * 60.f));
             writer.set_extrusion_flow(m_extrusion_flow).change_analyzer_line_width(m_perimeter_width);
@@ -3070,6 +3074,64 @@ void WipeTower2::plan_box()
         layer.depth = m_wipe_tower_depth - m_perimeter_width;
 }
 
+Vec2f WipeTower2::box_ring_entry(float y) const
+{
+    const float lo = box_core_lo(), hi = box_core_hi();
+    const float x_from = m_perimeter_width;
+    const float x_to   = y > lo + WT_EPSILON && y < hi - WT_EPSILON ? box_core_left() : m_wipe_tower_width - m_perimeter_width;
+    return Vec2f(std::min(x_from + 5.f, 0.5f * (x_from + x_to)), y);
+}
+
+void WipeTower2::box_travel(WipeTowerWriter2 &writer, float x, float y, float feedrate) const
+{
+    const Vec2f from = writer.pos(), to(x, y);
+    const float x0 = 0.5f * (m_wipe_tower_width - m_box_cavity.x()), x1 = x0 + m_box_cavity.x();
+    const float y0 = m_box_cavity_y, y1 = y0 + m_box_cavity.y();
+    // Whether a straight move crosses the opening's interior (Liang-Barsky clipping).
+    auto crosses = [x0, x1, y0, y1](const Vec2f &a, const Vec2f &b) {
+        float       t0 = 0.f, t1 = 1.f;
+        const Vec2f d  = b - a;
+        const float p[4] = { -d.x(), d.x(), -d.y(), d.y() };
+        const float q[4] = { a.x() - x0, x1 - a.x(), a.y() - y0, y1 - a.y() };
+        for (int i = 0; i < 4; ++ i) {
+            if (std::abs(p[i]) < 1e-9f) {
+                if (q[i] <= 0.f)
+                    return false;
+            } else {
+                const float t = q[i] / p[i];
+                if (p[i] < 0.f) t0 = std::max(t0, t); else t1 = std::min(t1, t);
+            }
+        }
+        return t1 - t0 > 1e-4f;
+    };
+    const bool open = m_box_cavity.x() > WT_EPSILON && m_z_pos > m_box_floor + WT_EPSILON;
+    if (open && crosses(from, to)) {
+        // Around the opening by its corners, just outside the loops lining it: one corner if it sees
+        // both ends, else two on the same side.
+        const float l = box_core_left(), r = box_core_right(), b = box_core_lo(), t = box_core_hi();
+        const std::array<Vec2f, 4> corners = { Vec2f(l, b), Vec2f(r, b), Vec2f(r, t), Vec2f(l, t) };
+        float best = std::numeric_limits<float>::max();
+        std::vector<Vec2f> way;
+        for (size_t i = 0; i < 4; ++ i) {
+            const Vec2f &c = corners[i];
+            if (! crosses(from, c) && ! crosses(c, to) && (c - from).norm() + (to - c).norm() < best) {
+                best = (c - from).norm() + (to - c).norm();
+                way  = { c };
+            }
+            for (const Vec2f &n : { corners[(i + 1) % 4], corners[(i + 3) % 4] }) {
+                const float len = (c - from).norm() + (n - c).norm() + (to - n).norm();
+                if (! crosses(from, c) && ! crosses(n, to) && len < best) {
+                    best = len;
+                    way  = { c, n };
+                }
+            }
+        }
+        for (const Vec2f &w : way)
+            writer.travel(w.x(), w.y(), feedrate);
+    }
+    writer.travel(x, y, feedrate);
+}
+
 void WipeTower2::box_ring_wipe(WipeTowerWriter2 &writer, float y, int rows, float dy, float target_speed)
 {
     const float xa = m_perimeter_width, xb = m_wipe_tower_width - m_perimeter_width;
@@ -3092,8 +3154,14 @@ void WipeTower2::box_ring_wipe(WipeTowerWriter2 &writer, float y, int rows, floa
     auto zigzag = [&](const std::vector<float> &ys, float x_from, float x_to) {
         if (ys.empty() || x_to - x_from < m_perimeter_width)
             return;
-        bool to_right = std::abs(writer.x() - x_from) <= std::abs(writer.x() - x_to);
-        writer.travel(to_right ? x_from : x_to, ys.front());
+        bool to_right;
+        if (std::abs(writer.y() - ys.front()) < WT_EPSILON && writer.x() > x_from && writer.x() < x_to) {
+            // On the first row (the tool changed there): purge from here to its farther end.
+            to_right = x_to - writer.x() >= writer.x() - x_from;
+        } else {
+            to_right = std::abs(writer.x() - x_from) <= std::abs(writer.x() - x_to);
+            box_travel(writer, to_right ? x_from : x_to, ys.front());
+        }
         for (size_t i = 0; i < ys.size(); ++ i) {
             writer.extrude(to_right ? x_to : x_from, ys[i], speed);
             speed_up();
@@ -3129,7 +3197,7 @@ void WipeTower2::box_finish_layer(WipeTowerWriter2 &writer, float purge_end_y, f
         if (solid_fill) {
             const int   n  = std::max(1, int(std::floor((yr - yl) / spacing)));
             const float dy = n > 1 ? (yr - yl) / float(n - 1) : 0.f;
-            writer.travel(xl, yl, feedrate);
+            box_travel(writer, xl, yl, feedrate);
             for (int i = 0; i < n; ++ i) {
                 const float y = n > 1 ? yl + dy * float(i) : 0.5f * (yl + yr);
                 if (i > 0)
@@ -3138,7 +3206,7 @@ void WipeTower2::box_finish_layer(WipeTowerWriter2 &writer, float purge_end_y, f
             }
             return;
         }
-        writer.travel(xl, yl, feedrate);
+        box_travel(writer, xl, yl, feedrate);
         writer.rectangle(Vec2f(xl, yl), xr - xl, yr - yl, feedrate);
         const int   n  = 1 + int((xr - xl) / m_bridging);
         const float dx = (xr - xl) / float(n);
@@ -3162,9 +3230,10 @@ void WipeTower2::box_finish_layer(WipeTowerWriter2 &writer, float purge_end_y, f
         if (purge_end_y <= lo + WT_EPSILON)
             fill_rect(m_perimeter_width, purge_end_y, width - m_perimeter_width, lo, solid);
         const float beside_from = std::max(purge_end_y, lo + spacing), beside_to = hi - spacing;
+        // Left, behind, right: each next to the last, so the travels between them go round the opening.
         fill_rect(m_perimeter_width, beside_from, box_core_left(), beside_to, solid);
-        fill_rect(box_core_right(), beside_from, width - m_perimeter_width, beside_to, solid);
         fill_rect(m_perimeter_width, std::max(purge_end_y, hi), width - m_perimeter_width, depth - m_perimeter_width, solid);
+        fill_rect(box_core_right(), beside_from, width - m_perimeter_width, beside_to, solid);
     } else {
         fill_rect(m_perimeter_width, purge_end_y, width - m_perimeter_width, y0 - loops - 0.5f * spacing, solid);
         fill_rect(m_perimeter_width, y1 + loops + 0.5f * spacing, width - m_perimeter_width, depth - m_perimeter_width, solid);
@@ -3172,7 +3241,7 @@ void WipeTower2::box_finish_layer(WipeTowerWriter2 &writer, float purge_end_y, f
     // The loops around the opening, from the inside out.
     for (int i = 0; i < m_box_loops; ++ i) {
         const float o = (float(i) + 0.5f) * spacing;
-        writer.travel(x0 - o, y0 - o, feedrate);
+        box_travel(writer, x0 - o, y0 - o, feedrate);
         writer.rectangle(Vec2f(x0 - o, y0 - o), x1 - x0 + 2.f * o, y1 - y0 + 2.f * o, feedrate);
     }
     // The dividers above the floor, each a few lines thick and reaching into the innermost loop: one

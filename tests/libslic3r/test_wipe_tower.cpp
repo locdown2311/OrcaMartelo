@@ -9,6 +9,9 @@
 #include <utility>
 #include "libslic3r/libslic3r.h"
 #include <cstddef>
+#include <cstdlib>
+#include <sstream>
+#include <string>
 
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -612,6 +615,69 @@ TEST_CASE("Without ramming a box tower purges around its opening", "[WipeTower][
             INFO("layer " << l);
             CHECK(count_segments(layers[l], in_opening).first == 0);
         }
+}
+
+TEST_CASE("A box tower's tool changes start off its corners and its travels skirt the opening", "[WipeTower][Type3Box]") {
+    PrintConfig       config;
+    PrintRegionConfig region;
+    WipeTower2       *tower  = nullptr;
+    const auto        layers = generate_box_tower(tower, config, region, 12, WipeTowerBoxCompartments::One, true);
+    std::unique_ptr<WipeTower2> owner(tower);
+
+    const WipeTower2::BoxShape box = tower->get_box_shape();
+    const float width = tower->width(), depth = tower->get_depth();
+    const Vec2f lo(0.5f * (width - box.cavity.x()), 0.5f * (depth - box.cavity.y()));
+    const Vec2f hi = lo + box.cavity;
+    for (size_t l = 0; l < layers.size(); ++ l)
+        for (const WipeTower::ToolChangeResult &tcr : layers[l]) {
+            if (tcr.initial_tool == tcr.new_tool)
+                continue;
+            // The tool changes where the purge starts, a few mm along its first row: the drool lands
+            // on that row, not on a corner of the tower.
+            for (const Vec2f &corner : { Vec2f(0.f, 0.f), Vec2f(width, 0.f), Vec2f(width, depth), Vec2f(0.f, depth) }) {
+                INFO("layer " << l << ", start " << tcr.start_pos.x() << ", " << tcr.start_pos.y());
+                CHECK((tcr.start_pos - corner).norm() > 4.f);
+            }
+        }
+    // No travel crosses the opening above the floor. The travels are read from the G-code: the
+    // extrusions record only where each extrusion starts, not the way the nozzle went there.
+    auto in_opening = [&](const Vec2f &p) { return p.x() > lo.x() + 0.3f && p.x() < hi.x() - 0.3f && p.y() > lo.y() + 0.3f && p.y() < hi.y() - 0.3f; };
+    for (size_t l = 0; l < layers.size(); ++ l) {
+        if (0.2f * float(l + 1) <= box.floor + 1e-3f)
+            continue;
+        size_t crossing = 0;
+        for (const WipeTower::ToolChangeResult &tcr : layers[l]) {
+            std::istringstream gcode(tcr.gcode);
+            std::string        line;
+            Vec2f              pos(-1.f, -1.f);
+            while (std::getline(gcode, line)) {
+                if (line.rfind("G1 ", 0) != 0)
+                    continue;
+                Vec2f next = pos;
+                bool  extrudes = false, moves = false;
+                std::istringstream words(line.substr(3));
+                std::string        word;
+                while (words >> word) {
+                    const char axis = word.front();
+                    if (axis == 'X' || axis == 'Y') {
+                        next[axis == 'X' ? 0 : 1] = std::strtof(word.c_str() + 1, nullptr);
+                        moves = true;
+                    } else if (axis == 'E')
+                        extrudes = true;
+                }
+                if (moves && ! extrudes && pos.x() >= 0.f && pos.y() >= 0.f)
+                    for (int k = 1; k < 20; ++ k)
+                        if (in_opening(pos + (next - pos) * (float(k) / 20.f))) {
+                            UNSCOPED_INFO("layer " << l << ": " << line);
+                            ++ crossing;
+                            break;
+                        }
+                pos = next;
+            }
+        }
+        INFO("layer " << l);
+        CHECK(crossing == 0);
+    }
 }
 
 TEST_CASE("With ramming a box tower purges into its front and back walls", "[WipeTower][Type3Box]") {
