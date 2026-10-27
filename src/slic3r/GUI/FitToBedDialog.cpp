@@ -1,5 +1,6 @@
 #include "FitToBedDialog.hpp"
 
+#include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "I18N.hpp"
 #include "format.hpp"

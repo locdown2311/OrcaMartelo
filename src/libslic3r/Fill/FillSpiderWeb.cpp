@@ -105,7 +105,7 @@ void FillSpiderWeb::_fill_surface_single(
     // Smooth corners if enabled
     if (params.smooth_factor > 0) {
         for (Polyline &pl : all_polylines) {
-            smooth_polyline_corners(pl, params.smooth_factor, scaled<double>(params.resolution));
+            smooth_polyline_corners(pl, params.corner_smoothing());
         }
     }
 

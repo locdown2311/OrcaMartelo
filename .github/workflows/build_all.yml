@@ -6,6 +6,7 @@ on:
      - main
      - release/*
      - v2.5.0-custom
+     - v2.5.0-beta-custom
     paths:
      - 'deps/**'
      - 'deps_src/**'
@@ -26,6 +27,7 @@ on:
      - main
      - release/*
      - v2.5.0-custom
+     - v2.5.0-beta-custom
     paths:
      - 'deps/**'
      - 'deps_src/**'
