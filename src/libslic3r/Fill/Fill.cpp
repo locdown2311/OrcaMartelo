@@ -1794,7 +1794,7 @@ int Layer::choose_ironing_extruder(const PrintRegionConfig &cfg,
 }
 
 // Create ironing extrusions over top surfaces.
-void Layer::make_ironing()
+void Layer::make_ironing(const ExPolygons &painted)
 {
 	// LayerRegion::slices contains surfaces marked with SurfaceType.
 	// Here we want to collect top surfaces extruded with the same extruder.
@@ -1805,6 +1805,8 @@ void Layer::make_ironing()
 		InfillPattern pattern;
 		int 		extruder 	= -1;
 		bool 		just_infill = false;
+		// Ironed for the ironing brush only: just the top surfaces within the painted area.
+		bool 		painted 	= false;
 		// Spacing of the ironing lines, also to calculate the extrusion flow from.
 		double 		line_spacing;
 		// Height of the extrusion, to calculate the extrusion flow from.
@@ -1817,6 +1819,7 @@ void Layer::make_ironing()
 		bool operator<(const IroningParams &rhs) const {
             RETURN_COMPARE_NON_EQUAL(extruder);
             RETURN_COMPARE_NON_EQUAL(just_infill);
+            RETURN_COMPARE_NON_EQUAL(painted);
             RETURN_COMPARE_NON_EQUAL(line_spacing);
             RETURN_COMPARE_NON_EQUAL(height);
             RETURN_COMPARE_NON_EQUAL(speed);
@@ -1829,6 +1832,7 @@ void Layer::make_ironing()
 		bool operator==(const IroningParams &rhs) const {
 			return  this->extruder == rhs.extruder  && 
                     this->just_infill == rhs.just_infill &&
+                    this->painted == rhs.painted &&
 				    this->line_spacing == rhs.line_spacing && 
                     this->height == rhs.height && 
                     this->speed == rhs.speed && 
@@ -1866,6 +1870,13 @@ void Layer::make_ironing()
 				config,
 				/*spiral_mode=*/this->object()->print()->config().spiral_mode,
 				/*is_topmost_layer=*/layerm->layer()->upper_layer == nullptr);
+			if (ironing_params.extruder == -1 && ! painted.empty() &&
+				(config.top_shell_layers > 0 || this->object()->print()->config().spiral_mode)) {
+				// Not ironed by its settings, but the ironing brush painted over this layer: its top
+				// surfaces within the paint are ironed, with the region's ironing settings.
+				ironing_params.extruder = config.top_surface_filament_id;
+				ironing_params.painted  = true;
+			}
 			if (ironing_params.extruder != -1) {
 				//TODO just_infill is currently not used.
 				ironing_params.just_infill 	= false;
@@ -1942,6 +1953,14 @@ void Layer::make_ironing()
 			for (size_t k = i; k < j; ++ k) {
 				const IroningParams		 &ironing_params  = by_extruder[k];
 				const PrintRegionConfig  &region_config   = ironing_params.layerm->region().config();
+				if (ironing_params.painted) {
+					ExPolygons tops;
+					for (const Surface &surface : ironing_params.layerm->slices.surfaces)
+						if (surface.surface_type == stTop)
+							tops.emplace_back(surface.expolygon);
+					polygons_append(polys, intersection(tops, painted));
+					continue;
+				}
 				bool					  iron_everything = region_config.ironing_type == IroningType::AllSolid;
 				bool					  iron_completely = iron_everything;
 				if (iron_everything) {

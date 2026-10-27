@@ -37,7 +37,7 @@ enum class Shortcut : uint8_t {
     Arrange, ArrangePlate, Orient, OrientPlate,
     MoveSelectionLeft, MoveSelectionRight, MoveSelectionUp, MoveSelectionDown, RotateSelectionLeft, RotateSelectionRight,
     // Gizmos
-    GizmoMove, GizmoRotate, GizmoScale, GizmoFlatten, GizmoCut, GizmoMeshBoolean, GizmoFdmSupports, GizmoSeam, GizmoFuzzySkin,
+    GizmoMove, GizmoRotate, GizmoScale, GizmoFlatten, GizmoCut, GizmoMeshBoolean, GizmoFdmSupports, GizmoSeam, GizmoFuzzySkin, GizmoIroning,
     GizmoMmuSegmentation, GizmoEmboss, GizmoMeasure, GizmoAssembly, GizmoBrimEars, GizmoDisplacement,
     // Sliders
     GoToLayer, LayerSliderUp, LayerSliderDown, MovesSliderLeft, MovesSliderRight, MovesSliderStart, MovesSliderEnd,

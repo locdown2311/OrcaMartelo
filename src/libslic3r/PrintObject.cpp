@@ -850,13 +850,15 @@ void PrintObject::ironing()
 {
     if (this->set_started(posIroning)) {
         BOOST_LOG_TRIVIAL(debug) << "Ironing in parallel - start";
+        const std::vector<ExPolygons> painted = this->project_ironing_paint();
+        static const ExPolygons       unpainted;
         tbb::parallel_for(
             // Ironing starting with layer 0 to support ironing all surfaces.
             tbb::blocked_range<size_t>(0, m_layers.size()),
-            [this](const tbb::blocked_range<size_t>& range) {
+            [this, &painted](const tbb::blocked_range<size_t>& range) {
                 for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
                     m_print->throw_if_canceled();
-                    m_layers[layer_idx]->make_ironing();
+                    m_layers[layer_idx]->make_ironing(painted.empty() ? unpainted : painted[layer_idx]);
                 }
             }
         );
@@ -5791,6 +5793,44 @@ void PrintObject::project_and_append_custom_facets(
                 }
             }
         }
+}
+
+std::vector<ExPolygons> PrintObject::project_ironing_paint() const
+{
+    if (! this->model_object()->is_ironing_painted())
+        return {};
+    // The upward facing painted triangles, in the sliced object's frame.
+    indexed_triangle_set up;
+    const Transform3d object_trafo = this->trafo_sliced();
+    for (const ModelVolume *mv : this->model_object()->volumes)
+        if (mv->is_model_part() && mv->is_ironing_painted()) {
+            const indexed_triangle_set facets = mv->ironing_facets.get_facets_strict(*mv, EnforcerBlockerType::ENFORCER);
+            const Transform3f          tr     = (object_trafo * mv->get_matrix()).cast<float>();
+            for (const stl_triangle_vertex_indices &tri : facets.indices) {
+                const Vec3f a = tr * facets.vertices[tri(0)], b = tr * facets.vertices[tri(1)], c = tr * facets.vertices[tri(2)];
+                Vec3f n = (b - a).cross(c - a);
+                if (tr.matrix().determinant() < 0.f)
+                    n = -n;
+                if (n.z() <= 0.05f * n.norm())
+                    continue;
+                const int first = int(up.vertices.size());
+                up.vertices.insert(up.vertices.end(), { a, b, c });
+                up.indices.emplace_back(first, first + 1, first + 2);
+            }
+        }
+    std::vector<Polygons> per_slab;
+    project_triangles_to_slabs(this->layers(), up, Transform3f::Identity(), /*seam=*/true, per_slab);
+    // A top surface lies at the top of its layer, which is where the slab above starts: a flat face there
+    // may be given to either, so a layer takes the paint of the slab above it too.
+    std::vector<ExPolygons> out(m_layers.size());
+    for (size_t i = 0; i < out.size() && i < per_slab.size(); ++ i) {
+        Polygons polys = per_slab[i];
+        if (i + 1 < per_slab.size())
+            append(polys, per_slab[i + 1]);
+        if (! polys.empty())
+            out[i] = union_ex(polys);
+    }
+    return out;
 }
 
 const Layer* PrintObject::get_layer_at_printz(coordf_t print_z) const {

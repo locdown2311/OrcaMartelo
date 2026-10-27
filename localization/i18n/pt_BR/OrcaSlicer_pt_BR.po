@@ -35052,6 +35052,38 @@ msgstr ""
 "Evitar empenamento\n"
 "Você sabia que ao imprimir materiais propensos ao empenamento como ABS, aumentar adequadamente a temperatura da mesa aquecida pode reduzir a probabilidade de empenamento?"
 
+# AI Translated
+msgid "Paint-on ironing"
+msgstr "Pintura de alisamento"
+
+# AI Translated
+msgid "Entering Paint-on ironing"
+msgstr "Entrando em pintura de alisamento"
+
+# AI Translated
+msgid "Leaving Paint-on ironing"
+msgstr "Saindo de pintura de alisamento"
+
+# AI Translated
+msgid "Paint-on ironing editing"
+msgstr "Edição de pintura de alisamento"
+
+# AI Translated
+msgid "Add ironing"
+msgstr "Adicionar alisamento"
+
+# AI Translated
+msgid "Remove ironing"
+msgstr "Remover alisamento"
+
+# AI Translated
+msgid "The painted top surfaces are ironed with the ironing settings, even with ironing off."
+msgstr "As superfícies superiores pintadas são alisadas com as configurações de alisamento, mesmo com o alisamento desligado."
+
+# AI Translated
+msgid "Gizmo FDM paint-on ironing"
+msgstr "Gizmo de pintura de alisamento FDM"
+
 #~ msgid "Please choose the filament color"
 #~ msgstr "Escolha a cor do filamento"
 
