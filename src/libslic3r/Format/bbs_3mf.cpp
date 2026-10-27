@@ -356,6 +356,8 @@ static constexpr const char* AUTO_DROP_ATTR = "auto_drop";
 static constexpr const char* INSTANCESCOUNT_ATTR = "instances_count";
 static constexpr const char* CUSTOM_SUPPORTS_ATTR = "paint_supports";
 static constexpr const char* CUSTOM_FUZZY_SKIN_ATTR  = "paint_fuzzy_skin";
+// OrcaMartelo: older readers ignore the attribute, and so lose only the ironing paint.
+static constexpr const char* CUSTOM_IRONING_ATTR     = "paint_ironing";
 static constexpr const char* CUSTOM_SEAM_ATTR = "paint_seam";
 static constexpr const char* MMU_SEGMENTATION_ATTR = "paint_color";
 // Texture displacement. One paint mask per layer slot, mirroring paint_color; the layer stack itself is
@@ -858,6 +860,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             std::vector<std::string> custom_seam;
             std::vector<std::string> mmu_segmentation;
             std::vector<std::string> fuzzy_skin;
+            std::vector<std::string> ironing;
             // One per texture displacement layer slot, indexed like `triangles` but stored only as far as the
             // slot's last painted triangle: empty when the slot has no paint, which is nearly every file.
             std::vector<std::string> texture_displacement[TEXTURE_DISPLACEMENT_MAX_LAYERS];
@@ -881,6 +884,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 custom_seam.clear();
                 mmu_segmentation.clear();
                 fuzzy_skin.clear();
+                ironing.clear();
                 for (std::vector<std::string> &slot : texture_displacement)
                     slot.clear();
             }
@@ -4112,6 +4116,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             m_curr_object->geometry.custom_seam.push_back(bbs_get_attribute_value_string(attributes, num_attributes, CUSTOM_SEAM_ATTR));
             m_curr_object->geometry.mmu_segmentation.push_back(bbs_get_attribute_value_string(attributes, num_attributes, MMU_SEGMENTATION_ATTR));
             m_curr_object->geometry.fuzzy_skin.push_back(bbs_get_attribute_value_string(attributes, num_attributes, CUSTOM_FUZZY_SKIN_ATTR));
+            m_curr_object->geometry.ironing.push_back(bbs_get_attribute_value_string(attributes, num_attributes, CUSTOM_IRONING_ATTR));
             for (int slot = 0; slot < int(TEXTURE_DISPLACEMENT_MAX_LAYERS); ++slot)
                 if (const char *paint = bbs_get_attribute_value_charptr(attributes, num_attributes, TEXTURE_DISPLACEMENT_ATTRS[slot])) {
                     std::vector<std::string> &mask = m_curr_object->geometry.texture_displacement[slot];
@@ -5450,6 +5455,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 volume->seam_facets.reserve(triangles_count);
                 volume->mmu_segmentation_facets.reserve(triangles_count);
                 volume->fuzzy_skin_facets.reserve(triangles_count);
+                volume->ironing_facets.reserve(triangles_count);
                 for (size_t i=0; i<triangles_count; ++i) {
                     assert(i < sub_object->geometry.custom_supports.size());
                     assert(i < sub_object->geometry.custom_seam.size());
@@ -5463,6 +5469,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                         volume->mmu_segmentation_facets.set_triangle_from_string(i, sub_object->geometry.mmu_segmentation[i]);
                     if (!sub_object->geometry.fuzzy_skin[i].empty())
                         volume->fuzzy_skin_facets.set_triangle_from_string(i, sub_object->geometry.fuzzy_skin[i]);
+                    if (i < sub_object->geometry.ironing.size() && !sub_object->geometry.ironing[i].empty())
+                        volume->ironing_facets.set_triangle_from_string(i, sub_object->geometry.ironing[i]);
                 }
                 volume->supported_facets.shrink_to_fit();
                 volume->seam_facets.shrink_to_fit();
@@ -5470,6 +5478,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 volume->mmu_segmentation_facets.touch();
                 volume->fuzzy_skin_facets.shrink_to_fit();
                 volume->fuzzy_skin_facets.touch();
+                volume->ironing_facets.shrink_to_fit();
+                volume->ironing_facets.touch();
                 for (int slot = 0; slot < int(TEXTURE_DISPLACEMENT_MAX_LAYERS); ++slot) {
                     const std::vector<std::string> &mask = sub_object->geometry.texture_displacement[slot];
                     if (mask.empty())
@@ -5988,6 +5998,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             current_object->geometry.custom_seam.push_back(bbs_get_attribute_value_string(attributes, num_attributes, CUSTOM_SEAM_ATTR));
             current_object->geometry.mmu_segmentation.push_back(bbs_get_attribute_value_string(attributes, num_attributes, MMU_SEGMENTATION_ATTR));
             current_object->geometry.fuzzy_skin.push_back(bbs_get_attribute_value_string(attributes, num_attributes, CUSTOM_FUZZY_SKIN_ATTR));
+            current_object->geometry.ironing.push_back(bbs_get_attribute_value_string(attributes, num_attributes, CUSTOM_IRONING_ATTR));
             for (int slot = 0; slot < int(TEXTURE_DISPLACEMENT_MAX_LAYERS); ++slot)
                 if (const char *paint = bbs_get_attribute_value_charptr(attributes, num_attributes, TEXTURE_DISPLACEMENT_ATTRS[slot])) {
                     std::vector<std::string> &mask = current_object->geometry.texture_displacement[slot];
@@ -7458,6 +7469,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                                     && (shared_volume->seam_facets.equals(volume->seam_facets))
                                     && (shared_volume->mmu_segmentation_facets.equals(volume->mmu_segmentation_facets))
                                     && (shared_volume->fuzzy_skin_facets.equals(volume->fuzzy_skin_facets))
+                                    && (shared_volume->ironing_facets.equals(volume->ironing_facets))
                                     && same_texture_paint)
                                 {
                                     auto data = iter->second.first;
@@ -7871,6 +7883,15 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     output_buffer += CUSTOM_FUZZY_SKIN_ATTR;
                     output_buffer += "=\"";
                     output_buffer += fuzzy_skin_painting_data_string;
+                    output_buffer += "\"";
+                }
+
+                std::string ironing_painting_data_string = volume->ironing_facets.get_triangle_as_string(i);
+                if (!ironing_painting_data_string.empty()) {
+                    output_buffer += " ";
+                    output_buffer += CUSTOM_IRONING_ATTR;
+                    output_buffer += "=\"";
+                    output_buffer += ironing_painting_data_string;
                     output_buffer += "\"";
                 }
 

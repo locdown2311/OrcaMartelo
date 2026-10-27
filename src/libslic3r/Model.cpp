@@ -1513,6 +1513,11 @@ bool ModelObject::is_fuzzy_skin_painted() const
     return std::any_of(this->volumes.cbegin(), this->volumes.cend(), [](const ModelVolume *mv) { return mv->is_fuzzy_skin_painted(); });
 }
 
+bool ModelObject::is_ironing_painted() const
+{
+    return std::any_of(this->volumes.cbegin(), this->volumes.cend(), [](const ModelVolume *mv) { return mv->is_model_part() && mv->is_ironing_painted(); });
+}
+
 void ModelObject::sort_volumes(bool full_sort)
 {
     // sort volumes inside the object to order "Model Part, Negative Volume, Modifier, Support Blocker and Support Enforcer. "
@@ -2040,6 +2045,7 @@ void ModelObject::convert_units(ModelObjectPtrs& new_objects, ConversionType con
             vol->seam_facets.assign(volume->seam_facets);
             vol->mmu_segmentation_facets.assign(volume->mmu_segmentation_facets);
             vol->fuzzy_skin_facets.assign(volume->fuzzy_skin_facets);
+            vol->ironing_facets.assign(volume->ironing_facets);
 
             // Perform conversion only if the target "imperial" state is different from the current one.
             // This check supports conversion of "mixed" set of volumes, each with different "imperial" state.
@@ -2155,6 +2161,7 @@ void ModelVolume::reset_extra_facets()
     this->seam_facets.reset();
     this->mmu_segmentation_facets.reset();
     this->fuzzy_skin_facets.reset();
+    this->ironing_facets.reset();
     // Texture-displacement paint data has no remap-across-topology-change support yet (see
     // build_texture_displacement()'s documented limitation), so it must be dropped here rather
     // than left referring to a mesh that no longer matches it.
@@ -2175,6 +2182,7 @@ std::optional<TriangleSelector::SavedPainting> ModelVolume::save_painting() cons
         sp.seam      = seam_facets.get_data();
         sp.mmu       = mmu_segmentation_facets.get_data();
         sp.fuzzy     = fuzzy_skin_facets.get_data();
+        sp.ironing   = ironing_facets.get_data();
         return sp;
     }
 
@@ -2207,6 +2215,7 @@ void ModelVolume::restore_painting(const std::optional<TriangleSelector::SavedPa
     remap_one(saved->seam,      seam_facets);
     remap_one(saved->mmu,       mmu_segmentation_facets);
     remap_one(saved->fuzzy,     fuzzy_skin_facets);
+    remap_one(saved->ironing,   ironing_facets);
 }
 
 static void invalidate_translations(ModelObject* object, const ModelInstance* src_instance)
@@ -2319,6 +2328,7 @@ void ModelObject::split(ModelObjectPtrs* new_objects, const bool remap_paint)
                 COPY_FACETS(seam_facets);
                 COPY_FACETS(mmu_segmentation_facets);
                 COPY_FACETS(fuzzy_skin_facets);
+                COPY_FACETS(ironing_facets);
             } else if (saved_painting) {
                 // Geometry changed, attempt to remap them to the new mesh
                 new_vol->restore_painting(saved_painting);
@@ -3082,6 +3092,7 @@ void ModelVolume::assign_new_unique_ids_recursive()
     seam_facets.set_new_unique_id();
     mmu_segmentation_facets.set_new_unique_id();
     fuzzy_skin_facets.set_new_unique_id();
+    ironing_facets.set_new_unique_id();
     // As set_new_unique_id() already does: the undo/redo stack stores FacetsAnnotation contents keyed
     // by ObjectID, so a clone left sharing these ids with its source can be handed the source's mask
     // on an undo - after which a paint mask and the mesh it was recorded against no longer match.
@@ -4300,6 +4311,13 @@ bool model_fuzzy_skin_data_changed(const ModelObject &mo, const ModelObject &mo_
     return model_property_changed(mo, mo_new,
         [](const ModelVolumeType t) { return t == ModelVolumeType::MODEL_PART; },
         [](const ModelVolume &mv_old, const ModelVolume &mv_new){ return mv_old.fuzzy_skin_facets.timestamp_matches(mv_new.fuzzy_skin_facets); });
+}
+
+bool model_ironing_data_changed(const ModelObject &mo, const ModelObject &mo_new)
+{
+    return model_property_changed(mo, mo_new,
+        [](const ModelVolumeType t) { return t == ModelVolumeType::MODEL_PART; },
+        [](const ModelVolume &mv_old, const ModelVolume &mv_new){ return mv_old.ironing_facets.timestamp_matches(mv_new.ironing_facets); });
 }
 
 bool model_brim_points_data_changed(const ModelObject& mo, const ModelObject& mo_new)

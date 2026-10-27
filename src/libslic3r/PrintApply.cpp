@@ -121,6 +121,8 @@ static inline void model_volume_list_copy_configs(ModelObject &model_object_dst,
         mv_dst.mmu_segmentation_facets.assign(mv_src.mmu_segmentation_facets);
         assert(mv_dst.fuzzy_skin_facets.id() == mv_src.fuzzy_skin_facets.id());
         mv_dst.fuzzy_skin_facets.assign(mv_src.fuzzy_skin_facets);
+        assert(mv_dst.ironing_facets.id() == mv_src.ironing_facets.id());
+        mv_dst.ironing_facets.assign(mv_src.ironing_facets);
         //FIXME what to do with the materials?
         // mv_dst.m_material_id = mv_src.m_material_id;
         ++ i_src;
@@ -1920,6 +1922,12 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             // This also handles type changes between supports and Precise Seam before copying configs below.
             if (supports_differ || precise_seam_differ)
                 model_volume_list_update_supports_and_seams(model_object, model_object_new);
+            if (model_ironing_data_changed(model_object, model_object_new)) {
+                // The paint is copied over with the volume configs below. Ironing adds its paths to the layers'
+                // fills, so the infill is made again with it.
+                for (const PrintObjectStatus &print_object_status : print_objects_range)
+                    update_apply_status(print_object_status.print_object->invalidate_step(posInfill));
+            }
             if (brim_points_differ) {
                 model_object.brim_points = model_object_new.brim_points;
                 update_apply_status(this->invalidate_all_steps());

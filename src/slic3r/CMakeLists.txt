@@ -197,6 +197,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/Gizmos/GLGizmoFlatten.hpp
     GUI/Gizmos/GLGizmoFuzzySkin.cpp
     GUI/Gizmos/GLGizmoFuzzySkin.hpp
+    GUI/Gizmos/GLGizmoIroning.cpp
+    GUI/Gizmos/GLGizmoIroning.hpp
     GUI/Gizmos/GLGizmoMeasure.cpp
     GUI/Gizmos/GLGizmoMeasure.hpp
     GUI/Gizmos/GLGizmoMeshBoolean.cpp

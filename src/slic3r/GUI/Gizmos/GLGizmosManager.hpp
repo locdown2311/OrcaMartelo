@@ -95,6 +95,7 @@ public:
         FdmSupports,
         Seam,
         FuzzySkin,
+        Ironing,
         MmSegmentation,
         TextureDisplacement,
         Emboss,

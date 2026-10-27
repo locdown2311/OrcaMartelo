@@ -38,6 +38,7 @@ enum class PainterGizmoType {
     SEAM,
     MM_SEGMENTATION,
     FUZZY_SKIN,
+    IRONING,
     TEXTURE_DISPLACEMENT
 };
 

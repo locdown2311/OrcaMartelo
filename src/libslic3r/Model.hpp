@@ -515,6 +515,7 @@ public:
     bool                    is_mm_painted() const;
     // Checks if any of object volume is painted using the fuzzy skin painting gizmo.
     bool                    is_fuzzy_skin_painted() const;
+    bool                    is_ironing_painted() const;
     // This object may have a varying layer height by painting or by a table.
     // Even if true is returned, the layer height profile may be "flat" with no difference to default layering.
     bool                    has_custom_layering() const
@@ -974,6 +975,9 @@ public:
     // List of mesh facets painted for fuzzy skin.
     FacetsAnnotation    fuzzy_skin_facets;
 
+    // List of mesh facets painted for ironing: the top surfaces within them are ironed even with ironing off.
+    FacetsAnnotation    ironing_facets;
+
     // One independent paint mask per texture-displacement layer slot (see texture_displacement_layers
     // below). Unlike the other facets fields above, a triangle may be painted (ENFORCER) in more
     // than one of these simultaneously -- that overlap is what makes the layers "blend".
@@ -1205,6 +1209,7 @@ public:
         this->seam_facets.set_new_unique_id();
         this->mmu_segmentation_facets.set_new_unique_id();
         this->fuzzy_skin_facets.set_new_unique_id();
+        this->ironing_facets.set_new_unique_id();
         for (int i = 0; i < int(TEXTURE_DISPLACEMENT_MAX_LAYERS); ++i)
             this->texture_displacement_facet(i).set_new_unique_id();
     }
@@ -1213,9 +1218,10 @@ public:
     bool is_seam_painted() const { return !this->seam_facets.empty(); }
     bool is_mm_painted() const { return !this->mmu_segmentation_facets.empty(); }
     bool is_fuzzy_skin_painted() const { return !this->fuzzy_skin_facets.empty(); }
+    bool is_ironing_painted() const { return !this->ironing_facets.empty(); }
     bool is_texture_displacement_painted() const { return !this->texture_displacement_facets_all_empty(); }
     bool is_any_painted() const {
-        return is_fdm_support_painted() || is_seam_painted() || is_mm_painted() || is_fuzzy_skin_painted() || is_texture_displacement_painted();
+        return is_fdm_support_painted() || is_seam_painted() || is_mm_painted() || is_fuzzy_skin_painted() || is_ironing_painted() || is_texture_displacement_painted();
     }
     
     // Orca: Implement prusa's filament shrink compensation approach
@@ -1315,7 +1321,7 @@ private:
         name(other.name), source(other.source), m_mesh(other.m_mesh), m_convex_hull(other.m_convex_hull),
         config(other.config), m_type(other.m_type), object(object), m_transformation(other.m_transformation),
         supported_facets(other.supported_facets), seam_facets(other.seam_facets), mmu_segmentation_facets(other.mmu_segmentation_facets),
-        fuzzy_skin_facets(other.fuzzy_skin_facets),
+        fuzzy_skin_facets(other.fuzzy_skin_facets), ironing_facets(other.ironing_facets),
         texture_displacement_facets_0(other.texture_displacement_facets_0), texture_displacement_facets_1(other.texture_displacement_facets_1),
         texture_displacement_facets_2(other.texture_displacement_facets_2), texture_displacement_facets_3(other.texture_displacement_facets_3),
         texture_displacement_facets_4(other.texture_displacement_facets_4), texture_displacement_facets_5(other.texture_displacement_facets_5),
@@ -1385,7 +1391,7 @@ private:
 	friend class cereal::access;
 	friend class UndoRedo::StackImpl;
 	// Used for deserialization, therefore no IDs are allocated.
-	ModelVolume() : ObjectBase(-1), config(-1), supported_facets(-1), seam_facets(-1), mmu_segmentation_facets(-1), fuzzy_skin_facets(-1),
+	ModelVolume() : ObjectBase(-1), config(-1), supported_facets(-1), seam_facets(-1), mmu_segmentation_facets(-1), fuzzy_skin_facets(-1), ironing_facets(-1),
 		texture_displacement_facets_0(-1), texture_displacement_facets_1(-1), texture_displacement_facets_2(-1), texture_displacement_facets_3(-1),
 		texture_displacement_facets_4(-1), texture_displacement_facets_5(-1), texture_displacement_facets_6(-1), texture_displacement_facets_7(-1),
 		object(nullptr) {
@@ -1415,6 +1421,9 @@ private:
         mesh_changed |= t != mmu_segmentation_facets.timestamp();
         cereal::load_by_value(ar, fuzzy_skin_facets);
         mesh_changed |= t != fuzzy_skin_facets.timestamp();
+        t = ironing_facets.timestamp();
+        cereal::load_by_value(ar, ironing_facets);
+        mesh_changed |= t != ironing_facets.timestamp();
         for (int i = 0; i < int(TEXTURE_DISPLACEMENT_MAX_LAYERS); ++i) {
             FacetsAnnotation &f  = texture_displacement_facet(i);
             Timestamp         tf = f.timestamp();
@@ -1443,6 +1452,7 @@ private:
         cereal::save_by_value(ar, seam_facets);
         cereal::save_by_value(ar, mmu_segmentation_facets);
         cereal::save_by_value(ar, fuzzy_skin_facets);
+        cereal::save_by_value(ar, ironing_facets);
         for (int i = 0; i < int(TEXTURE_DISPLACEMENT_MAX_LAYERS); ++i)
             cereal::save_by_value(ar, texture_displacement_facet(i));
         ar(texture_displacement_layers, texture_displacement_options, texture_uv);
@@ -2001,6 +2011,8 @@ extern bool model_mmu_segmentation_data_changed(const ModelObject& mo, const Mod
 // Test whether the now ModelObject has newer fuzzy skin data than the old one.
 // The function assumes that volumes list is synchronized.
 extern bool model_fuzzy_skin_data_changed(const ModelObject &mo, const ModelObject &mo_new);
+// Test whether the ironing paint of the model parts changed.
+bool model_ironing_data_changed(const ModelObject &mo, const ModelObject &mo_new);
 
 bool model_brim_points_data_changed(const ModelObject& mo, const ModelObject& mo_new);
 

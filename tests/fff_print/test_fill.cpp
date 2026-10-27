@@ -45,6 +45,7 @@
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/SVG.hpp"
+#include "libslic3r/TriangleSelector.hpp"
 #include "libslic3r/libslic3r.h"
 
 #include "test_helpers.hpp"
@@ -2567,4 +2568,75 @@ TEST_CASE("Monotonic line top surfaces print their gap fill next to their lines 
     }
     REQUIRE(gap_fills > 0);
     CHECK(gap_fills_before_a_line > 0);
+}
+
+// Total length of the ironing paths of a sliced print, and the number of layers holding any.
+static std::pair<double, size_t> ironing_length_and_layers(const Print &print)
+{
+    double length = 0.;
+    size_t layers = 0;
+    for (const Layer *layer : print.objects().front()->layers()) {
+        double on_layer = 0.;
+        for (const LayerRegion *region : layer->regions())
+            for (const ExtrusionEntity *entity : region->fills.flatten().entities)
+                if (auto *path = dynamic_cast<const ExtrusionPath *>(entity); path != nullptr && path->role() == erIroning)
+                    on_layer += unscale<double>(path->length());
+        length += on_layer;
+        layers += on_layer > 0.;
+    }
+    return { length, layers };
+}
+
+TEST_CASE("The ironing brush irons the painted part of a top surface with ironing off", "[Fill]")
+{
+    // A 20 mm cube at 0.2 mm layers: 100 layers, one top surface, the top face two triangles.
+    auto ironed = [](const std::string &ironing_type, bool paint_half_the_top) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_deserialize_strict({ { "ironing_type", ironing_type }, { "layer_height", 0.2 }, { "initial_layer_print_height", 0.2 },
+                                        { "top_shell_layers", 4 }, { "gcode_comments", 1 } });
+        Model model;
+        Print print;
+        Slic3r::Test::init_print({ Slic3r::Test::cube(20) }, print, model, config);
+        if (paint_half_the_top) {
+            ModelVolume        &volume = *model.objects.front()->volumes.front();
+            const TriangleMesh &mesh   = volume.mesh();
+            const float         top    = mesh.bounding_box().max.z();
+            TriangleSelector    selector(mesh);
+            size_t              painted = 0;
+            // One of the two triangles of the top face.
+            for (size_t i = 0; i < mesh.its.indices.size() && painted == 0; ++ i) {
+                bool on_top = true;
+                for (int j = 0; j < 3; ++ j)
+                    on_top = on_top && std::abs(mesh.its.vertices[mesh.its.indices[i](j)].z() - top) < 1e-4f;
+                if (on_top) {
+                    selector.set_facet(int(i), EnforcerBlockerType::ENFORCER);
+                    ++ painted;
+                }
+            }
+            REQUIRE(painted == 1);
+            volume.ironing_facets.set(selector);
+            print.apply(model, config);
+        }
+        print.process();
+        return ironing_length_and_layers(print);
+    };
+
+    const auto [unpainted, unpainted_layers] = ironed("no ironing", false);
+    CHECK(unpainted == 0.);
+    CHECK(unpainted_layers == 0);
+
+    const auto [whole_top, whole_top_layers] = ironed("top", false);
+    REQUIRE(whole_top > 0.);
+    CHECK(whole_top_layers == 1);
+
+    // Painted, ironing off: the top layer only, over about the half of it that is painted.
+    const auto [half, half_layers] = ironed("no ironing", true);
+    CHECK(half_layers == 1);
+    CHECK(half > 0.3 * whole_top);
+    CHECK(half < 0.7 * whole_top);
+
+    // Painted with ironing on, the whole top is ironed as before.
+    const auto [both, both_layers] = ironed("top", true);
+    CHECK_THAT(both, Catch::Matchers::WithinRel(whole_top, 0.01));
+    CHECK(both_layers == 1);
 }

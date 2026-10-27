@@ -596,6 +596,8 @@ public:
 
     // Helpers to project custom facets on slices
     void project_and_append_custom_facets(bool seam, EnforcerBlockerType type, std::vector<Polygons>& expolys, std::vector<std::pair<Vec3f,Vec3f>>* vertical_points=nullptr) const;
+    // Per layer, the area the ironing brush painted over the top surfaces it may hold; empty without paint.
+    std::vector<ExPolygons> project_ironing_paint() const;
 
     //BBS
     BoundingBox get_first_layer_bbox(float& area, float& layer_height, std::string& name);

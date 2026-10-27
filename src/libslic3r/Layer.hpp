@@ -235,7 +235,9 @@ public:
     void                    make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLightning::Generator* lightning_generator = nullptr);
     Polylines               generate_sparse_infill_polylines_for_anchoring(const FillAdaptive::RegionOctrees *fill_octrees,
                                                                            FillLightning::Generator* lightning_generator) const;
-    void 					make_ironing();
+    // Irons the top surfaces of the regions set to, and those within painted, the area the ironing brush
+    // painted over them (see PrintObject::ironing()), with or without ironing on.
+    void 					make_ironing(const ExPolygons &painted = {});
     // Returns the filament id (1-based) the region is ironed with, or -1 when the
     // region is not ironed.
     static int              choose_ironing_extruder(const PrintRegionConfig &cfg,
