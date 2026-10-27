@@ -490,8 +490,11 @@ static const char* Segments_Fragment_Shader =
 "      float t = clamp(dot(position - start, line) / length_sq, 0.0, 1.0);\n"
 "      vec2 half_height_width = 0.5 * mix(texelFetch(height_width_angle_tex, segment_id).xy, texelFetch(height_width_angle_tex, segment_id + 1).xy, t);\n"
 "      vec3 radial = position - start - t * line;\n"
-"      vec3 n = vec3(radial.xy / (half_height_width.y * half_height_width.y), radial.z / (half_height_width.x * half_height_width.x));\n"
-"      n = dot(n, n) > 1e-12 ? normalize(n) : UP;\n"
+// Multiplanar cut planes: the height runs along the segment's build direction, +Z for a planar layer.
+"      vec3 up = tool_axis(texelFetch(height_width_angle_tex, segment_id + 1).w);\n"
+"      float along_up = dot(radial, up);\n"
+"      vec3 n = (radial - along_up * up) / (half_height_width.y * half_height_width.y) + along_up / (half_height_width.x * half_height_width.x) * up;\n"
+"      n = dot(n, n) > 1e-12 ? normalize(n) : up;\n"
 "      across = mat3(view_matrix) * (n - dot(n, line) / length_sq * line);\n"
 "    }\n"
 "    vec3 v = projection_matrix[3][3] == 1.0 ? vec3(0.0, 0.0, 1.0) : -normalize((view_matrix * vec4(position, 1.0)).xyz);\n"
