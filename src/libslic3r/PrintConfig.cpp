@@ -5899,7 +5899,7 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip = L("Generate wave-patterned perimeters over overhangs to print steep angles "
                      "without supports.");
-    def->mode = comSimple;
+    def->mode = comDevelop;
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("wave_overhangs_instead_of_bridges", coBool);
@@ -5910,7 +5910,7 @@ void PrintConfigDef::init_fff_params()
                      "flat spans stay as regular bridges, only concave or holed overhangs get "
                      "waves. Turn on to guarantee no bridge patterns anywhere in the region "
                      "(bottom bridges and internal bridges both become solid infill).");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("wave_overhang_outer_perimeters", coInt);
@@ -5922,7 +5922,7 @@ void PrintConfigDef::init_fff_params()
                      "walls the rest of the object uses. 1 is usually enough. Set to 0 for pure wave "
                      "(no perimeter at the overhang boundary). Capped at the effective wall count for "
                      "the layer (e.g. 1 on topmost layers with \"only one wall top\").");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->set_default_value(new ConfigOptionInt(1));
 
@@ -5933,7 +5933,7 @@ void PrintConfigDef::init_fff_params()
                      "This reduces the gap between wave lines and perimeter shells.");
     def->sidetext = L("mm");
     def->min = 0;
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloat(0.1));
 
     def = this->add("wave_overhang_minimum_width", coFloat);
@@ -5943,7 +5943,7 @@ void PrintConfigDef::init_fff_params()
                      "Larger values split more aggressively.");
     def->sidetext = L("mm");
     def->min = 0;
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloat(0.7));
 
     def = this->add("wave_overhang_pattern", coEnum);
@@ -5958,7 +5958,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.push_back(L("Monotonic"));
     def->enum_labels.push_back(L("Zigzag"));
     def->enum_labels.push_back(L("Smart"));
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->set_default_value(new ConfigOptionEnum<WaveOverhangPattern>(WaveOverhangPattern::Smart));
 
     def = this->add("wave_overhang_line_spacing", coFloat);
@@ -5966,7 +5966,7 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip = L("Center-to-center distance between adjacent wave-overhang extrusions.");
     def->sidetext = L("mm");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0.01;
     def->set_default_value(new ConfigOptionFloat(0.35));
 
@@ -5980,7 +5980,7 @@ void PrintConfigDef::init_fff_params()
                      "0.15 × (nozzle/0.4)²: about 0.09 for 0.3 mm, 0.34 for 0.6 mm, 0.60 for 0.8 mm.\n\n"
                      "Raise if wave lines look thin or broken; lower if they blob together.");
     def->sidetext = L("mm³/mm");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0.02;
     def->max = 1.5;
     def->set_default_value(new ConfigOptionFloat(0.15));
@@ -5991,7 +5991,7 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Print speed for wave-overhang extrusions. Slow speeds give better cooling "
                      "and adhesion of the cantilevered tracks.");
     def->sidetext = L("mm/s");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0.1;
     def->set_default_value(new ConfigOptionFloat(2.0));
 
@@ -6003,7 +6003,7 @@ void PrintConfigDef::init_fff_params()
                      "so printing them at the regular outer/inner wall speed often pulls the wave "
                      "loose or starves adhesion. 0 = inherit the normal wall speed.");
     def->sidetext = L("mm/s");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 1000;
     def->set_default_value(new ConfigOptionFloat(0.0));
@@ -6013,7 +6013,7 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Speed");
     def->tooltip = L("Travel speed within wave-overhang regions (between non-extruding hops).");
     def->sidetext = L("mm/s");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 1.0;
     def->set_default_value(new ConfigOptionFloat(40.0));
 
@@ -6023,7 +6023,7 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Part-cooling fan percentage forced during wave-overhang extrusions. "
                      "Maximum cooling is usually best.");
     def->sidetext = L("%");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 100;
     def->set_default_value(new ConfigOptionInt(100));
@@ -6037,7 +6037,7 @@ void PrintConfigDef::init_fff_params()
                      "gradient near the nozzle). Requires the printer's auxiliary fan to be enabled. "
                      "-1 = inherit the normal aux fan speed.");
     def->sidetext = L("%");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = -1;
     def->max = 100;
     def->set_default_value(new ConfigOptionInt(-1));
@@ -6051,7 +6051,7 @@ void PrintConfigDef::init_fff_params()
                      "on the unsupported tracks (less sagging, better cooling). Set to 0 to keep the "
                      "filament default.");
     def->sidetext = L("°C");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 350;
     def->set_default_value(new ConfigOptionInt(0));
@@ -6064,7 +6064,7 @@ void PrintConfigDef::init_fff_params()
                      "before the next region — gives each ring time to solidify. Set to 0 to "
                      "disable.");
     def->sidetext = L("s");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 60;
     def->set_default_value(new ConfigOptionFloat(0.0));
@@ -6078,7 +6078,7 @@ void PrintConfigDef::init_fff_params()
                      "wave bed time to solidify before solid infill lands on top. Targets "
                      "warping. Set to 0 to disable.");
     def->sidetext = L("s");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 300;
     def->set_default_value(new ConfigOptionFloat(0.0));
@@ -6093,7 +6093,7 @@ void PrintConfigDef::init_fff_params()
                      "around each corner gives each short line a neighbour to bond with, resisting "
                      "the curl. The corner radius, denser spacing, and angle threshold appear when "
                      "this is on.");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("wave_overhang_line_spacing_corner", coFloat);
@@ -6105,7 +6105,7 @@ void PrintConfigDef::init_fff_params()
                      "fuse with, resisting the curl. Must be smaller than the main line spacing for "
                      "the taper to engage; the master toggle above must also be on.");
     def->sidetext = L("mm");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 2;
     def->set_default_value(new ConfigOptionFloat(0.0));
@@ -6118,7 +6118,7 @@ void PrintConfigDef::init_fff_params()
                      "further in use the normal spacing. Larger values widen the reinforced zone "
                      "at the cost of more extrusion time. Set to 0 to disable corner tapering.");
     def->sidetext = L("mm");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 20;
     def->set_default_value(new ConfigOptionFloat(0.0));
@@ -6131,7 +6131,7 @@ void PrintConfigDef::init_fff_params()
                      "corners; larger values flag gentler turns too. 90 degrees is a reasonable "
                      "default for most shapes.");
     def->sidetext = L("degrees");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 10;
     def->max = 180;
     def->set_default_value(new ConfigOptionFloat(90.0));
@@ -6146,7 +6146,7 @@ void PrintConfigDef::init_fff_params()
                      "travel automatically unretracts. Set to 0 to rely on Orca's normal travel-"
                      "distance retraction heuristic.");
     def->sidetext = L("mm");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 10;
     def->set_default_value(new ConfigOptionFloat(0.0));
@@ -6157,7 +6157,7 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Number of solid floor layers placed directly above wave-overhang regions. "
                      "These layers bridge over the wave surface and give the cantilever mechanical backing. "
                      "0 = let Orca's normal top-shell-layers handle it (no wave-specific override).");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 20;
     def->set_default_value(new ConfigOptionInt(2));
@@ -6170,7 +6170,7 @@ void PrintConfigDef::init_fff_params()
                      "paths leave the smallest residual thermal stresses, which significantly reduces "
                      "warping that pulls long cantilevered overhangs upward as the layers above cool. "
                      "Opt-in: when off, floor layers retain the existing pattern.");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("wave_overhang_floor_hilbert_layers", coInt);
@@ -6180,7 +6180,7 @@ void PrintConfigDef::init_fff_params()
                      "Hilbert pattern; the rest use the default solid-infill pattern. The lowest "
                      "layers warp most, so capping the Hilbert band saves print time without losing "
                      "much warping benefit. 0 = match Floor layers (Hilbert on every solid floor).");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 20;
     def->set_default_value(new ConfigOptionInt(0));
@@ -6193,7 +6193,7 @@ void PrintConfigDef::init_fff_params()
                      "Hilbert: faster and less material, at the cost of weaker mechanical backing for "
                      "the wave below. Experimental setting — 100 is the safe default.");
     def->sidetext = L("%");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 1;
     def->max = 100;
     def->set_default_value(new ConfigOptionInt(100));
@@ -6206,7 +6206,7 @@ void PrintConfigDef::init_fff_params()
                      "neighbouring line lands on top, reducing the residual thermal stress that drives "
                      "warping. 0 = inherit the normal solid-infill speed.");
     def->sidetext = L("mm/s");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 1000;
     def->set_default_value(new ConfigOptionFloat(0.0));
@@ -6219,7 +6219,7 @@ void PrintConfigDef::init_fff_params()
                      "so slowing them lets the substrate stay closer to bed temperature and relaxes "
                      "thermal stress. 0 = inherit the normal wall speed.");
     def->sidetext = L("mm/s");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 1000;
     def->set_default_value(new ConfigOptionFloat(0.0));
@@ -6242,7 +6242,7 @@ void PrintConfigDef::init_fff_params()
                      "Capped by Floor layers; if you set a ramp longer than the floor-layer count, "
                      "the ramp ends at the top floor layer.");
     def->sidetext = L("layers");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 64;
     def->set_default_value(new ConfigOptionInt(0));
@@ -6256,7 +6256,7 @@ void PrintConfigDef::init_fff_params()
                      "Counter-intuitive but matches the cited research: warmer = more stress relaxation. "
                      "-1 = inherit the normal fan speed.");
     def->sidetext = L("%");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = -1;
     def->max = 100;
     def->set_default_value(new ConfigOptionInt(-1));
@@ -6270,7 +6270,7 @@ void PrintConfigDef::init_fff_params()
                      "Requires the printer's auxiliary fan to be enabled. "
                      "-1 = inherit the normal aux fan speed.");
     def->sidetext = L("%");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = -1;
     def->max = 100;
     def->set_default_value(new ConfigOptionInt(-1));
@@ -6284,7 +6284,7 @@ void PrintConfigDef::init_fff_params()
                      "become wave-overhang candidates. This value is kept as metadata on "
                      "the profile for potential future use. 0 = no filtering.");
     def->sidetext = L("°");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 90;
     def->set_default_value(new ConfigOptionFloat(0));
@@ -6300,7 +6300,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("progressive");
     def->enum_labels.push_back(L("Uniform"));
     def->enum_labels.push_back(L("Progressive"));
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->set_default_value(new ConfigOptionEnum<WaveOverhangSpacingMode>(wosmUniform));
 
     def = this->add("wave_overhang_seam_mode", coEnum);
@@ -6316,7 +6316,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.push_back(L("Alternating"));
     def->enum_labels.push_back(L("Aligned"));
     def->enum_labels.push_back(L("Random"));
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->set_default_value(new ConfigOptionEnum<WaveOverhangSeamMode>(woseAlternating));
 
     def = this->add("wave_overhang_debug_gcode", coBool);
@@ -6325,7 +6325,7 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Emit ';WAVE_OVERHANG_START'/';WAVE_OVERHANG_END' comments around wave-overhang "
                      "extrusions in the G-code. Useful for post-process inspection and debugging. "
                      "Comments-only — no effect on the print.");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->set_default_value(new ConfigOptionBool(true));
 
     def = this->add("wave_overhang_min_length", coFloat);
@@ -6334,7 +6334,7 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Minimum overhang perimeter length (in mm) below which wave-overhang generation "
                      "is skipped. Useful to avoid waving tiny overhangs where normal perimeters are fine.");
     def->sidetext = L("mm");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 50;
     def->set_default_value(new ConfigOptionFloat(0.0));
@@ -6345,7 +6345,7 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Safety cap on the wave-overhang generator's main loop: max wavefronts per overhang "
                      "region. 0 = unlimited (stops naturally when the generator can't grow further). "
                      "Useful for bounding print time on very large overhangs.");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->min = 0;
     def->max = 500;
     def->set_default_value(new ConfigOptionInt(0));
@@ -6371,7 +6371,7 @@ void PrintConfigDef::init_fff_params()
                      "for overhang areas the wave toolpaths did NOT cover. Explicit support enforcers "
                      "still apply normally. Disable to let the support generator ignore wave coverage "
                      "(treats every overhang as if waves weren't there).");
-    def->mode = comAdvanced;
+    def->mode = comDevelop;
     def->set_default_value(new ConfigOptionBool(true));
 
 
