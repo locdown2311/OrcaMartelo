@@ -7756,6 +7756,14 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
 
+    def = this->add("printer_flushes_at_filament_change", coBool);
+    def->label = L("Printer flushes at filament change");
+    def->tooltip = L("The printer's own filament change flushes the flushing volumes, into a purge chute for example, "
+                     "where the slicer's G-code does not show it. Unless the prime tower purges them, the flushing volume "
+                     "of each filament change is counted as flushed filament in the filament used, its weight and its cost.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("enable_filament_ramming", coBool);
     def->label = L("Enable filament ramming");
     def->tooltip = L("Enable filament ramming");

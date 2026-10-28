@@ -2000,6 +2000,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnum<WipeTowerType>, wipe_tower_type))
     ((ConfigOptionEnum<NozzleWiperPosition>, nozzle_wiper_position))
     ((ConfigOptionBool,                purge_in_prime_tower))
+    ((ConfigOptionBool,                printer_flushes_at_filament_change))
     ((ConfigOptionBool,                enable_filament_ramming))
     ((ConfigOptionBool,                tool_change_on_wipe_tower))
     ((ConfigOptionBool,                wait_for_temp_on_wipe_tower))

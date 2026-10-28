@@ -6216,6 +6216,7 @@ if (is_marlin_flavor)
         optgroup->append_single_option_line("wipe_tower_type", "printer_multimaterial_wipe_tower");
         optgroup->append_single_option_line("nozzle_wiper_position");
         optgroup->append_single_option_line("purge_in_prime_tower", "printer_multimaterial_wipe_tower#purge-in-prime-tower");
+        optgroup->append_single_option_line("printer_flushes_at_filament_change");
         optgroup->append_single_option_line("enable_filament_ramming", "printer_multimaterial_wipe_tower#enable-filament-ramming");
         optgroup->append_single_option_line("tool_change_on_wipe_tower", "printer_multimaterial_wipe_tower#tool-change-on-wipe-tower");
         optgroup->append_single_option_line("wait_for_temp_on_wipe_tower", "printer_multimaterial_wipe_tower#wait-for-temperature-on-wipe-tower");
