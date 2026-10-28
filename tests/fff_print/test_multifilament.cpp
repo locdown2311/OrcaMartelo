@@ -1901,3 +1901,61 @@ TEST_CASE("Unused extruder turns off on non-IMEX three-tool print", "[MultiFilam
     CHECK_FALSE(premature_s0_t1);
     CHECK_FALSE(premature_s0_t2);
 }
+
+// A printer that flushes at the filament change itself (the Kobra's ACE into its chute): the G-code tells
+// the processor how much each change flushes, the flushing volume of that pair, so it counts as flushed
+// filament. Not when the prime tower purges it, nor with the option off.
+TEST_CASE("A printer that flushes at the filament change reports the flushing volume", "[MultiFilament]")
+{
+    const bool printer_flushes = GENERATE(false, true);
+    const bool tower_purges    = GENERATE(false, true);
+    CAPTURE(printer_flushes, tower_purges);
+    const std::vector<std::vector<Slic3r::ConfigBase::SetDeserializeItem>> per_object_overrides = {
+        { { "extruder", "1" } }, { { "extruder", "2" } }
+    };
+    DynamicPrintConfig config = multifilament_config(2, {
+        { "single_extruder_multi_material",     true },
+        { "change_filament_gcode",              "T[next_extruder]\n" },
+        { "printer_flushes_at_filament_change", printer_flushes },
+        { "purge_in_prime_tower",               tower_purges },
+        { "flush_volumes_matrix",               "0,140,220,0" },
+        { "flush_multiplier",                   "0.5" },
+        { "enable_prime_tower",                 true },
+        { "wipe_tower_type",                    "type2" },
+        { "prime_tower_width",                  35 },
+        { "wipe_tower_x",                       120 },
+        { "wipe_tower_y",                       120 },
+        { "printable_area",                     "0x0,200x0,200x200,0x200" },
+        { "skirt_loops",                        0 },
+        { "brim_type",                          "no_brim" },
+    });
+    std::string gcode = slice_with_object_overrides({ cube(20), cube(20) }, config, per_object_overrides);
+    gcode.erase(gcode.find("; CONFIG_BLOCK_START"));
+
+    // The flush lengths reported, and the filament changes after the first tool selection.
+    std::vector<double> flushes;
+    size_t              changes = 0;
+    std::istringstream  lines(gcode);
+    std::string         line;
+    bool                first_tool = true;
+    while (std::getline(lines, line)) {
+        if (line.rfind("; EXTERNAL_PURGE ", 0) == 0)
+            flushes.push_back(std::stod(line.substr(17)));
+        else if (line.size() >= 2 && line[0] == 'T' && std::isdigit(static_cast<unsigned char>(line[1]))) {
+            changes += first_tool ? 0 : 1;
+            first_tool = false;
+        }
+    }
+    REQUIRE(changes > 0);
+    if (! printer_flushes || tower_purges) {
+        CHECK(flushes.empty());
+        return;
+    }
+    CHECK(flushes.size() == changes);
+    // 140 mm³ from the first filament to the second and 220 mm³ back, halved, over a 1.75 mm filament.
+    const double area = 0.25 * M_PI * 1.75 * 1.75;
+    for (const double length : flushes) {
+        CAPTURE(length);
+        CHECK(std::min(std::abs(length - 70. / area), std::abs(length - 110. / area)) < 0.01);
+    }
+}

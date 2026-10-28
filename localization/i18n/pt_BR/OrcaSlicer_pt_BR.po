@@ -35084,6 +35084,14 @@ msgstr "As superfícies superiores pintadas são alisadas com as configurações
 msgid "Gizmo FDM paint-on ironing"
 msgstr "Gizmo de pintura de alisamento FDM"
 
+# AI Translated
+msgid "Printer flushes at filament change"
+msgstr "A impressora purga na troca de filamento"
+
+# AI Translated
+msgid "The printer's own filament change flushes the flushing volumes, into a purge chute for example, where the slicer's G-code does not show it. Unless the prime tower purges them, the flushing volume of each filament change is counted as flushed filament in the filament used, its weight and its cost."
+msgstr "A própria troca de filamento da impressora purga os volumes de purga, numa calha de purga por exemplo, onde o G-code do fatiador não mostra. A menos que a torre de purga os purgue, o volume de purga de cada troca de filamento é contado como filamento purgado no filamento usado, no seu peso e no seu custo."
+
 #~ msgid "Please choose the filament color"
 #~ msgstr "Escolha a cor do filamento"
 

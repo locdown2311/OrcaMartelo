@@ -168,6 +168,7 @@
 	"printhost_ssl_ignore_revoke": "0",
 	"printing_by_object_gcode": "",
 	"purge_in_prime_tower": "0",
+	"printer_flushes_at_filament_change": "1",
 	"retract_before_wipe": [
 		"0%"
 	],

@@ -11486,6 +11486,23 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
     else {
         // user provided his own toolchange gcode, no need to do anything
     }
+    // The printer flushes the old filament out itself, unseen by the G-code processor: tell it how much, so
+    // the flush counts in the filament used and the cost, as the flushing volumes of this change give it.
+    if (m_config.printer_flushes_at_filament_change && (!m_config.enable_prime_tower || !m_config.purge_in_prime_tower) &&
+        old_filament != nullptr && old_filament->id() != new_filament_id) {
+        const size_t        filaments  = m_config.filament_diameter.size();
+        const std::vector<double> matrix = get_flush_volumes_matrix(m_config.flush_volumes_matrix.values, 0, m_config.nozzle_diameter.size());
+        const ConfigOptionFloats &multipliers = m_config.prime_volume_mode == PrimeVolumeMode::pvmFast ? m_config.flush_multiplier_fast :
+                                                                                                          m_config.flush_multiplier;
+        const size_t from = old_filament->id(), to = new_filament_id;
+        if (from < filaments && to < filaments && matrix.size() >= filaments * filaments) {
+            const double volume = matrix[from * filaments + to] * (multipliers.empty() ? 1. : multipliers.get_at(0));
+            const double area   = 0.25 * M_PI * sqr(m_config.filament_diameter.get_at(to));
+            if (volume > 0. && area > 0.)
+                // GCodeProcessor::External_Purge_Tag, the length of filament flushed.
+                gcode += "; EXTERNAL_PURGE " + float_to_string_decimal_point(volume / area, 3) + "\n";
+        }
+    }
 
     // Set the temperature if the wipe tower didn't (not needed for non-single extruder MM)
     if (m_config.single_extruder_multi_material && !m_config.enable_prime_tower) {

@@ -324,6 +324,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "wipe_inward_distance",
         "gcode_comments",
         "gcode_label_objects", 
+        "printer_flushes_at_filament_change",
         "exclude_object",
         "support_material_interface_fan_speed",
         "internal_bridge_fan_speed", // ORCA: Add support for separate internal bridge fan speed control
