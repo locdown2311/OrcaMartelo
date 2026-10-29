@@ -7,6 +7,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/GCode/FilamentChangeFlush.hpp"
+#include "libslic3r/GCode/PrintOrderLayers.hpp"
 #include "libslic3r/LocalesUtils.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/TriangleSelector.hpp"
@@ -2359,4 +2360,24 @@ TEST_CASE("The filament change extras come back after a rewrite, once", "[MultiF
     config.long_retractions_when_cut.values          = { false };
     config.printer_flushes_at_filament_change.value = false;
     CHECK(restore_filament_change_extras(rewritten, config) == rewritten);
+}
+
+// Color Batching's rewrite has no layer change tags: they come back in printing order, a new layer at each new
+// height extruded at past its marker, with the step down to the next lower height printed as its height.
+TEST_CASE("Layers are marked in printing order after a rewrite", "[MultiFilament]")
+{
+    const std::string rewritten =
+        "G1 Z0.3 F600\nG1 X0 Y0 E5 ; start purge\n; Processed by Color Batching\n"
+        "G1 Z0.2\nG1 X1 Y1 E1\nG1 Z0.4\nG1 X2 Y2 E1\nT1\nG1 Z0.2\nG1 X3 Y3 E1\nG1 Z0.4\nG1 X4 Y4 E1\nG1 E-0.5\nG1 Z0.6\nG1 X5 Y5 E1\n";
+    const std::string marked = mark_layers_in_print_order(rewritten, "; Processed by Color");
+    // The start G-code is left alone.
+    CHECK(marked.find("G1 Z0.3 F600\nG1 X0 Y0 E5 ; start purge\n; Processed by Color Batching\n") == 0);
+    // Five runs of extrusion at a height, each a layer, the second color going back down.
+    std::vector<std::string> zs;
+    for (size_t pos = marked.find(";Z:"); pos != std::string::npos; pos = marked.find(";Z:", pos + 1))
+        zs.push_back(marked.substr(pos + 3, marked.find('\n', pos) - pos - 3));
+    CHECK(zs == std::vector<std::string>{ "0.200", "0.400", "0.200", "0.400", "0.600" });
+    CHECK(marked.find(";Z:0.400\n;HEIGHT:0.200\nG1 X2 Y2 E1\n") != std::string::npos);
+    // Without the marker nothing changes.
+    CHECK(mark_layers_in_print_order(rewritten, "; not there") == rewritten);
 }

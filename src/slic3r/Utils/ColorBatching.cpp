@@ -4,6 +4,7 @@
 
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/GCode/FilamentChangeFlush.hpp"
+#include "libslic3r/GCode/PrintOrderLayers.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/format.hpp"
 #include "slic3r/GUI/I18N.hpp"
@@ -69,7 +70,9 @@ bool run_color_batching(const std::string &gcode_path, const PrintConfig &config
         throw Slic3r::RuntimeError(format(_u8L("Color Batching failed on the G-code:\n%1%"), log));
     }
 
-    const std::string batched = restore_filament_change_extras(read_file(output), config);
+    // Color Batching writes its "Processed by" comment where the first layer began; the start G-code before it
+    // keeps its own tags.
+    const std::string batched = mark_layers_in_print_order(restore_filament_change_extras(read_file(output), config), "; Processed by Color");
     boost::system::error_code ec;
     fs::remove(output, ec);
     {

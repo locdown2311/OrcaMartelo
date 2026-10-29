@@ -321,6 +321,8 @@ set(lisbslic3r_sources
     GCode/WipeTowerEstimate.cpp
     GCode/FilamentChangeFlush.cpp
     GCode/FilamentChangeFlush.hpp
+    GCode/PrintOrderLayers.cpp
+    GCode/PrintOrderLayers.hpp
     GCode/WipeTowerEstimate.hpp
     GCodeWriter.cpp
     GCodeWriter.hpp
