@@ -37,7 +37,8 @@ std::string printer_flush_tag(const PrintConfig &config, size_t from_filament, s
 // The long retraction the slicer makes before a cut for this filament (Extruder::slicer_retracts_when_cut()).
 static double cut_retraction(const PrintConfig &config, size_t filament)
 {
-    if (! config.single_extruder_multi_material || filament >= config.long_retractions_when_cut.size() ||
+    // get_at() falls back to the first value, as for a printer option with one value for every filament.
+    if (! config.single_extruder_multi_material || config.long_retractions_when_cut.empty() || config.retraction_distances_when_cut.empty() ||
         ! config.long_retractions_when_cut.get_at(filament) || config.retraction_distances_when_cut.get_at(filament) <= 0.)
         return 0.;
     const std::string &change = config.change_filament_gcode.value;
@@ -87,7 +88,7 @@ std::string restore_filament_change_extras(const std::string &gcode, const Print
             const double retraction = relative_e ? cut_retraction(config, size_t(current)) : 0.;
             // Not when the line before already makes it.
             if (retraction > 0. && (i == 0 || std::abs(retraction_of(lines[i - 1]) - retraction) > EPSILON)) {
-                const double speed = size_t(current) < config.retraction_speed.size() ? config.retraction_speed.get_at(current) : 0.;
+                const double speed = config.retraction_speed.empty() ? 0. : config.retraction_speed.get_at(current);
                 out += "G1 E-" + float_to_string_decimal_point(retraction, 3);
                 if (speed > 0.)
                     out += " F" + float_to_string_decimal_point(60. * speed, 0);

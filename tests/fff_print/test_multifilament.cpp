@@ -2331,9 +2331,10 @@ TEST_CASE("The filament change extras come back after a rewrite, once", "[MultiF
     DynamicPrintConfig dynamic = multifilament_config(2, {
         { "single_extruder_multi_material",     true },
         { "change_filament_gcode",              "T[next_extruder]\n" },
-        { "long_retractions_when_cut",          "1,1" },
-        { "retraction_distances_when_cut",      "20,20" },
-        { "retraction_speed",                   "30,30" },
+        // One value for both filaments, as printer profiles hold them.
+        { "long_retractions_when_cut",          "1" },
+        { "retraction_distances_when_cut",      "20" },
+        { "retraction_speed",                   "30" },
         { "use_relative_e_distances",           true },
         { "printer_flushes_at_filament_change", true },
         { "purge_in_prime_tower",               false },
@@ -2355,7 +2356,7 @@ TEST_CASE("The filament change extras come back after a rewrite, once", "[MultiF
     CHECK(restore_filament_change_extras(restored, config) == restored);
 
     // With neither option nothing changes.
-    config.long_retractions_when_cut.values          = { false, false };
+    config.long_retractions_when_cut.values          = { false };
     config.printer_flushes_at_filament_change.value = false;
     CHECK(restore_filament_change_extras(rewritten, config) == rewritten);
 }
