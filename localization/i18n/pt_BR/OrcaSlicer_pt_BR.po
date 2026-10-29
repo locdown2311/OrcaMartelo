@@ -36309,6 +36309,9 @@ msgstr "O Color Batching falhou no G-code:\n%1%"
 msgid "Failed writing the G-code from Color Batching to %1%"
 msgstr "Falha ao gravar o G-code do Color Batching em %1%"
 
+msgid "Color Batching"
+msgstr "Color Batching"
+
 #~ msgid "Please choose the filament color"
 #~ msgstr "Escolha a cor do filamento"
 
