@@ -1,4 +1,5 @@
 #include "BackgroundSlicingProcess.hpp"
+#include "slic3r/Utils/ColorBatching.hpp"
 #include "GUI_App.hpp"
 #include "GUI.hpp"
 #include "MainFrame.hpp"
@@ -292,6 +293,10 @@ void BackgroundSlicingProcess::process_fff()
             if (run_post_process_scripts(m_temp_output_path, false, "File", m_temp_output_path, m_fff_print->full_print_config()))
                 m_fff_print->reload_gcode_moves(m_gcode_result);
         }
+        // OrcaMartelo: Color Batching rewrites the layers' order and the filament changes, so the preview,
+        // the times and the filament used are read again from what it wrote, the file exported and sent.
+        else if (run_color_batching(m_temp_output_path, m_fff_print->config()))
+            m_fff_print->reload_gcode_moves(m_gcode_result, true);
 
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": export gcode finished");
     }

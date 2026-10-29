@@ -6537,6 +6537,16 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
     
+    def = this->add("color_batching_program", coString);
+    def->label = L("Color Batching program");
+    def->tooltip = L("Path to the color-batching program (github.com/shawn-makes-stuff/Color-Batching). When set, each slice of "
+                     "a multi-color print is passed through it, which prints several layers of a color in one go wherever "
+                     "the nozzle can pass the other colors, for fewer filament changes. The preview, the times and the "
+                     "filament used show the result. Its own settings (nozzle size and shape, edge contact) are read "
+                     "from the color-batching.toml beside the program. Empty: off.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionString(""));
+
     def = this->add("post_process", coStrings);
     def->label = L("Post-processing Scripts");
     def->tooltip = L("If you want to process the output G-code through custom scripts, "

@@ -6,6 +6,8 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/GCode/FilamentChangeFlush.hpp"
+#include "libslic3r/LocalesUtils.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/TriangleSelector.hpp"
 #include "libslic3r/MultiMaterialSegmentation.hpp"
@@ -2320,4 +2322,40 @@ TEST_CASE("A printer that flushes at the filament change reports the flushing vo
         CAPTURE(length);
         CHECK(std::min(std::abs(length - 70. / area), std::abs(length - 110. / area)) < 0.01);
     }
+}
+
+// G-code another program rewrote after export (Color Batching) gets back, around each filament change after
+// the first, the long retraction before the cut and the printer flush comment the slicer had put there.
+TEST_CASE("The filament change extras come back after a rewrite, once", "[MultiFilament]")
+{
+    DynamicPrintConfig dynamic = multifilament_config(2, {
+        { "single_extruder_multi_material",     true },
+        { "change_filament_gcode",              "T[next_extruder]\n" },
+        { "long_retractions_when_cut",          "1,1" },
+        { "retraction_distances_when_cut",      "20,20" },
+        { "retraction_speed",                   "30,30" },
+        { "use_relative_e_distances",           true },
+        { "printer_flushes_at_filament_change", true },
+        { "purge_in_prime_tower",               false },
+        { "flush_volumes_matrix",               "0,140,220,0" },
+        { "flush_multiplier",                   "0.5" },
+    });
+    PrintConfig config;
+    config.apply(dynamic, true);
+    const std::string rewritten = "T0 ; change extruder\nG1 X1 Y1 E1\nG1 E-0.2 F2700\nT1\nG1 X2 Y2 E1\nT0\nG1 X3 Y3 E1\n";
+
+    const std::string restored = restore_filament_change_extras(rewritten, config);
+    const double      area     = 0.25 * M_PI * 1.75 * 1.75;
+    CHECK(restored.find("T0 ; change extruder\nG1 X1 Y1 E1\n") == 0);
+    CHECK(restored.find("G1 E-0.2 F2700\nG1 E-20.000 F1800 ; retract before the cut\nT1\n; EXTERNAL_PURGE " +
+                        float_to_string_decimal_point(70. / area, 3) + "\n") != std::string::npos);
+    CHECK(restored.find("G1 E-20.000 F1800 ; retract before the cut\nT0\n; EXTERNAL_PURGE " +
+                        float_to_string_decimal_point(110. / area, 3) + "\n") != std::string::npos);
+    // Nothing added twice.
+    CHECK(restore_filament_change_extras(restored, config) == restored);
+
+    // With neither option nothing changes.
+    config.long_retractions_when_cut.values          = { false, false };
+    config.printer_flushes_at_filament_change.value = false;
+    CHECK(restore_filament_change_extras(rewritten, config) == rewritten);
 }

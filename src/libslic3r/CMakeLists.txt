@@ -319,6 +319,8 @@ set(lisbslic3r_sources
     GCode/WipeTower.cpp
     GCode/WipeTower.hpp
     GCode/WipeTowerEstimate.cpp
+    GCode/FilamentChangeFlush.cpp
+    GCode/FilamentChangeFlush.hpp
     GCode/WipeTowerEstimate.hpp
     GCodeWriter.cpp
     GCodeWriter.hpp

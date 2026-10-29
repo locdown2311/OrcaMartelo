@@ -396,6 +396,7 @@ src/slic3r/GUI/EncodedFilament.cpp
 src/slic3r/GUI/HttpServer.cpp
 src/slic3r/GUI/Plater.hpp
 src/slic3r/GUI/PostProcessor.cpp
+src/slic3r/Utils/ColorBatching.cpp
 src/slic3r/GUI/TaskManager.cpp
 src/slic3r/GUI/Widgets/ProgressDialog.hpp
 src/slic3r/GUI/Widgets/StepCtrl.cpp

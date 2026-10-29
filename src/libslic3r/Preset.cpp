@@ -1378,7 +1378,7 @@ static std::vector<std::string> s_Preset_print_options{
     "wall_distribution_count",
     "min_feature_size",
     "min_bead_width",
-    "post_process",
+    "post_process", "color_batching_program",
     "slicing_pipeline_plugin",
     "plugins",
     "print_plugin_config_overrides",

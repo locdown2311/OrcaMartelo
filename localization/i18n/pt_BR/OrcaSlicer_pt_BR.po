@@ -36281,6 +36281,34 @@ msgstr "A impressora purga na troca de filamento"
 msgid "The printer's own filament change flushes the flushing volumes, into a purge chute for example, where the slicer's G-code does not show it. Unless the prime tower purges them, the flushing volume of each filament change is counted as flushed filament in the filament used, its weight and its cost."
 msgstr "A própria troca de filamento da impressora purga os volumes de purga, numa calha de purga por exemplo, onde o G-code do fatiador não mostra. A menos que a torre de purga os purgue, o volume de purga de cada troca de filamento é contado como filamento purgado no filamento usado, no seu peso e no seu custo."
 
+# AI Translated
+msgid "Color Batching program"
+msgstr "Programa Color Batching"
+
+# AI Translated
+msgid "Path to the color-batching program (github.com/shawn-makes-stuff/Color-Batching). When set, each slice of a multi-color print is passed through it, which prints several layers of a color in one go wherever the nozzle can pass the other colors, for fewer filament changes. The preview, the times and the filament used show the result. Its own settings (nozzle size and shape, edge contact) are read from the color-batching.toml beside the program. Empty: off."
+msgstr "Caminho do programa color-batching (github.com/shawn-makes-stuff/Color-Batching). Quando definido, cada fatiamento de uma impressão multicolorida passa por ele, que imprime várias camadas de uma cor de uma vez onde o bico consegue passar pelas outras cores, para menos trocas de filamento. A pré-visualização, os tempos e o filamento usado mostram o resultado. As configurações dele (tamanho e forma do bico, contato de borda) são lidas do color-batching.toml ao lado do programa. Vazio: desligado."
+
+# AI Translated
+#, boost-format
+msgid "The Color Batching program does not exist: %1%"
+msgstr "O programa Color Batching não existe: %1%"
+
+# AI Translated
+#, boost-format
+msgid "Failed starting the Color Batching program %1%: %2%"
+msgstr "Falha ao iniciar o programa Color Batching %1%: %2%"
+
+# AI Translated
+#, boost-format
+msgid "Color Batching failed on the G-code:\n%1%"
+msgstr "O Color Batching falhou no G-code:\n%1%"
+
+# AI Translated
+#, boost-format
+msgid "Failed writing the G-code from Color Batching to %1%"
+msgstr "Falha ao gravar o G-code do Color Batching em %1%"
+
 #~ msgid "Please choose the filament color"
 #~ msgstr "Escolha a cor do filamento"
 

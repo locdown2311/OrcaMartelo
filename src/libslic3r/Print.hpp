@@ -1414,7 +1414,8 @@ public:
     // place (post-processing scripts or plugins), so the preview and its G-code window follow the file on
     // disk. Everything else in `result` was computed while slicing and is kept. If the file cannot be
     // re-read, the moves are kept and the line offsets are cleared, which hides the G-code window.
-    void reload_gcode_moves(GCodeProcessorResult* result) const;
+    // With with_statistics, also the times and the filament used, for a file another program rewrote.
+    void reload_gcode_moves(GCodeProcessorResult* result, bool with_statistics = false) const;
     //BBS: add modify_count logic
     int get_modified_count() const {return m_modified_count;}
     //BBS: add status for whether support used

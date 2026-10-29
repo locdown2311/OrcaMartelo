@@ -312,6 +312,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "printing_by_object_gcode",
         "filament_end_gcode",
         "post_process",
+        "color_batching_program",
         // "plugins" is the derived manifest backing the plugin-picker options; on its own it only
         // affects G-code export. The specific option (e.g. slicing_pipeline_plugin) drives any re-slice.
         "plugins",
@@ -6326,7 +6327,7 @@ void Print::export_gcode_from_previous_file(const std::string& file, GCodeProces
     }
 }
 
-void Print::reload_gcode_moves(GCodeProcessorResult* result) const
+void Print::reload_gcode_moves(GCodeProcessorResult* result, bool with_statistics) const
 {
     GCodeProcessor processor;
     GCodeProcessor::s_IsBBLPrinter = is_BBL_printer();
@@ -6349,6 +6350,8 @@ void Print::reload_gcode_moves(GCodeProcessorResult* result) const
     std::lock_guard<std::mutex> lock(result->result_mutex);
     result->moves      = std::move(reloaded.moves);
     result->lines_ends = std::move(reloaded.lines_ends);
+    if (with_statistics)
+        result->print_statistics = std::move(reloaded.print_statistics);
 }
 
 std::tuple<float, float> Print::object_skirt_offset(double margin_height) const

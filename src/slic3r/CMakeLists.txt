@@ -766,6 +766,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/Duet.cpp
     Utils/Duet.hpp
     Utils/AnycubicLink.cpp
+    Utils/ColorBatching.cpp
+    Utils/ColorBatching.hpp
     Utils/AnycubicLink.hpp
     Utils/ElegooLink.cpp
     Utils/ElegooLink.hpp
