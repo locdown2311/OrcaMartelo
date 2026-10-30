@@ -247,6 +247,7 @@
 #include "RemovableDriveManager.hpp"
 #include "InstanceCheck.hpp"
 #include "NotificationManager.hpp"
+#include "AnycubicNotifications.hpp"
 #include "PresetComboBoxes.hpp"
 #include "MsgDialog.hpp"
 #include "Widgets/MultiNozzleSync.hpp"           // NozzleOption, tryPopUpMultiNozzleDialog, setExtruderNozzleCount
@@ -7638,6 +7639,8 @@ struct Plater::priv
     UVEditorCanvas* uv_editor_canvas { nullptr };
     bool first_enter_assemble{ true };
     std::unique_ptr<NotificationManager> notification_manager;
+    // Declared after notification_manager, which it pushes to, so it is destroyed first.
+    std::unique_ptr<AnycubicNotificationPoller> anycubic_notifications;
 
     ProjectDirtyStateManager dirty_state;
 
@@ -8656,6 +8659,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
     //notification_manager = new NotificationManager(this->q);
 
     if (wxGetApp().is_editor()) {
+        anycubic_notifications = std::make_unique<AnycubicNotificationPoller>(notification_manager.get());
         this->q->Bind(EVT_EJECT_DRIVE_NOTIFICAION_CLICKED, [this](EjectDriveNotificationClickedEvent&) { this->q->eject_drive(); });
         this->q->Bind(EVT_EXPORT_GCODE_NOTIFICAION_CLICKED, [this](ExportGcodeNotificationClickedEvent&) { this->q->export_gcode(true); });
         this->q->Bind(EVT_PRESET_UPDATE_AVAILABLE_CLICKED, [](PresetUpdateAvailableClickedEvent&) {  wxGetApp().get_preset_updater()->on_update_notification_confirm(); });

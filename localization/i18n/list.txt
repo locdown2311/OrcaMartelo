@@ -128,6 +128,7 @@ src/slic3r/GUI/ThermalPreconditioningDialog.hpp
 src/slic3r/GUI/Jobs/SLAImportJob.cpp
 src/slic3r/GUI/Jobs/UpgradeNetworkJob.cpp
 src/slic3r/GUI/AboutDialog.cpp
+src/slic3r/GUI/AnycubicNotifications.cpp
 src/slic3r/GUI/ActionRegistry.cpp
 src/slic3r/GUI/AMSMaterialsSetting.cpp
 src/slic3r/GUI/ExtrusionCalibration.cpp
