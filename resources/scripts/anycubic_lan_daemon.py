@@ -10,6 +10,7 @@ import urllib.request
 import urllib.parse
 import ssl
 import socket
+import tempfile
 try:
     from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 except ImportError:
@@ -536,7 +537,138 @@ def on_mqtt_connect(c, userdata, flags, rc, properties=None):
     c.subscribe(f"anycubic/anycubicCloud/v1/printer/public/{model_id}/{device_id}/#")
     query_all()
 
+# Notification center: print lifecycle events and printer errors, newest last.
+# Kept across daemon restarts in a small JSON file per printer.
+NOTIFICATION_LIMIT = 100
+NOTIFICATIONS_FILE = os.path.join(
+    tempfile.gettempdir(),
+    "orcacubic_notifications_" + "".join(ch if ch.isalnum() else "_" for ch in PRINTER_IP) + ".json")
+notifications = []
+notifications_lock = threading.Lock()
+notification_tracker = {"job": "", "next_id": 1}
+ACTIVE_STATES = ("printing", "paused", "busy")
+
+
+def _load_notifications():
+    try:
+        with open(NOTIFICATIONS_FILE, "r", encoding="utf-8") as fh:
+            saved = json.load(fh)
+        items = [n for n in saved if isinstance(n, dict) and isinstance(n.get("id"), int)]
+        notifications[:] = items[-NOTIFICATION_LIMIT:]
+        if notifications:
+            notification_tracker["next_id"] = notifications[-1]["id"] + 1
+    except Exception:
+        pass
+
+
+def _save_notifications():
+    try:
+        tmp = NOTIFICATIONS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(notifications, fh)
+        os.replace(tmp, NOTIFICATIONS_FILE)
+    except Exception:
+        pass
+
+
+def add_notification(kind, event, title, message="", job="", code=0, dedupe_seconds=0):
+    """Record an event; kind is error, warning, success or info."""
+    now = int(time.time())
+    with notifications_lock:
+        if dedupe_seconds:
+            for n in reversed(notifications):
+                if now - n.get("time", 0) > dedupe_seconds:
+                    break
+                if n.get("event") == event and n.get("message") == message and n.get("code") == code:
+                    return None
+        entry = {
+            "id": notification_tracker["next_id"], "time": now, "kind": kind, "event": event,
+            "title": title, "message": message, "job": os.path.basename(job or ""), "code": code, "read": False,
+        }
+        notification_tracker["next_id"] += 1
+        notifications.append(entry)
+        del notifications[:-NOTIFICATION_LIMIT]
+        _save_notifications()
+    print(f"[Bridge] Notification: {title} {message}")
+    return entry
+
+
+def _is_real_job(name):
+    return bool(name) and name != "Ready" and not is_command_filename(name)
+
+
+def observe_notifications(prev_raw_state, prev_progress, prev_error):
+    """Turn a telemetry change into notifications. prev_raw_state is "idle"
+    until the printer reported a state, so a job already running when the
+    bridge starts is tracked without announcing its start."""
+    prev = normalize_printer_state(prev_raw_state)
+    state = normalize_printer_state(telemetry.get("state"))
+    job = telemetry.get("job_name", "")
+
+    err = (telemetry.get("last_error", ""), telemetry.get("last_error_time", 0))
+    if err[0] and err != prev_error:
+        code = _as_int(telemetry.get("last_error_code", 0))
+        homing = code in (10901, 10111) or "home" in err[0].lower()
+        add_notification("warning" if homing else "error", "printer_error",
+                         "Printer notice" if homing else "Printer error", err[0],
+                         notification_tracker["job"], code, dedupe_seconds=60)
+
+    if state in ("printing", "paused") and _is_real_job(job) and job != notification_tracker["job"]:
+        notification_tracker["job"] = job
+        if prev_raw_state != "idle":
+            add_notification("info", "started", "Print started", "", job)
+    current = notification_tracker["job"]
+    if state == prev or not current:
+        return
+    progress = _as_int(prev_progress, 0)
+    if state == "paused":
+        add_notification("warning", "paused", "Print paused", "", current)
+    elif state == "printing" and prev == "paused":
+        add_notification("info", "resumed", "Print resumed", "", current)
+    elif state == "completed" or (state == "free" and prev in ACTIVE_STATES and progress >= 99):
+        add_notification("success", "finished", "Print finished", "", current)
+        notification_tracker["job"] = ""
+    elif state in ("failed", "abnormal"):
+        add_notification("error", "failed", "Print failed", telemetry.get("last_error", ""), current)
+        notification_tracker["job"] = ""
+    elif state == "stopped" or (state == "free" and prev in ACTIVE_STATES):
+        add_notification("warning", "stopped", "Print stopped", f"Stopped at {progress}%", current)
+        notification_tracker["job"] = ""
+
+
+def notifications_since(since_id):
+    with notifications_lock:
+        items = [dict(n) for n in notifications if n["id"] > since_id]
+        unread = sum(1 for n in notifications if not n.get("read"))
+        last_id = notifications[-1]["id"] if notifications else 0
+    return {"notifications": items, "unread": unread, "last_id": last_id}
+
+
+def mark_notifications_read(ids=None):
+    with notifications_lock:
+        for n in notifications:
+            if ids is None or n["id"] in ids:
+                n["read"] = True
+        _save_notifications()
+
+
+def clear_notifications():
+    with notifications_lock:
+        notifications.clear()
+        _save_notifications()
+
+
 def on_mqtt_message(c, userdata, msg):
+    prev = (telemetry.get("state"), telemetry.get("progress", 0),
+            (telemetry.get("last_error", ""), telemetry.get("last_error_time", 0)))
+    _handle_mqtt_message(c, userdata, msg)
+    try:
+        observe_notifications(*prev)
+    except Exception as e:
+        print(f"[Bridge] Notification error: {e}")
+
+
+def _handle_mqtt_message(c, userdata, msg):
     global telemetry, pending_cleanup
     try:
         payload = json.loads(msg.payload.decode("utf-8", errors="ignore"))
@@ -1317,6 +1449,13 @@ class BridgeServer(BaseHTTPRequestHandler):
                 print(f"[Bridge] Camera proxy exception: {e}")
         elif not self.require_authorized():
             return
+        elif self.path.startswith("/notifications"):
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(notifications_since(_as_int(query.get("since", ["0"])[0], 0))).encode("utf-8"))
         elif self.path.startswith("/upload-token"):
             upload_url = telemetry.get("upload_url", "")
             token = urllib.parse.parse_qs(urllib.parse.urlparse(upload_url).query).get("s", [""])[0] or telemetry.get("token", "")
@@ -1371,7 +1510,15 @@ class BridgeServer(BaseHTTPRequestHandler):
 
         result = {"status": "ok", "ip": PRINTER_IP}
 
-        if self.path.startswith("/shutdown"):
+        if self.path.startswith("/notifications/read"):
+            ids = data.get("ids")
+            mark_notifications_read(set(_as_int(i, -1) for i in ids) if isinstance(ids, list) else None)
+            result = notifications_since(0)
+            result["notifications"] = []
+        elif self.path.startswith("/notifications/clear"):
+            clear_notifications()
+            result = notifications_since(0)
+        elif self.path.startswith("/shutdown"):
             result = {"status": "ok", "ip": PRINTER_IP}
             shutdown_event.set()
             if mqtt_client:
@@ -1966,6 +2113,7 @@ def run_server():
         server.server_close()
 
 if __name__ == "__main__":
+    _load_notifications()
     t1 = threading.Thread(target=mqtt_worker, daemon=True)
     t1.start()
     run_server()

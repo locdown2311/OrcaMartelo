@@ -37998,3 +37998,33 @@ msgstr "Enviando pelo Moonraker do Rinkhals: o nivelamento automático e as cali
 # AI Translated
 msgid "Filament %1% has no matching ACE tool. Rinkhals maps at most one filament per ACE slot."
 msgstr "O filamento %1% não tem ferramenta correspondente no ACE. O Rinkhals mapeia no máximo um filamento por slot do ACE."
+
+# AI Translated
+#, boost-format
+msgid "Print finished: %1%"
+msgstr "Impressão concluída: %1%"
+
+# AI Translated
+#, boost-format
+msgid "Print stopped: %1%"
+msgstr "Impressão interrompida: %1%"
+
+# AI Translated
+#, boost-format
+msgid "Print paused: %1%"
+msgstr "Impressão pausada: %1%"
+
+# AI Translated
+#, boost-format
+msgid "Print failed: %1%"
+msgstr "Falha na impressão: %1%"
+
+# AI Translated
+#. TRN %1% is the printer's error code, %2% the printer's own message.
+#, boost-format
+msgid "Printer error %1%: %2%"
+msgstr "Erro da impressora %1%: %2%"
+
+# AI Translated
+msgid "Open Device tab"
+msgstr "Abrir aba Dispositivo"
