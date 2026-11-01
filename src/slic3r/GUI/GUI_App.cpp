@@ -2421,6 +2421,10 @@ void GUI_App::init_networking_callbacks()
                     if (is_closing()) {
                         return;
                     }
+                    // Orca: ends the connect a selection started; with the selection logs this shows
+                    // whether a later selection landed while that connect was in flight.
+                    BOOST_LOG_TRIVIAL(info) << "local connect result: dev_id=" << dev_id << ", state=" << state
+                                            << ", msg=" << msg;
                     /* request_pushing */
                     MachineObject* obj = m_device_manager->get_my_machine(dev_id);
                     wxCommandEvent event(EVT_CONNECT_LAN_MODE_PRINT);
@@ -2445,8 +2449,14 @@ void GUI_App::init_networking_callbacks()
                                     obj->set_access_code("");
                                     text = wxString::Format(_L("Incorrect password"));
                                     wxGetApp().show_dialog(text);
+                                } else if (msg == "-1") {
+                                    text = wxString::Format(_L("Connect %s failed! [SN:%s, code=%s]"), from_u8(obj->get_dev_name()), obj->get_dev_id(), msg);
+                                    text += L"\n\u2022 " + _L("Check that the printer is on the same network as this computer and that its IP address is correct.");
+                                    text += L"\n\u2022 " + _L("If the connection still fails, try a different network plug-in version in Preferences.");
+                                    text += L"\n\u2022 " + _L("A missing or damaged TLS/CA certificate in 'printer.cer' can also cause this error.");
+                                    wxGetApp().show_dialog(text);
                                 } else {
-                                text = wxString::Format(_L("Connect %s failed! [SN:%s, code=%s]"), from_u8(obj->get_dev_name()), obj->get_dev_id(), msg);
+                                    text = wxString::Format(_L("Connect %s failed! [SN:%s, code=%s]"), from_u8(obj->get_dev_name()), obj->get_dev_id(), msg);
                                     wxGetApp().show_dialog(text);
                                 }
                                 event.SetInt(-1);
@@ -4307,7 +4317,11 @@ void GUI_App::set_live_printer_agent(std::shared_ptr<IPrinterAgent> agent)
     // a standalone helper. Pass nullptr to clear the selection.
     if (DeviceManager* dev = getDeviceManager())
     {
+        // why: the swap tears the connection down, it is not the user leaving that printer, so it
+        // stays remembered under the outgoing agent and reconnects when that agent is live again
+        const std::string last_machine = dev->get_user_last_machine();
         dev->set_selected_machine(""); // why: empty id disconnects and deselects the current machine
+        dev->record_user_last_machine(last_machine);
         m_agent->set_user_selected_machine("");
         // note: belt-and-suspenders (precedent: DeviceManagerRefresher::on_timer)
         dev->OnSelectedMachineLost(); // why: clear stale sidebar sync-status / AMS
@@ -4434,14 +4448,17 @@ void GUI_App::switch_printer_agent_if_pending()
 
 void GUI_App::select_machine(const std::string& agent_id)
 {
-    // Skip for BBL agent for now - uses its own device discovery/selection
-    // Orca todo: revisit in future if we want to support auto-switching for BBL printers
-    if (agent_id == BBL_PRINTER_AGENT_ID) {
+    if (!m_device_manager || !preset_bundle) {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": no device manager or preset bundle";
         return;
     }
 
-    if (!m_device_manager || !preset_bundle) {
-        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": no device manager or preset bundle";
+    // Orca: Bambu printers are not tied to the preset's print_host. Reconnect the one the user last
+    // selected, as BambuStudio does at startup: a saved LAN printer now, a cloud printer once the
+    // account's machine list arrives. Directly, not through the Device tab's selection flow, which
+    // would also queue a nozzle sync for the next visit to Prepare.
+    if (agent_id == BBL_PRINTER_AGENT_ID) {
+        m_device_manager->restore_last_machine();
         return;
     }
 
@@ -8190,6 +8207,15 @@ void GUI_App::start_sync_user_preset(bool with_progress_dlg)
 
     m_sync_update_thread = Slic3r::create_thread(
         [this, progressFn, cancelFn, finishFn, t = std::weak_ptr<int>(m_user_sync_token)] {
+            // NotificationManager is not thread safe and is destroyed before this thread is joined
+            const auto notify = [this, t](const std::string& text) {
+                CallAfter([this, t, text] {
+                    if (t.expired() || is_closing())
+                        return;
+                    plater()->get_notification_manager()->push_notification(NotificationType::CustomNotification,
+                                                                             NotificationManager::NotificationLevel::RegularNotificationLevel, text);
+                });
+            };
             // finishFn tears down the progress dialog (and clears the re-entrancy guard), so it
             // must run on every exit path — otherwise an early bail-out would leak the modal
             // dialog and leave the guard stuck, blocking all later manual syncs.
@@ -8340,16 +8366,14 @@ void GUI_App::start_sync_user_preset(bool with_progress_dlg)
                         {
                             for(auto& n : not_found)
                             {
-                                std::string text = format(_L("Bundle %s is no longer available."), n);
-                                wxGetApp().plater()->get_notification_manager()->push_notification(NotificationType::CustomNotification,NotificationManager::NotificationLevel::RegularNotificationLevel,text);
+                                notify(format(_L("Bundle %s is no longer available."), n));
                             }
                         }
                         if(!unauthorized.empty())
                         {
                             for(auto& i : unauthorized)
                             {
-                                std::string text = format(_L("Bundle %s access is unauthorized."), i);
-                                wxGetApp().plater()->get_notification_manager()->push_notification(NotificationType::CustomNotification,NotificationManager::NotificationLevel::RegularNotificationLevel,text);
+                                notify(format(_L("Bundle %s access is unauthorized."), i));
                                 preset_bundle->bundles.ReadLock();
                                 if(preset_bundle->bundles.m_bundles.find(i) != preset_bundle->bundles.m_bundles.end())
                                 {
@@ -8361,6 +8385,9 @@ void GUI_App::start_sync_user_preset(bool with_progress_dlg)
                         
                             // Iterate over the bundles, and update/create
                         for (const auto& bundle_entry : bundles_to_sync) {
+                            // a partial bundles_synced would delete the unvisited bundles below
+                            if (t.expired() || is_closing())
+                                return;
                             bundles_synced.insert(bundle_entry.first);
                             // Sync each bundle individually
                             // if(!preset_bundle->bundles.pauseReads.load()) // if pause is true we will skip updating this frame altogether
@@ -8379,12 +8406,7 @@ void GUI_App::start_sync_user_preset(bool with_progress_dlg)
                         }
 
                         if (update_available) {
-                            wxGetApp()
-                                .plater()
-                                ->get_notification_manager()
-                                ->push_notification(NotificationType::CustomNotification,
-                                                    NotificationManager::NotificationLevel::RegularNotificationLevel, _u8L("There is an update available. Open the preset bundle dialog to update it."));
-
+                            notify(_u8L("There is an update available. Open the preset bundle dialog to update it."));
                             update_available = false;
                         }
                         
@@ -8425,8 +8447,7 @@ void GUI_App::start_sync_user_preset(bool with_progress_dlg)
                             preset_bundle->bundles.m_bundles.erase(bundle.id);
                             preset_bundle->bundles.WriteUnlock();
 
-                            std::string text = format(_L("%s has been removed."), bundle.name);
-                            wxGetApp().plater()->get_notification_manager()->push_notification(NotificationType::CustomNotification,NotificationManager::NotificationLevel::RegularNotificationLevel,text);
+                            notify(format(_L("%s has been removed."), bundle.name));
                             has_deletion = true;
                         }
 
