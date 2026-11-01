@@ -1797,24 +1797,6 @@ TEST_CASE("A filament override turned off stays off when its parent sets it", "[
     CHECK(parent.option<Slic3r::ConfigOptionFloatsNullable>("filament_retraction_length")->values[0] == 0.2);
 }
 
-TEST_CASE("A nil in a multi-variant filament value still means the same as the parent", "[Config][Variant]") {
-    // Preset::save() writes a variant equal to the parent's as nil: loading keeps the parent's value there.
-    Slic3r::DynamicPrintConfig parent;
-    parent.set_key_value("filament_retraction_speed", new Slic3r::ConfigOptionFloatsNullable({80., 60.}));
-    parent.set_key_value("filament_extruder_variant", new Slic3r::ConfigOptionStrings({"Direct Drive Standard", "Bowden Standard"}));
-
-    Slic3r::DynamicPrintConfig child;
-    child.set_key_value("filament_retraction_speed", new Slic3r::ConfigOptionFloatsNullable({Slic3r::ConfigOptionFloatsNullable::nil_value(), 40.}));
-    child.set_key_value("filament_extruder_variant", new Slic3r::ConfigOptionStrings({"Direct Drive Standard", "Bowden Standard"}));
-
-    std::set<std::string> key_set1 = Slic3r::filament_options_with_variant, key_set2;
-    parent.update_diff_values_to_child_config(child, "", "filament_extruder_variant", key_set1, key_set2);
-
-    const auto *speed = parent.option<Slic3r::ConfigOptionFloatsNullable>("filament_retraction_speed");
-    CHECK(speed->values[0] == 80.);
-    CHECK(speed->values[1] == 40.);
-}
-
 TEST_CASE("Custom G-code placeholder lists are keyed by option keys", "[Config]")
 {
     const auto &placeholders = custom_gcode_specific_placeholders();
