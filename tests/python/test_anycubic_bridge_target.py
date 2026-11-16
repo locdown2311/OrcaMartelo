@@ -152,7 +152,7 @@ class TargetBindingTests(unittest.TestCase):
         self.assertNotEqual(pub["estimated_end_time"], "--")
         self.assertEqual(len(pub["estimated_end_time"]), 5)  # HH:MM
 
-    def test_start_print_job_for_3mf_uses_local_task_and_internal_gcode_name(self):
+    def test_start_print_job_for_3mf_uses_local_task_and_uploaded_name(self):
         published_messages = []
         class MockMqttClient:
             def publish(self, topic, payload):
@@ -186,8 +186,8 @@ class TargetBindingTests(unittest.TestCase):
             self.assertEqual(len(print_msgs), 1)
             # Local print task uses filetype 1
             self.assertEqual(print_msgs[0]["data"]["filetype"], 1)
-            # Internal filename must be the extracted .gcode, not ending in .3mf
-            self.assertEqual(print_msgs[0]["data"]["filename"], "Plate_model.gcode")
+            # The print starts under the uploaded name, so the printer prepares it from the 3MF metadata.
+            self.assertEqual(print_msgs[0]["data"]["filename"], "Plate_model.gcode.3mf")
         finally:
             daemon.mqtt_client = old_client
 
@@ -365,7 +365,7 @@ class TargetBindingTests(unittest.TestCase):
             daemon.mqtt_client = old_client
             daemon.urllib.request.urlopen = old_urlopen
 
-    def test_upload_print_file_3mf_starts_under_inner_gcode_name(self):
+    def test_upload_print_file_3mf_starts_under_uploaded_name(self):
         published_messages = []
 
         class MockMqttClient:
@@ -405,10 +405,10 @@ class TargetBindingTests(unittest.TestCase):
             connection.close()
 
             self.assertEqual(payload["status"], "ok")
-            self.assertEqual(payload["start_filename"], "Plate_model.gcode")
+            self.assertEqual(payload["start_filename"], "Plate_model.gcode.3mf")
             print_msgs = [p for t, p in published_messages if p.get("type") == "print" and p.get("action") == "start"]
             self.assertEqual(len(print_msgs), 1)
-            self.assertEqual(print_msgs[0]["data"]["filename"], "Plate_model.gcode")
+            self.assertEqual(print_msgs[0]["data"]["filename"], "Plate_model.gcode.3mf")
             self.assertEqual(print_msgs[0]["data"]["filetype"], 1)
         finally:
             daemon.mqtt_client = old_client
