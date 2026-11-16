@@ -37738,10 +37738,6 @@ msgstr "Color Batching"
 #~ msgid "The 3MF was created by BambuStudio. Some settings may differ from OrcaSlicer."
 #~ msgstr "O arquivo 3MF foi criado pelo Bambu Studio. Algumas configurações podem ser diferentes do OrcaSlicer."
 
-#, c-format, boost-format
-#~ msgid "%s: %s"
-#~ msgstr "%s: %s"
-
 #~ msgid ""
 #~ "Centers the internal infill of each part on itself, as if it were sliced on its own, instead of on the whole assembly. Parts that touch or overlap are treated as one body and share a center; separate parts (or distinct 3D objects) each get their own.\n"
 #~ "Useful when an assembly groups several objects that should each keep a consistent, self-centered infill.\n"
@@ -38066,12 +38062,6 @@ msgstr "Color Batching"
 
 #~ msgid "Hostname or IP"
 #~ msgstr "Nome do Host ou IP"
-
-#~ msgid "Custom camera source"
-#~ msgstr "Fonte de câmera personalizada"
-
-#~ msgid "Switch Camera View"
-#~ msgstr "Trocar Vista da Câmera"
 
 #~ msgid "Support/Color Painting: adjust section position"
 #~ msgstr "Suporte/Pintura em cores: ajustar a posição da seção"
