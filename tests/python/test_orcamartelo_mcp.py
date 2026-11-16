@@ -349,6 +349,25 @@ class ControlTests(unittest.TestCase):
         self.assertIn("pause", actions)
         self.assertIn("control", actions)
 
+    def test_the_ace_status_shows_the_dryer_from_the_box_report(self):
+        daemon.telemetry.update({"material_boxes": [], "ace_humidity": None})
+        daemon.apply_multi_color_box_report({"multi_color_box": [{
+            "id": 0, "temp": 48, "humidity": 21, "auto_feed": 1, "loaded_slot": -1,
+            "drying_status": {"status": 1, "target_temp": 55, "duration": 360, "remain_time": 90},
+            "slots": [{"index": 0, "type": "PETG", "color": [255, 0, 0], "status": 5}]}]})
+        status = self.call("get_ace_status")["structuredContent"]
+        box, = status["boxes"]
+        self.assertTrue(status["has_multi_color_box"])
+        self.assertEqual((box["temperature_c"], box["humidity_percent"], box["drying"]), (48, 21, True))
+        self.assertEqual((box["drying_target_c"], box["drying_remaining_minutes"], box["backup_enabled"]), (55, 90, True))
+        self.assertIsNotNone(box["drying_ends"])
+
+    def test_an_idle_dryer_reports_no_target(self):
+        daemon.telemetry.update({"material_boxes": [{"id": 0, "temp": 25, "auto_feed": 0,
+                                                     "drying_status": {"status": 0, "target_temp": 0}, "slots": []}]})
+        box, = self.call("get_ace_status")["structuredContent"]["boxes"]
+        self.assertEqual((box["drying"], box["drying_target_c"], box["drying_ends"]), (False, None, None))
+
     def test_the_printer_file_list_comes_from_its_report(self):
         def report():
             while not any(m.get("action") == "listLocal" for _, m in self.mqtt.published):

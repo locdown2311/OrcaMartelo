@@ -1032,6 +1032,31 @@ class McpBackend:
                         "has_material": bool(ext.get("available")), "loaded": bool(ext.get("loaded"))}
         return {"has_multi_color_box": bool(t.get("has_multi_color_box")), "slots": slots, "external_spool": external}
 
+    def ace_status(self):
+        t = public_telemetry()
+        boxes = []
+        for box in t.get("material_boxes") or []:
+            if _as_int(box.get("id"), -1) < 0:
+                continue  # The external spool holder has no heater.
+            drying = box.get("drying_status") or {}
+            on = bool(drying.get("status"))
+            remaining = _as_int(drying.get("remain_time", 0)) if on else 0
+            boxes.append({
+                "box": box.get("id"),
+                "temperature_c": box.get("temp"),
+                "drying": on,
+                "drying_target_c": drying.get("target_temp") if on else None,
+                "drying_duration_minutes": drying.get("duration") if on else None,
+                "drying_remaining_minutes": remaining if on else None,
+                "drying_ends": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() + remaining * 60)) if on and remaining else None,
+                "backup_enabled": bool(box.get("auto_feed")),
+            })
+        if not boxes:
+            return {"has_multi_color_box": False, "boxes": []}
+        if t.get("ace_humidity") is not None:
+            boxes[0]["humidity_percent"] = t.get("ace_humidity")
+        return {"has_multi_color_box": True, "boxes": boxes}
+
     def notifications(self, limit=20, unread_only=False):
         with notifications_lock:
             items = [dict(n) for n in notifications if not unread_only or not n.get("read")]

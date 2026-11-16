@@ -61,6 +61,9 @@ TOOLS = [
           "OrcaMartelo have a cost."),
     _tool("get_filaments", "Loaded filaments",
           "Spools in the multi-color box (ACE) slots and the external spool: material, color, brand, and which slot is loaded or feeding."),
+    _tool("get_ace_status", "ACE status",
+          "State of the multi-color box (ACE): its temperature and humidity, whether the dryer is on with its target "
+          "temperature and the minutes left, and whether the backup spool switch is on."),
     _tool("get_notifications", "Notifications",
           "Recent print events (started, paused, resumed, finished, stopped, failed) and printer errors, newest first.",
           {"limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Most events to return (default 20)."},
@@ -109,7 +112,7 @@ TOOLS = [
           {"slot": _SLOT}, ["slot"], _CONFIRMED),
     _tool("unload_filament", "Unload filament", "Pull the filament of an ACE slot back into the ACE. Only while idle." + _CONFIRM_NOTE,
           {"slot": _SLOT}, ["slot"], _CONFIRMED),
-    _tool("set_ace_dryer", "ACE dryer", "Start or stop drying the filament in the ACE.",
+    _tool("set_ace_dryer", "ACE dryer", "Start or stop drying the filament in the ACE; get_ace_status shows the dryer.",
           {"on": {"type": "boolean"},
            "temperature": {"type": "integer", "minimum": 30, "maximum": 65, "description": "°C, default 50."},
            "hours": {"type": "integer", "minimum": 1, "maximum": 24, "description": "Default 4."}},
@@ -165,6 +168,7 @@ _TOOL_METHODS.update({
     "get_camera_snapshot": "camera_snapshot",
     "get_print_cost": "print_cost",
     "get_filaments": "filaments",
+    "get_ace_status": "ace_status",
     "get_notifications": "notifications",
     "get_printer_info": "printer_info",
 })
