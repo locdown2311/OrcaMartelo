@@ -29,6 +29,11 @@ if VENDOR_DIR not in sys.path:
 import pyaes
 import paho.mqtt.client as mqtt
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+import orcamartelo_mcp
+
 PRINTER_IP = os.environ.get("ORCACUBIC_PRINTER_IP", "").strip()
 if len(sys.argv) > 1 and sys.argv[1].strip():
     PRINTER_IP = sys.argv[1].strip()
@@ -658,6 +663,408 @@ def clear_notifications():
         _save_notifications()
 
 
+# Estimated filament cost of the prints sent from OrcaMartelo, for the MCP server.
+# Keyed by job_cost_key(), the newest last; kept across restarts like the notifications.
+JOB_COST_LIMIT = 50
+JOB_COSTS_FILE = os.path.join(
+    tempfile.gettempdir(),
+    "orcacubic_job_costs_" + "".join(ch if ch.isalnum() else "_" for ch in PRINTER_IP) + ".json")
+job_costs = {}
+job_costs_lock = threading.Lock()
+
+
+def job_cost_key(name):
+    """The file name without folder and print-file extensions, so the name the
+    printer reports matches the name the print was sent under."""
+    base = os.path.basename(str(name or "").replace("\\", "/")).strip().lower()
+    for ext in (".3mf", ".gcode", ".bgcode"):
+        if base.endswith(ext):
+            base = base[:-len(ext)]
+    return base
+
+
+def _load_job_costs():
+    try:
+        with open(JOB_COSTS_FILE, "r", encoding="utf-8") as fh:
+            saved = json.load(fh)
+        if isinstance(saved, dict):
+            job_costs.update({k: v for k, v in saved.items() if isinstance(v, dict)})
+    except Exception:
+        pass
+
+
+def _save_job_costs():
+    try:
+        tmp = JOB_COSTS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(job_costs, fh)
+        os.replace(tmp, JOB_COSTS_FILE)
+    except Exception:
+        pass
+
+
+def _as_float(value, fallback=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def record_job_cost(name, cost, weight_g, filament_mm=0.0, filaments=None):
+    """Remember the sliced cost of a print sent under name. Nothing is kept without a weight."""
+    key = job_cost_key(name)
+    weight_g = _as_float(weight_g)
+    if not key or weight_g <= 0:
+        return None
+    entry = {
+        "job": os.path.basename(str(name)),
+        "cost": round(_as_float(cost), 2),
+        "weight_g": round(weight_g, 2),
+        "filament_m": round(_as_float(filament_mm) / 1000.0, 2),
+        "filaments": filaments or [],
+        "sent_at": int(time.time()),
+    }
+    with job_costs_lock:
+        job_costs.pop(key, None)
+        job_costs[key] = entry
+        for old in list(job_costs)[:-JOB_COST_LIMIT]:
+            del job_costs[old]
+        _save_job_costs()
+    return entry
+
+
+def find_job_cost(name):
+    key = job_cost_key(name)
+    if not key:
+        return None
+    with job_costs_lock:
+        if key in job_costs:
+            return dict(job_costs[key])
+        # The printer may report a shortened or decorated name.
+        for k in reversed(list(job_costs)):
+            if k and (k in key or key in k):
+                return dict(job_costs[k])
+    return None
+
+
+def _csv_floats(value):
+    return [_as_float(v.strip()) for v in value.split(",") if v.strip()]
+
+
+def parse_cost_from_bytes(content_bytes):
+    """Read the cost lines OrcaSlicer writes at the end of a G-code file.
+    Returns (cost, weight_g, filament_mm, filaments), or None without them."""
+    import re
+    head = content_bytes[:1048576].decode("utf-8", errors="ignore")
+    tail = content_bytes[-1048576:].decode("utf-8", errors="ignore") if len(content_bytes) > 1048576 else ""
+    text = head + "\n" + tail
+
+    def value(pattern):
+        m = re.search(r"^;\s*" + pattern + r"\s*=\s*([^\r\n]*)", text, re.IGNORECASE | re.MULTILINE)
+        return m.group(1).strip() if m else ""
+
+    weights = _csv_floats(value(r"filament used \[g\]"))
+    costs = _csv_floats(value(r"filament cost"))
+    lengths = _csv_floats(value(r"filament used \[mm\]"))
+    weight = _as_float(value(r"total filament used \[g\]")) or sum(weights)
+    if weight <= 0:
+        return None
+    cost = _as_float(value(r"total filament cost")) or sum(costs)
+    types = [t.strip() for t in value("filament_type").split(";")]
+    colors = [c.strip() for c in value("filament_colou?r").split(";")]
+    filaments = []
+    for i, w in enumerate(weights):
+        if w <= 0:
+            continue
+        filaments.append({
+            "filament": i + 1,
+            "type": types[i] if i < len(types) else "",
+            "color": colors[i] if i < len(colors) else "",
+            "weight_g": round(w, 2),
+            "cost": round(costs[i], 2) if i < len(costs) else 0.0,
+        })
+    return cost, weight, sum(lengths), filaments
+
+
+# Camera snapshots for the MCP server. A frame of an MJPEG camera is read here. The native
+# camera streams H.264 in FLV, which the slicer decodes: it waits on /camera/snapshot/wait
+# for a request and posts the JPEG back to /camera/snapshot.
+SNAPSHOT_TIMEOUT = 15
+SNAPSHOT_MAX_BYTES = 8 * 1024 * 1024
+snapshot_cond = threading.Condition()
+snapshot_state = {"next_id": 1, "pending": [], "results": {}}
+
+
+def _is_mjpeg_url(url):
+    u = (url or "").lower()
+    return any(tag in u for tag in ("action=stream", "action=snapshot", ".mjpg", ".mjpeg", ".jpg", ":8080", "/webcam"))
+
+
+def _jpeg_from_stream(url, timeout=6):
+    """The first JPEG of an MJPEG stream, or a still image."""
+    req = urllib.request.Request(url, headers={"User-Agent": "OrcaMartelo"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        if resp.headers.get("Content-Type", "").startswith("image/jpeg"):
+            return resp.read(SNAPSHOT_MAX_BYTES)
+        buf = b""
+        while len(buf) < SNAPSHOT_MAX_BYTES:
+            chunk = resp.read(16384)
+            if not chunk:
+                break
+            buf += chunk
+            start = buf.find(b"\xff\xd8")
+            end = buf.find(b"\xff\xd9", start + 2) if start >= 0 else -1
+            if end >= 0:
+                return buf[start:end + 2]
+    return None
+
+
+def _snapshot_from_slicer(timeout):
+    with snapshot_cond:
+        sid = snapshot_state["next_id"]
+        snapshot_state["next_id"] += 1
+        snapshot_state["pending"].append(sid)
+        snapshot_cond.notify_all()
+        snapshot_cond.wait_for(lambda: sid in snapshot_state["results"], timeout)
+        if sid in snapshot_state["pending"]:
+            snapshot_state["pending"].remove(sid)
+        result = snapshot_state["results"].pop(sid, None)
+    if result is None:
+        raise ValueError("OrcaMartelo did not return a camera picture in time. Check that the camera shows in the Device tab.")
+    data, error = result
+    if not data:
+        raise ValueError(f"The camera picture failed: {error or 'no frame from the camera'}")
+    return data
+
+
+def wait_snapshot_request(timeout=20):
+    """Called by the slicer: the id of a snapshot to take, or None after timeout seconds."""
+    with snapshot_cond:
+        snapshot_cond.wait_for(lambda: snapshot_state["pending"] or shutdown_event.is_set(), timeout)
+        return snapshot_state["pending"].pop(0) if snapshot_state["pending"] else None
+
+
+def deliver_snapshot(sid, data, error=""):
+    with snapshot_cond:
+        snapshot_state["results"][sid] = (data, error)
+        # Answers nobody waits for any more (a timed-out request) are dropped.
+        for old in sorted(snapshot_state["results"])[:-8]:
+            del snapshot_state["results"][old]
+        snapshot_cond.notify_all()
+
+
+def capture_camera_jpeg():
+    custom = telemetry.get("custom_camera_url") or ""
+    if custom and _is_mjpeg_url(custom):
+        urls = [custom.replace("action=stream", "action=snapshot"), custom] if "action=stream" in custom else [custom]
+        for url in urls:
+            try:
+                data = _jpeg_from_stream(url)
+                if data:
+                    return data
+            except Exception:
+                pass
+        raise ValueError(f"Could not read a picture from the camera at {custom}")
+    if not telemetry.get("connected"):
+        raise ValueError("The printer is not connected")
+    return _snapshot_from_slicer(SNAPSHOT_TIMEOUT)
+
+
+class McpBackend:
+    """The printer data the MCP tools return (see orcamartelo_mcp.py)."""
+
+    def print_status(self):
+        t = public_telemetry()
+        state = t.get("state", "free")
+        active = state in ACTIVE_STATES
+        job = t.get("job_name", "")
+        status = {
+            "connected": bool(t.get("connected")),
+            "state": state,
+            "job": job if _is_real_job(job) else None,
+            "progress_percent": _as_int(t.get("progress", 0)),
+            "layer": _as_int(t.get("curr_layer", 0)),
+            "total_layers": _as_int(t.get("total_layers", 0)),
+            "elapsed_minutes": _as_int(t.get("print_time", 0)),
+            "remaining_minutes": _as_int(t.get("remain_time", 0)),
+            "estimated_total_minutes": _as_int(t.get("total_print_time", 0)),
+            "estimated_end": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(t["estimated_end_timestamp"]))
+                             if t.get("estimated_end_timestamp") else None,
+            "nozzle_temp_c": t.get("nozzle_temp", 0),
+            "nozzle_target_c": t.get("target_nozzle_temp", 0),
+            "bed_temp_c": t.get("bed_temp", 0),
+            "bed_target_c": t.get("target_bed_temp", 0),
+            "fan_percent": t.get("fan", 0),
+            "speed_mode": {1: "silent", 2: "standard", 3: "sport"}.get(_as_int(t.get("speed_mode", 2)), t.get("speed_mode")),
+            "error": t.get("last_error") or None,
+        }
+        if not active and state != "completed":
+            for key in ("layer", "total_layers", "elapsed_minutes", "remaining_minutes"):
+                status[key] = 0
+        return status
+
+    def print_cost(self):
+        t = public_telemetry()
+        state = t.get("state", "free")
+        job = t.get("job_name", "")
+        entry = find_job_cost(job) if _is_real_job(job) else None
+        current = entry is not None and state in ACTIVE_STATES
+        if entry is None:
+            with job_costs_lock:
+                entry = dict(next(reversed(job_costs.values()))) if job_costs else None
+        if entry is None:
+            return {"available": False,
+                    "reason": "No print sent from OrcaMartelo has a recorded cost yet. "
+                              "Prints started on the printer or from other software have none."}
+        progress = _as_int(t.get("progress", 0)) if current else (100 if state == "completed" else None)
+        result = {
+            "available": True,
+            "job": entry.get("job"),
+            "is_current_print": current,
+            "estimated_cost": entry.get("cost"),
+            "currency_note": "In the currency of the filament profiles' cost setting.",
+            "filament_weight_g": entry.get("weight_g"),
+            "filament_length_m": entry.get("filament_m"),
+            "per_filament": entry.get("filaments") or [],
+            "sent_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(entry.get("sent_at", 0))),
+        }
+        if progress is not None:
+            share = max(0, min(100, progress)) / 100.0
+            result["progress_percent"] = progress
+            result["spent_so_far_estimate"] = round(_as_float(entry.get("cost")) * share, 2)
+            result["weight_so_far_estimate_g"] = round(_as_float(entry.get("weight_g")) * share, 1)
+        return result
+
+    def filaments(self):
+        t = public_telemetry()
+        slots = []
+        for box in t.get("material_boxes") or []:
+            for slot in box.get("slots") or []:
+                if slot.get("source") in ("external", "external_mcb"):
+                    continue  # Reported as external_spool.
+                index = _as_int(slot.get("slot", -1), -1)
+                slots.append({
+                    "slot": index + 1 if index >= 0 else None,
+                    "box": slot.get("box_id"),
+                    "type": slot.get("type"),
+                    "color": slot.get("color"),
+                    "brand": slot.get("brand"),
+                    "has_material": bool(slot.get("available")),
+                    "loaded": bool(slot.get("loaded")),
+                    "feeding": bool(slot.get("is_active")),
+                })
+        ext = t.get("external_spool")
+        external = None
+        if isinstance(ext, dict):
+            external = {"type": ext.get("type"), "color": ext.get("color"), "brand": ext.get("brand"),
+                        "has_material": bool(ext.get("available")), "loaded": bool(ext.get("loaded"))}
+        return {"has_multi_color_box": bool(t.get("has_multi_color_box")), "slots": slots, "external_spool": external}
+
+    def notifications(self, limit=20, unread_only=False):
+        with notifications_lock:
+            items = [dict(n) for n in notifications if not unread_only or not n.get("read")]
+            unread = sum(1 for n in notifications if not n.get("read"))
+        items = items[-limit:][::-1]
+        for n in items:
+            n["time"] = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(n.get("time", 0)))
+        return {"unread": unread, "notifications": items}
+
+    def temperatures(self):
+        t = public_telemetry()
+        return {
+            "connected": bool(t.get("connected")),
+            "nozzle_c": t.get("nozzle_temp", 0),
+            "nozzle_target_c": t.get("target_nozzle_temp", 0),
+            "bed_c": t.get("bed_temp", 0),
+            "bed_target_c": t.get("target_bed_temp", 0),
+        }
+
+    def set_filament_slot(self, slot, color=None, material=None, brand=None):
+        """Change what the printer records for a slot. slot is the 1-based slot number or "external"."""
+        if not mqtt_client or not telemetry.get("connected"):
+            raise ValueError("The printer is not connected")
+        if color is None and material is None and brand is None:
+            raise ValueError("Give a color, a material or a brand to set")
+        if color is not None:
+            hexdigits = str(color).strip().lstrip("#")
+            if len(hexdigits) != 6 or any(ch not in string.hexdigits for ch in hexdigits):
+                raise ValueError("color must be #RRGGBB")
+            color = "#" + hexdigits.upper()
+        if material is not None:
+            material = str(material).strip().upper()
+            if not material or len(material) > 16 or not all(ch.isalnum() or ch in "+-_ " for ch in material):
+                raise ValueError("material must be a filament type such as PLA, PETG or ABS")
+        if brand is not None:
+            brand = str(brand).strip()[:32]
+
+        external = str(slot).strip().lower() == "external"
+        target = None
+        for box in telemetry.get("material_boxes") or []:
+            for item in box.get("slots") or []:
+                is_external = item.get("source") in ("external", "external_mcb")
+                if is_external and external:
+                    target = item
+                elif not is_external and not external and _as_int(item.get("slot", -1), -1) == _as_int(slot, 0) - 1:
+                    target = item
+        if target is None and external and isinstance(telemetry.get("external_spool"), dict):
+            target = telemetry["external_spool"]
+        if target is None:
+            raise ValueError(f"There is no slot {slot}; get_filaments lists the slots")
+
+        new_color = color or target.get("color") or "#AFAFAF"
+        update = {
+            "index": _as_int(target.get("box_slot", 0)),
+            "box_id": _as_int(target.get("box_id", -1), -1),
+            "source": "external" if external else "ace",
+            "type": material or target.get("type") or "PLA",
+            "color": new_color,
+            "brand": brand or target.get("brand") or "Anycubic",
+        }
+        if color is None:
+            # Keep a gradient or luminous finish when only the material or brand changes.
+            update["finish_type"] = target.get("finish_type", "solid")
+            update["color_group"] = target.get("color_group_hex") or [new_color]
+        sync_slots_to_printer([update])
+        return {"status": "sent", "slot": "external" if external else _as_int(slot),
+                "color": update["color"], "material": update["type"], "brand": update["brand"]}
+
+    def camera_snapshot(self):
+        data = capture_camera_jpeg()
+        t = public_telemetry()
+        job = t.get("job_name", "")
+        caption = (f"Printer camera at {time.strftime('%Y-%m-%d %H:%M:%S')}. State: {t.get('state')}"
+                   + (f", printing {job} at {_as_int(t.get('progress', 0))}%" if _is_real_job(job) and t.get("state") in ACTIVE_STATES else "")
+                   + ".")
+        return orcamartelo_mcp.ImageResult(base64.b64encode(data).decode("ascii"), "image/jpeg", caption)
+
+    def printer_info(self):
+        t = public_telemetry()
+        return {
+            "connected": bool(t.get("connected")),
+            "model": t.get("model"),
+            "firmware": t.get("firmware") or None,
+            "ip": PRINTER_IP,
+            "camera_stream_url": t.get("camera_url"),
+            "has_multi_color_box": bool(t.get("has_multi_color_box")),
+        }
+
+
+mcp_backend = McpBackend()
+
+
+def mcp_client_config():
+    """How MCP clients reach this server, shown in the Device tab."""
+    stdio_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orcamartelo_mcp_stdio.py")
+    url = f"http://127.0.0.1:{HTTP_PORT}/mcp"
+    return {
+        "url": url,
+        "command": sys.executable,
+        "args": [stdio_script],
+        "claude_desktop_config": {"mcpServers": {"orcamartelo": {"command": sys.executable, "args": [stdio_script]}}},
+        "claude_code_command": f"claude mcp add --transport http orcamartelo {url}",
+    }
+
+
 def on_mqtt_message(c, userdata, msg):
     prev = (telemetry.get("state"), telemetry.get("progress", 0),
             (telemetry.get("last_error", ""), telemetry.get("last_error_time", 0)))
@@ -995,6 +1402,28 @@ def build_material_update_messages(slots_data):
         }))
     return messages
 
+def sync_slots_to_printer(slots_data):
+    """Set the material, color and brand of slots on the printer, then read them back."""
+    for s in slots_data or []:
+        idx = int(s.get("index", 0))
+        box_id = int(s.get("box_id", -1))
+        b = str(s.get("brand") or "").strip()
+        if b:
+            slot_brand_overrides[(box_id, idx)] = b
+            slot_brand_overrides[idx] = b
+    if slots_data and mqtt_client:
+        # Kobra X firmware accepts one material update per message.
+        for suffix, material_msg in build_material_update_messages(slots_data):
+            topic = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/{suffix}"
+            material_msg["msgid"] = "".join(random.choices(string.hexdigits.lower(), k=32))
+            material_msg["timestamp"] = int(time.time() * 1000)
+            mqtt_client.publish(topic, json.dumps(material_msg))
+            print(f"[Bridge] Published {suffix} material update")
+            time.sleep(0.15)
+        time.sleep(0.4)
+        query_all()
+
+
 def mqtt_worker():
     global mqtt_client
     while not shutdown_event.is_set():
@@ -1262,6 +1691,10 @@ def upload_and_start_print_file(content_bytes, raw_filename, use_ams=True, task_
         elif b_name.lower().endswith(".3mf"):
             job_estimated_times[b_name[:-4]] = parsed_time
 
+    parsed_cost = parse_cost_from_bytes(content_bytes)
+    if parsed_cost:
+        record_job_cost(start_name, *parsed_cost)
+
     ams_mapping = _default_ams_mapping(use_ams)
     ts = task_settings or {}
     auto_leveling = 1 if ts.get("auto_leveling", 1) else 0
@@ -1357,7 +1790,16 @@ class BridgeServer(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path.startswith("/health"):
+        if self.path.startswith("/camera/snapshot/wait"):
+            if not self.require_authorized():
+                return
+            sid = wait_snapshot_request()
+            if sid is None:
+                self.send_response(204)
+                self.end_headers()
+            else:
+                self.send_json(200, {"id": sid, "url": f"http://127.0.0.1:{HTTP_PORT}/camera"})
+        elif self.path.startswith("/health"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -1449,6 +1891,13 @@ class BridgeServer(BaseHTTPRequestHandler):
                 print(f"[Bridge] Camera proxy exception: {e}")
         elif not self.require_authorized():
             return
+        elif self.path.startswith("/mcp/info"):
+            self.send_json(200, mcp_client_config())
+        elif urllib.parse.urlparse(self.path).path == "/mcp":
+            # Streamable HTTP without server-initiated messages: no event stream to open.
+            self.send_response(405)
+            self.send_header("Allow", "POST")
+            self.end_headers()
         elif self.path.startswith("/notifications"):
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             self.send_response(200)
@@ -1483,8 +1932,48 @@ class BridgeServer(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
+    def send_json(self, status, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_mcp(self):
+        """MCP over Streamable HTTP: one JSON-RPC message (or batch) per POST, answered as JSON."""
+        content_length = _as_int(self.headers.get("Content-Length", 0))
+        if content_length <= 0 or content_length > 1048576:
+            self.send_json(400, {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid request"}})
+            return
+        text = self.rfile.read(content_length).decode("utf-8", errors="replace")
+        answer = orcamartelo_mcp.handle_text(text, mcp_backend)
+        if answer is None:
+            self.send_response(202)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        body = answer.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         if not self.require_authorized():
+            return
+        if urllib.parse.urlparse(self.path).path == "/mcp":
+            self.handle_mcp()
+            return
+        if urllib.parse.urlparse(self.path).path == "/camera/snapshot":
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            length = _as_int(self.headers.get("Content-Length", 0))
+            data = self.rfile.read(length) if 0 < length <= SNAPSHOT_MAX_BYTES else b""
+            deliver_snapshot(_as_int(query.get("id", ["0"])[0]), data if data.startswith(b"\xff\xd8") else b"",
+                             query.get("error", [""])[0])
+            self.send_json(200, {"status": "ok"})
             return
         expected_printer = self.headers.get("X-OrcaCubic-Printer", "")
         if expected_printer and expected_printer != PRINTER_IP:
@@ -1796,6 +2285,8 @@ class BridgeServer(BaseHTTPRequestHandler):
                         elif b_name.lower().endswith(".3mf"):
                             job_estimated_times[b_name[:-4]] = total_min
 
+                    record_job_cost(target_filename, data.get("estimated_cost"), data.get("estimated_weight_g"),
+                                    data.get("estimated_filament_mm"))
                     mqtt_client.publish(topic_print, json.dumps(msg))
                     print(f"[Bridge] Published print:start for {filename} with use_ams={use_ams} ams_mapping={json.dumps(ams_mapping)}")
                 else:
@@ -2072,25 +2563,7 @@ class BridgeServer(BaseHTTPRequestHandler):
                         result = {"status": "error", "message": f"Upload failed: {e}", "ip": PRINTER_IP}
 
         elif self.path.startswith("/sync_to_printer"):
-            slots_data = data.get("slots", [])
-            for s in slots_data or []:
-                idx = int(s.get("index", 0))
-                box_id = int(s.get("box_id", -1))
-                b = str(s.get("brand") or "").strip()
-                if b:
-                    slot_brand_overrides[(box_id, idx)] = b
-                    slot_brand_overrides[idx] = b
-            if slots_data and mqtt_client:
-                # Kobra X firmware accepts one material update per message.
-                for suffix, material_msg in build_material_update_messages(slots_data):
-                    topic = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/{suffix}"
-                    material_msg["msgid"] = "".join(random.choices(string.hexdigits.lower(), k=32))
-                    material_msg["timestamp"] = int(time.time() * 1000)
-                    mqtt_client.publish(topic, json.dumps(material_msg))
-                    print(f"[Bridge] Published {suffix} material update")
-                    time.sleep(0.15)
-                time.sleep(0.4)
-                query_all()
+            sync_slots_to_printer(data.get("slots", []))
             result = {"status": "ok", "ip": PRINTER_IP}
 
         self.send_response(200)
@@ -2114,6 +2587,7 @@ def run_server():
 
 if __name__ == "__main__":
     _load_notifications()
+    _load_job_costs()
     t1 = threading.Thread(target=mqtt_worker, daemon=True)
     t1.start()
     run_server()

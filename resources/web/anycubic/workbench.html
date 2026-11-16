@@ -1245,6 +1245,13 @@
         .notif-panel-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 12px; border-bottom:1px solid var(--border); font-size:13px; color:var(--text-main); }
         .notif-panel-head div { display:flex; gap:6px; }
         .notif-list { overflow-y:auto; }
+        .notif-bar { gap:8px; }
+        .mcp-panel { width:min(460px, calc(100vw - 32px)); max-height:none; }
+        .mcp-panel[hidden] { display:none; }
+        .mcp-body { padding:10px 12px 12px; font-size:12px; color:var(--text-muted); line-height:1.45; }
+        .mcp-body p { margin:0 0 8px; }
+        .mcp-body h4 { margin:12px 0 6px; font-size:12px; color:var(--text-main); display:flex; align-items:center; justify-content:space-between; gap:8px; }
+        .mcp-body pre { margin:0; padding:8px; max-height:140px; overflow:auto; white-space:pre-wrap; word-break:break-all; background:var(--bg-card); border:1px solid var(--border); border-radius:6px; color:var(--text-main); font-size:11px; }
         .notif-empty { padding:28px 12px; text-align:center; color:var(--text-dim); font-size:12px; }
         .notif-item { display:grid; grid-template-columns:8px 1fr auto; gap:10px; align-items:start; padding:10px 12px; border-bottom:1px solid rgba(255,255,255,.04); font-size:12px; }
         .notif-item.unread { background:rgba(0,210,255,.05); }
@@ -1453,6 +1460,23 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
             Notifications<span class="notif-badge" id="notif-badge" hidden>0</span>
         </button>
+        <button class="notif-bell" id="mcp-button" type="button" onclick="toggleMcpPanel()" aria-expanded="false" aria-controls="mcp-panel" title="Connect AI assistants to this printer over MCP">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0z"/><path d="M12 16v5"/></svg>
+            MCP
+        </button>
+        <div class="notif-panel mcp-panel" id="mcp-panel" hidden>
+            <div class="notif-panel-head"><strong>Connect AI assistants (MCP)</strong></div>
+            <div class="mcp-body">
+                <p>Assistants that support the Model Context Protocol can read this printer's progress, temperatures, cost, ACE filaments and camera, and set the ACE slot colors and materials, while OrcaMartelo is open.</p>
+                <h4>Claude Desktop and other apps that run a command <button class="btn btn-sm" type="button" onclick="copyMcp('mcp-desktop')">Copy</button></h4>
+                <pre id="mcp-desktop">Loading...</pre>
+                <p style="margin-top:6px">Add it to the app's MCP configuration (in Claude Desktop: Settings, Developer, Edit Config), then restart the app.</p>
+                <h4>Claude Code <button class="btn btn-sm" type="button" onclick="copyMcp('mcp-code')">Copy</button></h4>
+                <pre id="mcp-code">Loading...</pre>
+                <h4>Other clients (HTTP) <button class="btn btn-sm" type="button" onclick="copyMcp('mcp-url')">Copy</button></h4>
+                <pre id="mcp-url">Loading...</pre>
+            </div>
+        </div>
         <div class="notif-panel" id="notif-panel" hidden>
             <div class="notif-panel-head"><strong>Notifications</strong><div><button class="btn btn-sm" type="button" onclick="markNotificationsRead()">Mark all read</button><button class="btn btn-sm" type="button" onclick="clearNotifications()">Clear</button></div></div>
             <div class="notif-list" id="notif-list"><div class="notif-empty">No notifications yet</div></div>
@@ -4048,6 +4072,7 @@
         }
 
         function openNotifPanel() {
+            if (!document.getElementById("mcp-panel").hidden) toggleMcpPanel();
             document.getElementById("notif-panel").hidden = false;
             document.getElementById("notif-bell").setAttribute("aria-expanded", "true");
             renderNotifications();
@@ -4066,7 +4091,38 @@
         document.addEventListener("click", e => {
             const panel = document.getElementById("notif-panel");
             if (!panel.hidden && !e.target.closest(".notif-bar")) toggleNotifPanel();
+            if (!document.getElementById("mcp-panel").hidden && !e.target.closest(".notif-bar")) toggleMcpPanel();
         });
+
+        async function toggleMcpPanel() {
+            const panel = document.getElementById("mcp-panel");
+            panel.hidden = !panel.hidden;
+            document.getElementById("mcp-button").setAttribute("aria-expanded", String(!panel.hidden));
+            if (panel.hidden) return;
+            if (!document.getElementById("notif-panel").hidden) toggleNotifPanel();
+            try {
+                const res = await fetch("http://127.0.0.1:18988/mcp/info", { cache: "no-store" });
+                const info = await res.json();
+                document.getElementById("mcp-desktop").textContent = JSON.stringify(info.claude_desktop_config, null, 2);
+                document.getElementById("mcp-code").textContent = info.claude_code_command;
+                document.getElementById("mcp-url").textContent = info.url;
+            } catch (e) {
+                ["mcp-desktop", "mcp-code", "mcp-url"].forEach(id => document.getElementById(id).textContent = "The printer bridge is not running.");
+            }
+        }
+
+        function copyMcp(id) {
+            const text = document.getElementById(id).textContent;
+            const fallback = () => {
+                const area = document.createElement("textarea");
+                area.value = text;
+                document.body.appendChild(area);
+                area.select();
+                document.execCommand("copy");
+                area.remove();
+            };
+            if (navigator.clipboard) navigator.clipboard.writeText(text).catch(fallback); else fallback();
+        }
 
         pollNotifications();
         setInterval(pollNotifications, 3000);

@@ -248,6 +248,7 @@
 #include "RemovableDriveManager.hpp"
 #include "InstanceCheck.hpp"
 #include "NotificationManager.hpp"
+#include "AnycubicCameraSnapshots.hpp"
 #include "AnycubicNotifications.hpp"
 #include "PresetComboBoxes.hpp"
 #include "MsgDialog.hpp"
@@ -7662,6 +7663,7 @@ struct Plater::priv
     std::unique_ptr<NotificationManager> notification_manager;
     // Declared after notification_manager, which it pushes to, so it is destroyed first.
     std::unique_ptr<AnycubicNotificationPoller> anycubic_notifications;
+    std::unique_ptr<AnycubicCameraSnapshots>    anycubic_camera_snapshots;
 
     ProjectDirtyStateManager dirty_state;
 
@@ -8681,6 +8683,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
 
     if (wxGetApp().is_editor()) {
         anycubic_notifications = std::make_unique<AnycubicNotificationPoller>(notification_manager.get());
+        anycubic_camera_snapshots = std::make_unique<AnycubicCameraSnapshots>();
         this->q->Bind(EVT_EJECT_DRIVE_NOTIFICAION_CLICKED, [this](EjectDriveNotificationClickedEvent&) { this->q->eject_drive(); });
         this->q->Bind(EVT_EXPORT_GCODE_NOTIFICAION_CLICKED, [this](ExportGcodeNotificationClickedEvent&) { this->q->export_gcode(true); });
         this->q->Bind(EVT_PRESET_UPDATE_AVAILABLE_CLICKED, [](PresetUpdateAvailableClickedEvent&) {  wxGetApp().get_preset_updater()->on_update_notification_confirm(); });
@@ -21759,6 +21762,18 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
                     const std::string& dhms = p->background_process.fff_print()->print_statistics().estimated_normal_print_time;
                     if (!dhms.empty() && dhms != "N/A") {
                         upload_job.upload_data.extended_info["estimated_print_time_dhms"] = dhms;
+                    }
+                }
+
+                // The filament cost and weight of the exported G-code, which the bridge's MCP server reports.
+                PrintBase* plate_print = nullptr;
+                plate->get_print(&plate_print, nullptr, nullptr);
+                if (const auto* fff_print = dynamic_cast<const Print*>(plate_print); fff_print != nullptr) {
+                    const PrintStatistics& stats = fff_print->print_statistics();
+                    if (stats.total_weight > 0.) {
+                        upload_job.upload_data.extended_info["estimated_cost"]        = float_to_string_decimal_point(stats.total_cost, 2);
+                        upload_job.upload_data.extended_info["estimated_weight_g"]    = float_to_string_decimal_point(stats.total_weight, 2);
+                        upload_job.upload_data.extended_info["estimated_filament_mm"] = float_to_string_decimal_point(stats.total_used_filament, 1);
                     }
                 }
             }
