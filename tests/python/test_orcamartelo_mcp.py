@@ -59,13 +59,19 @@ class ProtocolTests(unittest.TestCase):
     def test_notifications_get_no_answer(self):
         self.assertIsNone(mcp.handle_message({"jsonrpc": "2.0", "method": "notifications/initialized"}, None))
 
-    def test_only_set_filament_slot_changes_the_printer(self):
+    def test_every_tool_has_a_backend_method_taking_its_arguments(self):
+        import inspect
         tools = mcp.handle_message(rpc("tools/list"), None)["result"]["tools"]
         self.assertEqual({t["name"] for t in tools}, set(mcp._TOOL_METHODS))
-        writers = {t["name"] for t in tools if not t["annotations"]["readOnlyHint"]}
-        self.assertEqual(writers, {"set_filament_slot"})
         for tool in tools:
-            self.assertTrue(hasattr(daemon.mcp_backend, mcp._TOOL_METHODS[tool["name"]]))
+            method = getattr(daemon.mcp_backend, mcp._TOOL_METHODS[tool["name"]])
+            params = set(inspect.signature(method).parameters)
+            self.assertEqual(params, set(tool["inputSchema"]["properties"]), tool["name"])
+
+    def test_tools_that_can_spoil_a_print_say_they_are_confirmed(self):
+        for tool in mcp.TOOLS:
+            if tool["annotations"]["destructiveHint"]:
+                self.assertIn("confirms it in OrcaMartelo", tool["description"], tool["name"])
 
     def test_without_the_bridge_a_tool_call_explains_what_to_do(self):
         result = mcp.handle_message(rpc("tools/call", {"name": "get_print_status"}), None)["result"]
@@ -212,8 +218,9 @@ class SnapshotTests(unittest.TestCase):
         daemon.telemetry.update({"custom_camera_url": "", "connected": True})
 
         def slicer():
-            sid = daemon.wait_snapshot_request(timeout=5)
-            daemon.deliver_snapshot(sid, JPEG)
+            request = daemon.wait_slicer_request(timeout=5)
+            self.assertEqual(request["kind"], "camera_snapshot")
+            daemon.deliver_slicer_result(request["id"], {"ok": True, "result": {"jpeg_base64": base64.b64encode(JPEG).decode()}})
 
         thread = threading.Thread(target=slicer)
         thread.start()
@@ -228,7 +235,7 @@ class SnapshotTests(unittest.TestCase):
         with mock.patch.object(daemon, "SNAPSHOT_TIMEOUT", 0.1):
             result = self.snapshot()
         self.assertTrue(result["isError"])
-        self.assertEqual(daemon.snapshot_state["pending"], [])
+        self.assertEqual(daemon.slicer_state["pending"], [])
 
     def test_an_mjpeg_camera_is_read_directly(self):
         class Mjpeg(daemon.BaseHTTPRequestHandler):
@@ -251,6 +258,153 @@ class SnapshotTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
         self.assertEqual(base64.b64decode(result["content"][0]["data"]), JPEG)
+
+
+class Slicer:
+    """Answers slicer requests on a thread, as OrcaMartelo would."""
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.requests = []
+        self.stop = False
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def run(self):
+        while not self.stop:
+            request = daemon.wait_slicer_request(timeout=0.2)
+            if request:
+                self.requests.append(request)
+                daemon.deliver_slicer_result(request["id"], self.answer(request))
+
+    def close(self):
+        self.stop = True
+        self.thread.join()
+
+
+class ControlTests(unittest.TestCase):
+    def setUp(self):
+        self.mqtt = FakeMqtt()
+        patches = [
+            mock.patch.object(daemon, "mqtt_client", self.mqtt),
+            mock.patch.object(daemon, "query_all", lambda: None),
+            mock.patch.dict(daemon.telemetry, {"connected": True, "state": "free", "job_name": "Ready", "progress": 0}),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def call(self, name, args=None):
+        return mcp.handle_message(rpc("tools/call", {"name": name, "arguments": args or {}}), daemon.mcp_backend)["result"]
+
+    def with_user(self, allowed):
+        slicer = Slicer(lambda r: {"ok": True, "result": {"allowed": allowed}})
+        self.addCleanup(slicer.close)
+        return slicer
+
+    def test_an_allowed_temperature_change_is_sent(self):
+        slicer = self.with_user(True)
+        with mock.patch.object(daemon.urllib.request, "urlopen", side_effect=OSError):
+            result = self.call("set_temperature", {"nozzle": 220, "bed": 70})
+        self.assertFalse(result["isError"])
+        self.assertEqual(slicer.requests[0]["args"], {"action": "set_temperature", "nozzle": 220, "bed": 70})
+        settings = [m["data"]["settings"] for _, m in self.mqtt.published if m.get("action") == "update"]
+        self.assertEqual(settings[0], {"target_nozzle_temp": 220, "target_hotbed_temp": 70})
+
+    def test_a_declined_action_sends_nothing(self):
+        self.with_user(False)
+        daemon.telemetry.update({"state": "printing", "job_name": "cube.gcode"})
+        result = self.call("stop_print")
+        self.assertTrue(result["isError"])
+        self.assertIn("declined", result["content"][0]["text"])
+        self.assertEqual(self.mqtt.published, [])
+
+    def test_an_unanswered_confirmation_sends_nothing(self):
+        with mock.patch.object(daemon, "CONFIRM_TIMEOUT", 0.1):
+            result = self.call("home_axes")
+        self.assertTrue(result["isError"])
+        self.assertEqual(self.mqtt.published, [])
+
+    def test_moving_is_refused_during_a_print_without_asking(self):
+        slicer = self.with_user(True)
+        daemon.telemetry.update({"state": "printing"})
+        for name, args in (("move_axis", {"axis": "X", "distance_mm": 10}), ("run_gcode", {"gcode": "G28"}),
+                           ("extrude", {"length_mm": 5}), ("home_axes", {})):
+            with self.subTest(name=name):
+                self.assertTrue(self.call(name, args)["isError"])
+        self.assertEqual(slicer.requests, [])
+        self.assertEqual(self.mqtt.published, [])
+
+    def test_out_of_range_values_are_refused(self):
+        self.assertTrue(self.call("set_temperature", {"nozzle": 400})["isError"])
+        self.assertTrue(self.call("move_axis", {"axis": "X", "distance_mm": 0})["isError"])
+        self.assertEqual(mcp.handle_message(rpc("tools/call", {"name": "set_speed_mode", "arguments": {"mode": "ludicrous"}}),
+                                            daemon.mcp_backend)["error"]["code"], mcp.INVALID_PARAMS)
+
+    def test_pause_and_lights_need_no_confirmation(self):
+        daemon.telemetry.update({"state": "printing"})
+        self.assertFalse(self.call("pause_print")["isError"])
+        self.assertFalse(self.call("set_light", {"light": "camera", "on": False})["isError"])
+        actions = [m["action"] for _, m in self.mqtt.published]
+        self.assertIn("pause", actions)
+        self.assertIn("control", actions)
+
+    def test_the_printer_file_list_comes_from_its_report(self):
+        def report():
+            while not any(m.get("action") == "listLocal" for _, m in self.mqtt.published):
+                pass
+            daemon._on_file_report({"action": "listLocal", "data": {"records": [
+                {"filename": "cube.gcode", "size": 1234, "timestamp": 1763300000000},
+                {"filename": "_orcacubic_command_1_ab.gcode", "size": 5},
+                {"filename": "models", "is_dir": True}]}})
+
+        thread = threading.Thread(target=report)
+        thread.start()
+        result = self.call("list_printer_files")
+        thread.join()
+        files = result["structuredContent"]["files"]
+        self.assertEqual([f["filename"] for f in files], ["cube.gcode"])
+        self.assertEqual(files[0]["size_bytes"], 1234)
+
+    def test_a_local_file_is_uploaded_after_confirmation(self):
+        self.with_user(True)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "part.gcode")
+            with open(path, "wb") as fh:
+                fh.write(GCODE)
+            with mock.patch.object(daemon, "upload_and_start_print_file", return_value={"status": "ok", "filename": "part.gcode"}) as upload:
+                result = self.call("print_file", {"path": path})
+        self.assertFalse(result["isError"])
+        self.assertEqual(upload.call_args.args[:2], (GCODE, "part.gcode"))
+
+    def test_print_plate_exports_confirms_uploads_and_removes_the_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "Plate_1.gcode")
+            with open(path, "wb") as fh:
+                fh.write(GCODE)
+
+            def answer(request):
+                if request["kind"] == "export_plate":
+                    return {"ok": True, "result": {"path": path, "filename": "Box_plate1.gcode", "plate": 1,
+                                                   "estimated_minutes": 42, "estimated_cost": 0.45}}
+                return {"ok": True, "result": {"allowed": True}}
+
+            slicer = Slicer(answer)
+            self.addCleanup(slicer.close)
+            with mock.patch.object(daemon, "upload_and_start_print_file", return_value={"status": "ok", "filename": "Box_plate1.gcode"}) as upload:
+                result = self.call("print_plate", {"plate": 1})
+            self.assertFalse(result["isError"])
+            self.assertEqual([r["kind"] for r in slicer.requests], ["export_plate", "confirm"])
+            self.assertEqual(slicer.requests[1]["args"]["action"], "print_plate")
+            self.assertEqual(upload.call_args.args[1], "Box_plate1.gcode")
+            self.assertFalse(os.path.exists(path))
+
+    def test_slicer_errors_reach_the_model(self):
+        slicer = Slicer(lambda r: {"ok": False, "error": "No preset named Foo"})
+        self.addCleanup(slicer.close)
+        result = self.call("slicer_select_preset", {"type": "print", "name": "Foo"})
+        self.assertTrue(result["isError"])
+        self.assertIn("No preset named Foo", result["content"][0]["text"])
 
 
 class HttpTests(unittest.TestCase):

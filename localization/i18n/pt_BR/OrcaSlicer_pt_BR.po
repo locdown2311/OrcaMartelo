@@ -39862,3 +39862,96 @@ msgstr "Erro da impressora %1%: %2%"
 # AI Translated
 msgid "Open Device tab"
 msgstr "Abrir aba Dispositivo"
+
+# AI Translated
+#, boost-format
+msgid "Stop the print %1%? It is %2% done and cannot be resumed."
+msgstr "Parar a impressão %1%? Ela está %2% concluída e não poderá ser retomada."
+
+# AI Translated
+#, boost-format
+msgid "Set the nozzle to %1% °C."
+msgstr "Ajustar o bico para %1% °C."
+
+# AI Translated
+msgid "Turn the nozzle heater off."
+msgstr "Desligar o aquecimento do bico."
+
+# AI Translated
+#, boost-format
+msgid "Set the bed to %1% °C."
+msgstr "Ajustar a mesa para %1% °C."
+
+# AI Translated
+msgid "Turn the bed heater off."
+msgstr "Desligar o aquecimento da mesa."
+
+# AI Translated
+#, boost-format
+msgid "Home the %1% axes."
+msgstr "Levar os eixos %1% ao início (home)."
+
+# AI Translated
+#, boost-format
+msgid "Move the %1% axis by %2% mm."
+msgstr "Mover o eixo %1% em %2% mm."
+
+# AI Translated
+#, boost-format
+msgid "Extrude %1% mm of filament."
+msgstr "Extrudar %1% mm de filamento."
+
+# AI Translated
+#, boost-format
+msgid "Retract %1% mm of filament."
+msgstr "Retrair %1% mm de filamento."
+
+# AI Translated
+msgid "Run this G-code on the printer:"
+msgstr "Executar este G-code na impressora:"
+
+# AI Translated
+#, boost-format
+msgid "Load the filament of ACE slot %1% (%2%)."
+msgstr "Carregar o filamento do slot %1% do ACE (%2%)."
+
+# AI Translated
+#, boost-format
+msgid "Unload the filament of ACE slot %1%."
+msgstr "Descarregar o filamento do slot %1% do ACE."
+
+# AI Translated
+#, boost-format
+msgid "Start printing %1%."
+msgstr "Iniciar a impressão de %1%."
+
+# AI Translated
+#, boost-format
+msgid "Print plate %1% on the printer."
+msgstr "Imprimir a placa %1% na impressora."
+
+# AI Translated
+#, boost-format
+msgid "Estimated time: %1%"
+msgstr "Tempo estimado: %1%"
+
+# AI Translated
+#, boost-format
+msgid "Estimated cost: %1%"
+msgstr "Custo estimado: %1%"
+
+# AI Translated
+msgid "Delete every object of the project."
+msgstr "Excluir todos os objetos do projeto."
+
+# AI Translated
+msgid "An AI assistant connected over MCP asks to do this:"
+msgstr "Um assistente de IA conectado via MCP pede para fazer isto:"
+
+# AI Translated
+msgid "Allow it?"
+msgstr "Permitir?"
+
+# AI Translated
+msgid "AI assistant request"
+msgstr "Pedido do assistente de IA"

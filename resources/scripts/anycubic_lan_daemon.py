@@ -786,13 +786,15 @@ def parse_cost_from_bytes(content_bytes):
     return cost, weight, sum(lengths), filaments
 
 
-# Camera snapshots for the MCP server. A frame of an MJPEG camera is read here. The native
-# camera streams H.264 in FLV, which the slicer decodes: it waits on /camera/snapshot/wait
-# for a request and posts the JPEG back to /camera/snapshot.
+# Requests the MCP server hands to the slicer: a camera frame the bundled Python cannot decode,
+# a confirmation the user answers in OrcaMartelo, and the slicer tools. The slicer holds a long
+# poll on /slicer/wait, runs each request and posts its answer to /slicer/result.
 SNAPSHOT_TIMEOUT = 15
 SNAPSHOT_MAX_BYTES = 8 * 1024 * 1024
-snapshot_cond = threading.Condition()
-snapshot_state = {"next_id": 1, "pending": [], "results": {}}
+SLICER_TIMEOUT = 30
+CONFIRM_TIMEOUT = 120
+slicer_cond = threading.Condition()
+slicer_state = {"next_id": 1, "pending": [], "results": {}}
 
 
 def _is_mjpeg_url(url):
@@ -819,38 +821,47 @@ def _jpeg_from_stream(url, timeout=6):
     return None
 
 
-def _snapshot_from_slicer(timeout):
-    with snapshot_cond:
-        sid = snapshot_state["next_id"]
-        snapshot_state["next_id"] += 1
-        snapshot_state["pending"].append(sid)
-        snapshot_cond.notify_all()
-        snapshot_cond.wait_for(lambda: sid in snapshot_state["results"], timeout)
-        if sid in snapshot_state["pending"]:
-            snapshot_state["pending"].remove(sid)
-        result = snapshot_state["results"].pop(sid, None)
-    if result is None:
-        raise ValueError("OrcaMartelo did not return a camera picture in time. Check that the camera shows in the Device tab.")
-    data, error = result
-    if not data:
-        raise ValueError(f"The camera picture failed: {error or 'no frame from the camera'}")
-    return data
+def slicer_call(kind, args, timeout):
+    """Have the slicer run a request. Returns its result, or raises ValueError with the reason."""
+    with slicer_cond:
+        rid = slicer_state["next_id"]
+        slicer_state["next_id"] += 1
+        slicer_state["pending"].append({"id": rid, "kind": kind, "args": args})
+        slicer_cond.notify_all()
+        slicer_cond.wait_for(lambda: rid in slicer_state["results"], timeout)
+        slicer_state["pending"] = [r for r in slicer_state["pending"] if r["id"] != rid]
+        answer = slicer_state["results"].pop(rid, None)
+    if answer is None:
+        raise ValueError("OrcaMartelo did not answer in time. Check that it is open and not showing a dialog.")
+    if not answer.get("ok"):
+        raise ValueError(answer.get("error") or "OrcaMartelo could not do it")
+    return answer.get("result") or {}
 
 
-def wait_snapshot_request(timeout=20):
-    """Called by the slicer: the id of a snapshot to take, or None after timeout seconds."""
-    with snapshot_cond:
-        snapshot_cond.wait_for(lambda: snapshot_state["pending"] or shutdown_event.is_set(), timeout)
-        return snapshot_state["pending"].pop(0) if snapshot_state["pending"] else None
+def wait_slicer_request(timeout=20):
+    """Called by the slicer: the next request to run, or None after timeout seconds."""
+    with slicer_cond:
+        slicer_cond.wait_for(lambda: slicer_state["pending"] or shutdown_event.is_set(), timeout)
+        return slicer_state["pending"].pop(0) if slicer_state["pending"] else None
 
 
-def deliver_snapshot(sid, data, error=""):
-    with snapshot_cond:
-        snapshot_state["results"][sid] = (data, error)
+def deliver_slicer_result(rid, answer):
+    with slicer_cond:
+        slicer_state["results"][rid] = answer if isinstance(answer, dict) else {"ok": False, "error": "Invalid answer"}
         # Answers nobody waits for any more (a timed-out request) are dropped.
-        for old in sorted(snapshot_state["results"])[:-8]:
-            del snapshot_state["results"][old]
-        snapshot_cond.notify_all()
+        for old in sorted(slicer_state["results"])[:-16]:
+            del slicer_state["results"][old]
+        slicer_cond.notify_all()
+
+
+def confirm_action(action, **details):
+    """Ask the user in OrcaMartelo to allow an action. Raises ValueError unless allowed."""
+    try:
+        answer = slicer_call("confirm", dict(details, action=action), CONFIRM_TIMEOUT)
+    except ValueError as e:
+        raise ValueError(f"Not done: the confirmation in OrcaMartelo was not answered ({e})")
+    if not answer.get("allowed"):
+        raise ValueError("Not done: the user declined it in OrcaMartelo.")
 
 
 def capture_camera_jpeg():
@@ -867,7 +878,68 @@ def capture_camera_jpeg():
         raise ValueError(f"Could not read a picture from the camera at {custom}")
     if not telemetry.get("connected"):
         raise ValueError("The printer is not connected")
-    return _snapshot_from_slicer(SNAPSHOT_TIMEOUT)
+    answer = slicer_call("camera_snapshot", {"url": f"http://127.0.0.1:{HTTP_PORT}/camera"}, SNAPSHOT_TIMEOUT)
+    try:
+        data = base64.b64decode(answer.get("jpeg_base64", ""), validate=True)
+    except ValueError:
+        data = b""
+    if not data.startswith(b"\xff\xd8"):
+        raise ValueError("The camera picture failed: no frame from the camera")
+    return data
+
+
+def _find_slot(slot):
+    """The telemetry entry of a 1-based ACE slot number, or of "external". Raises ValueError."""
+    external = str(slot).strip().lower() == "external"
+    for box in telemetry.get("material_boxes") or []:
+        for item in box.get("slots") or []:
+            is_external = item.get("source") in ("external", "external_mcb")
+            if is_external and external:
+                return item
+            if not is_external and not external and _as_int(item.get("slot", -1), -1) == _as_int(slot, 0) - 1:
+                return item
+    if external and isinstance(telemetry.get("external_spool"), dict):
+        return telemetry["external_spool"]
+    raise ValueError(f"There is no slot {slot}; get_filaments lists the slots")
+
+
+def _require_connected():
+    if not mqtt_client or not telemetry.get("connected"):
+        raise ValueError("The printer is not connected")
+
+
+def _require_idle(what):
+    state = normalize_printer_state(telemetry.get("state"))
+    if state in ACTIVE_STATES:
+        raise ValueError(f"Not done: the printer is {state}. {what} is only allowed while it is idle.")
+
+
+def _control(data):
+    """Run a /control action for an MCP tool. Raises ValueError when the bridge reports an error."""
+    _require_connected()
+    result = perform_control(data) or {}
+    if result.get("status") == "error":
+        raise ValueError(result.get("message") or "The printer refused it")
+    return result
+
+
+# The printer answers a file listing on its report topic; list_printer_files waits for it.
+file_list_cond = threading.Condition()
+file_list_state = {"seq": 0, "records": None}
+
+
+def _on_file_report(payload):
+    data = payload.get("data")
+    records = data.get("records", data.get("files")) if isinstance(data, dict) else data
+    if not isinstance(records, list):
+        return
+    with file_list_cond:
+        file_list_state["records"] = records
+        file_list_state["seq"] += 1
+        file_list_cond.notify_all()
+
+
+SPEED_MODES = {"silent": 1, "standard": 2, "sport": 3}
 
 
 class McpBackend:
@@ -998,18 +1070,7 @@ class McpBackend:
             brand = str(brand).strip()[:32]
 
         external = str(slot).strip().lower() == "external"
-        target = None
-        for box in telemetry.get("material_boxes") or []:
-            for item in box.get("slots") or []:
-                is_external = item.get("source") in ("external", "external_mcb")
-                if is_external and external:
-                    target = item
-                elif not is_external and not external and _as_int(item.get("slot", -1), -1) == _as_int(slot, 0) - 1:
-                    target = item
-        if target is None and external and isinstance(telemetry.get("external_spool"), dict):
-            target = telemetry["external_spool"]
-        if target is None:
-            raise ValueError(f"There is no slot {slot}; get_filaments lists the slots")
+        target = _find_slot(slot)
 
         new_color = color or target.get("color") or "#AFAFAF"
         update = {
@@ -1036,6 +1097,257 @@ class McpBackend:
                    + (f", printing {job} at {_as_int(t.get('progress', 0))}%" if _is_real_job(job) and t.get("state") in ACTIVE_STATES else "")
                    + ".")
         return orcamartelo_mcp.ImageResult(base64.b64encode(data).decode("ascii"), "image/jpeg", caption)
+
+    # Printer control. Anything that heats, moves or can spoil a print is confirmed in OrcaMartelo.
+
+    def pause_print(self):
+        _require_connected()
+        if normalize_printer_state(telemetry.get("state")) != "printing":
+            raise ValueError("There is no print running to pause")
+        _control({"action": "pause"})
+        return {"status": "sent", "action": "pause"}
+
+    def resume_print(self):
+        _require_connected()
+        if normalize_printer_state(telemetry.get("state")) != "paused":
+            raise ValueError("The print is not paused")
+        _control({"action": "resume"})
+        return {"status": "sent", "action": "resume"}
+
+    def stop_print(self):
+        _require_connected()
+        state = normalize_printer_state(telemetry.get("state"))
+        if state not in ACTIVE_STATES:
+            raise ValueError("There is no print to stop")
+        job = telemetry.get("job_name", "")
+        confirm_action("stop_print", job=job, progress=_as_int(telemetry.get("progress", 0)))
+        _control({"action": "stop"})
+        return {"status": "sent", "action": "stop", "job": job}
+
+    def set_temperature(self, nozzle=None, bed=None):
+        _require_connected()
+        if nozzle is None and bed is None:
+            raise ValueError("Give a nozzle or bed temperature")
+        for name, value, top in (("nozzle", nozzle, 300), ("bed", bed, 120)):
+            if value is not None and not 0 <= value <= top:
+                raise ValueError(f"The {name} temperature must be between 0 and {top} °C")
+        confirm_action("set_temperature", nozzle=nozzle, bed=bed)
+        if nozzle is not None and bed is not None:
+            _control({"action": "temp", "heater": "both", "nozzle": nozzle, "bed": bed})
+        elif nozzle is not None:
+            _control({"action": "temp", "heater": "nozzle", "value": nozzle})
+        else:
+            _control({"action": "temp", "heater": "bed", "value": bed})
+        return {"status": "sent", "nozzle_target_c": nozzle, "bed_target_c": bed}
+
+    def set_fan(self, percent):
+        if not 0 <= percent <= 100:
+            raise ValueError("percent must be between 0 and 100")
+        _control({"action": "fan", "value": percent})
+        return {"status": "sent", "fan_percent": percent}
+
+    def set_light(self, light, on):
+        if light not in ("camera", "nozzle"):
+            raise ValueError('light must be "camera" or "nozzle"')
+        _control({"action": f"{light}_light", "status": 1 if on else 0})
+        return {"status": "sent", "light": light, "on": on}
+
+    def set_speed_mode(self, mode):
+        if mode not in SPEED_MODES:
+            raise ValueError("mode must be silent, standard or sport")
+        _control({"action": "speed", "mode": SPEED_MODES[mode]})
+        return {"status": "sent", "speed_mode": mode}
+
+    def home_axes(self, axes="XYZ"):
+        axes = axes.upper()
+        if axes not in ("XYZ", "XY", "Z"):
+            raise ValueError("axes must be XYZ, XY or Z")
+        _require_connected()
+        _require_idle("Homing")
+        confirm_action("home_axes", axes=axes)
+        _control({"action": "home", "axis": axes})
+        return {"status": "sent", "homed": axes}
+
+    def move_axis(self, axis, distance_mm):
+        axis = axis.upper()
+        if axis not in ("X", "Y", "Z"):
+            raise ValueError("axis must be X, Y or Z")
+        if not 0 < abs(distance_mm) <= 100:
+            raise ValueError("distance_mm must be between -100 and 100, and not 0")
+        _require_connected()
+        _require_idle("Moving the head")
+        confirm_action("move_axis", axis=axis, distance=distance_mm)
+        _control({"action": "jog", "axis": axis, "dir": 1 if distance_mm > 0 else -1, "dist": abs(distance_mm)})
+        return {"status": "sent", "axis": axis, "distance_mm": distance_mm}
+
+    def disable_motors(self):
+        _require_connected()
+        _require_idle("Turning the motors off")
+        _control({"action": "motor_off"})
+        return {"status": "sent"}
+
+    def extrude(self, length_mm):
+        if not 0 < abs(length_mm) <= 100:
+            raise ValueError("length_mm must be between -100 and 100, and not 0; negative retracts")
+        _require_connected()
+        _require_idle("Extruding")
+        confirm_action("extrude", length=length_mm)
+        result = _control({"action": "extrude", "dir": "extrude" if length_mm > 0 else "retract", "dist": abs(length_mm)})
+        return {"status": result.get("status", "sent"), "length_mm": length_mm}
+
+    def run_gcode(self, gcode):
+        gcode = gcode.strip()
+        if not gcode or len(gcode) > 20000:
+            raise ValueError("gcode must be 1 to 20000 characters")
+        _require_connected()
+        _require_idle("Running G-code")
+        confirm_action("run_gcode", gcode=gcode)
+        result = upload_and_run_gcode(gcode, delete_after=True)
+        if isinstance(result, dict) and result.get("status") == "error":
+            raise ValueError(result.get("message") or "The printer refused the G-code")
+        return {"status": "sent", "lines": len(gcode.splitlines())}
+
+    # The multi-color box (ACE).
+
+    def load_filament(self, slot):
+        target = _find_slot(slot)
+        if target.get("source") in ("external", "external_mcb"):
+            raise ValueError("Only ACE slots can be loaded from here")
+        _require_connected()
+        _require_idle("Loading filament")
+        confirm_action("load_filament", slot=_as_int(slot), material=target.get("type"), color=target.get("color"))
+        _control({"action": "feed_filament", "slot": _as_int(target.get("box_slot", 0)),
+                  "box_id": _as_int(target.get("box_id", 0)), "type": target.get("type") or "PLA"})
+        return {"status": "sent", "slot": _as_int(slot)}
+
+    def unload_filament(self, slot):
+        target = _find_slot(slot)
+        if target.get("source") in ("external", "external_mcb"):
+            raise ValueError("Only ACE slots can be unloaded from here")
+        _require_connected()
+        _require_idle("Unloading filament")
+        confirm_action("unload_filament", slot=_as_int(slot))
+        _control({"action": "unfeed_filament", "slot": _as_int(target.get("box_slot", 0)), "box_id": _as_int(target.get("box_id", 0))})
+        return {"status": "sent", "slot": _as_int(slot)}
+
+    def set_ace_dryer(self, on, temperature=50, hours=4):
+        if on and not 30 <= temperature <= 65:
+            raise ValueError("temperature must be between 30 and 65 °C")
+        if on and not 1 <= hours <= 24:
+            raise ValueError("hours must be between 1 and 24")
+        result = _control({"action": "set_ace_drying", "box_id": 0, "status": 1 if on else 0,
+                           "target_temp": temperature, "duration": hours * 60})
+        return {"status": "sent", "drying": result.get("drying_status")}
+
+    def set_ace_backup(self, enabled):
+        _control({"action": "set_ace_auto_feed", "box_id": 0, "auto_feed": 1 if enabled else 0})
+        return {"status": "sent", "backup_enabled": enabled}
+
+    # Print files.
+
+    def list_printer_files(self):
+        _require_connected()
+        msg = {"type": "file", "action": "listLocal", "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+               "timestamp": int(time.time() * 1000), "data": {"path": "/"}}
+        with file_list_cond:
+            seq = file_list_state["seq"]
+            for role in ("slicer", "web"):
+                mqtt_client.publish(f"anycubic/anycubicCloud/v1/{role}/printer/{model_id}/{device_id}/file", json.dumps(msg))
+            file_list_cond.wait_for(lambda: file_list_state["seq"] != seq, 8)
+            records = file_list_state["records"] if file_list_state["seq"] != seq else None
+        if records is None:
+            raise ValueError("The printer did not list its files")
+        files = []
+        for r in records:
+            if not isinstance(r, dict) or r.get("is_dir") or r.get("type") == "dir":
+                continue
+            name = r.get("filename") or r.get("name") or ""
+            if not name or is_command_filename(name):
+                continue
+            stamp = _as_int(r.get("timestamp", r.get("time", 0)))
+            stamp = stamp // 1000 if stamp > 10 ** 11 else stamp
+            files.append({"filename": name, "size_bytes": _as_int(r.get("size", 0)),
+                          "modified": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(stamp)) if stamp else None})
+        return {"files": files}
+
+    def print_printer_file(self, filename):
+        _require_connected()
+        _require_idle("Starting a print")
+        filename = sanitize_print_filename(filename)
+        confirm_action("start_print", file=filename)
+        _control({"action": "start_print_job", "filename": filename, "use_ams": bool(telemetry.get("has_multi_color_box"))})
+        return {"status": "sent", "filename": filename}
+
+    def print_file(self, path):
+        path = os.path.expanduser(path)
+        if not path.lower().endswith((".gcode", ".3mf")) or not os.path.isfile(path):
+            raise ValueError("path must be an existing .gcode or .gcode.3mf file on this computer")
+        if os.path.getsize(path) > MAX_UPLOAD_FILE_BYTES:
+            raise ValueError("The file is too large")
+        _require_connected()
+        _require_idle("Starting a print")
+        confirm_action("start_print", file=os.path.basename(path))
+        with open(path, "rb") as fh:
+            content = fh.read()
+        result = upload_and_start_print_file(content, os.path.basename(path), use_ams=bool(telemetry.get("has_multi_color_box")))
+        if result.get("status") == "error":
+            raise ValueError(result.get("message") or "The upload failed")
+        return {"status": "sent", "filename": result.get("filename")}
+
+    # The slicer: these run in OrcaMartelo itself.
+
+    def slicer_get_state(self):
+        return slicer_call("get_state", {}, SLICER_TIMEOUT)
+
+    def slicer_list_presets(self, type):
+        return slicer_call("list_presets", {"type": type}, SLICER_TIMEOUT)
+
+    def slicer_select_preset(self, type, name, filament=None):
+        return slicer_call("select_preset", {"type": type, "name": name, "filament": filament}, SLICER_TIMEOUT)
+
+    def slicer_get_settings(self, keys):
+        return slicer_call("get_settings", {"keys": keys}, SLICER_TIMEOUT)
+
+    def slicer_set_settings(self, settings):
+        return slicer_call("set_settings", {"settings": settings}, SLICER_TIMEOUT)
+
+    def slicer_load_models(self, paths):
+        return slicer_call("load_models", {"paths": paths}, 120)
+
+    def slicer_arrange(self):
+        return slicer_call("arrange", {}, 120)
+
+    def slicer_clear_plate(self):
+        confirm_action("clear_plate")
+        return slicer_call("clear_plate", {}, SLICER_TIMEOUT)
+
+    def slicer_slice(self, plate=None):
+        return slicer_call("slice", {"plate": plate}, 900)
+
+    def print_plate(self, plate=None):
+        """Slice a plate if needed, then upload it and start it, as from the Device tab."""
+        _require_connected()
+        _require_idle("Starting a print")
+        exported = slicer_call("export_plate", {"plate": plate}, 900)
+        path = exported.get("path", "")
+        if not os.path.isfile(path):
+            raise ValueError("OrcaMartelo did not export the plate")
+        try:
+            confirm_action("print_plate", plate=exported.get("plate"), file=exported.get("filename"),
+                           minutes=exported.get("estimated_minutes"), cost=exported.get("estimated_cost"))
+            with open(path, "rb") as fh:
+                content = fh.read()
+            result = upload_and_start_print_file(content, exported.get("filename") or os.path.basename(path),
+                                                 use_ams=bool(telemetry.get("has_multi_color_box")))
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        if result.get("status") == "error":
+            raise ValueError(result.get("message") or "The upload failed")
+        return {"status": "sent", "filename": result.get("filename"), "estimated_minutes": exported.get("estimated_minutes"),
+                "estimated_cost": exported.get("estimated_cost")}
 
     def printer_info(self):
         t = public_telemetry()
@@ -1106,6 +1418,9 @@ def _handle_mqtt_message(c, userdata, msg):
                 telemetry["target_nozzle_temp"] = data.get("target_nozzle_temp", telemetry["target_nozzle_temp"])
                 telemetry["bed_temp"] = data.get("curr_hotbed_temp", telemetry["bed_temp"])
                 telemetry["target_bed_temp"] = data.get("target_hotbed_temp", telemetry["target_bed_temp"])
+
+        elif t == "file" and payload.get("action") in ("listLocal", "listUdisk"):
+            _on_file_report(payload)
 
         elif t == "info":
             if data:
@@ -1759,6 +2074,505 @@ def send_video_command(action_name):
     print(f"[Bridge] Published {action_name} to video topics")
 
 
+def perform_control(data):
+    """Run one /control action. Returns the JSON answer."""
+    result = {"status": "ok", "ip": PRINTER_IP}
+    action = data.get("action", "")
+    if action and action not in ("clear_alert", "set_camera_url") and (not mqtt_client or not telemetry.get("connected")):
+        result = {"status": "error", "message": "Printer bridge is not connected", "ip": PRINTER_IP}
+        action = ""
+    if action in ["pause", "resume", "stop"]:
+        topic = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/print"
+        msg = {
+            "type": "print",
+            "action": action,
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": None
+        }
+        if mqtt_client:
+            mqtt_client.publish(topic, json.dumps(msg))
+
+    elif action in ("light", "nozzle_light", "camera_light"):
+        target = data.get("target", "")
+        if action == "nozzle_light" or target == "nozzle":
+            light_type = 1
+        elif action == "camera_light" or target == "camera":
+            light_type = 2
+        else:
+            light_type = int(data.get("type", 2))
+
+        status = int(data.get("status", 1))
+        brightness = 100 if status == 1 else 0
+
+        msg = {
+            "type": "light",
+            "action": "control",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "type": light_type,
+                "status": status,
+                "brightness": brightness
+            }
+        }
+        payload_str = json.dumps(msg)
+        if mqtt_client:
+            for top in (
+                f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/light",
+                f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/light"
+            ):
+                try:
+                    mqtt_client.publish(top, payload_str)
+                except Exception:
+                    pass
+            # If camera light (type 2), also publish type 3 for Kobra X compatibility
+            if light_type == 2:
+                try:
+                    msg3 = dict(msg)
+                    msg3["data"] = {"type": 3, "status": status, "brightness": brightness}
+                    mqtt_client.publish(f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/light", json.dumps(msg3))
+                except Exception:
+                    pass
+            print(f"[Bridge] Published light (type={light_type}) status={status} to light topics")
+
+        if light_type == 1:
+            telemetry["nozzle_light"] = status
+            try:
+                upload_and_run_gcode(f"M355 S{status}\nSET_PIN PIN=head_light VALUE={status}")
+            except Exception:
+                pass
+        else:
+            telemetry["camera_light"] = status
+            telemetry["light"] = status
+
+    elif action == "set_camera_url":
+        custom_url = str(data.get("url", "")).strip()
+        telemetry["custom_camera_url"] = custom_url
+        return {"status": "ok", "custom_camera_url": custom_url}
+
+    elif action == "start_capture" or action == "video_start":
+        send_video_command("startCapture")
+
+    elif action == "stop_capture" or action == "video_stop":
+        send_video_command("stopCapture")
+
+    elif action == "speed":
+        mode = int(data.get("mode", 2))
+        topic = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/print"
+        msg = {
+            "type": "print",
+            "action": "setSpeedMode",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "print_speed_mode": mode
+            }
+        }
+        if mqtt_client:
+            mqtt_client.publish(topic, json.dumps(msg))
+        telemetry["speed_mode"] = mode
+
+    elif action == "jog":
+        axis_name = data.get("axis", "X").upper()
+        axis_map = {"X": 1, "Y": 2, "Z": 3, "XY": 4, "XYZ": 5}
+        ax = axis_map.get(axis_name, 1)
+        direction = int(data.get("dir", 1))
+        move_type = 1 if direction > 0 else 0
+        dist = abs(float(data.get("dist", 10)))
+        topic = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/axis"
+        msg = {
+            "type": "axis",
+            "action": "move",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "axis": ax,
+                "move_type": move_type,
+                "distance": dist
+            }
+        }
+        if mqtt_client:
+            mqtt_client.publish(topic, json.dumps(msg))
+            print(f"[Bridge] Published jog {axis_name} {direction} {dist}mm")
+
+    elif action == "home":
+        axis_name = data.get("axis", "XYZ").upper()
+        ax = 5 if axis_name == "XYZ" else (4 if axis_name == "XY" else (3 if axis_name == "Z" else 1))
+        topic = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/axis"
+        msg = {
+            "type": "axis",
+            "action": "move",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "axis": ax,
+                "move_type": 2,
+                "distance": 0
+            }
+        }
+        if mqtt_client:
+            mqtt_client.publish(topic, json.dumps(msg))
+            print(f"[Bridge] Published Home {axis_name}")
+
+    elif action == "clear_alert":
+        telemetry["last_error"] = ""
+        telemetry["last_error_code"] = 0
+        telemetry["axis_error"] = ""
+
+    elif action == "motor_off" or action == "turnOff":
+        topic = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/axis"
+        msg = {
+            "type": "axis",
+            "action": "turnOff",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": None
+        }
+        if mqtt_client:
+            mqtt_client.publish(topic, json.dumps(msg))
+            print("[Bridge] Published Motor Turn Off")
+
+    elif action == "switch_channel":
+        channel_idx = max(0, min(3, _as_int(data.get("index", data.get("slot", 0)), 0)))
+        msg = {
+            "type": "extrudeControl",
+            "action": "switchChannel",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {"index": channel_idx}
+        }
+        if mqtt_client:
+            topic_ext = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/extrudeControl"
+            mqtt_client.publish(topic_ext, json.dumps(msg))
+            print(f"[Bridge] Published switchChannel to slot {channel_idx + 1} (index {channel_idx})")
+            threading.Timer(1.5, query_extrude_control).start()
+
+    elif action == "start_print_job":
+        filename = data.get("filename", "")
+        if filename and mqtt_client:
+            topic_print = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/print"
+            # Construct 1-to-1 AMS box mapping for all 4 slots matching physical feeder
+            ams_mapping = data.get("ams_box_mapping")
+            use_ams = bool(data.get("use_ams", True))
+            if not ams_mapping:
+                ams_mapping = []
+                fils = [f for f in telemetry.get("filaments", []) if f.get("source") not in ("external", "external_mcb") and f.get("available", True)]
+                for i in range(len(fils) if fils else (4 if use_ams else 0)):
+                    f = fils[i] if fils and i < len(fils) else {}
+                    col = f.get("color", "#23a3c7")
+                    if isinstance(col, str) and col.startswith("#"):
+                        c_hex = col.lstrip("#")
+                        r = int(c_hex[0:2], 16) if len(c_hex) >= 2 else 0
+                        g = int(c_hex[2:4], 16) if len(c_hex) >= 4 else 210
+                        b = int(c_hex[4:6], 16) if len(c_hex) >= 6 else 255
+                        rgb = [r, g, b]
+                    else:
+                        rgb = [35, 163, 199]
+                    ams_mapping.append({
+                        "ams_index": int(f.get("slot", i)),
+                        "paint_index": i,
+                        "material_type": f.get("type", "PLA"),
+                        "ams_color": rgb,
+                        "paint_color": rgb
+                    })
+
+            requested_tasks = data.get("task_settings", {})
+            auto_leveling = 1 if requested_tasks.get("auto_leveling", 1) else 0
+            vibration_compensation = 1 if requested_tasks.get("vibration_compensation", 0) else 0
+            flow_calibration = 1 if requested_tasks.get("flow_calibration", 0) else 0
+            timelapse_status = 1 if requested_tasks.get("timelapse", 0) else 0
+
+            target_filename = start_filename_for_print(filename)
+
+            msg = {
+                "type": "print",
+                "action": "start",
+                "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+                "timestamp": int(time.time() * 1000),
+                "data": {
+                    "taskid": "-1",
+                    "filename": target_filename,
+                    "url": "",
+                    "md5": "",
+                    "filepath": None,
+                    "filetype": 1,
+                    "project_type": 1,
+                    "filesize": 0,
+                    "ams_settings": {
+                        "use_ams": use_ams,
+                        "ams_box_mapping": ams_mapping
+                    },
+                    "task_settings": {
+                        "auto_leveling": auto_leveling,
+                        "vibration_compensation": vibration_compensation,
+                        "flow_calibration": flow_calibration,
+                        "dry_mode": 0,
+                        "ai_settings": {"status": 0, "count": 0, "type": 0},
+                        "timelapse": {"status": timelapse_status, "count": 0, "type": 0},
+                        "drying_settings": {"status": 0, "target_temp": 0, "duration": 0, "remain_time": 0},
+                        "model_objects_skip_parts": []
+                    }
+                }
+            }
+            total_layers = _as_int(data.get("total_layers", 0), 0)
+            if total_layers > 0:
+                telemetry["total_layers"] = total_layers
+                telemetry["curr_layer"] = 0
+            if filename and not is_command_filename(filename):
+                telemetry["job_name"] = filename
+
+            total_min = _as_int(data.get("estimated_print_time_min", 0), 0)
+            if total_min <= 0:
+                dhms = data.get("estimated_print_time_dhms")
+                if dhms:
+                    total_min = _parse_time_str_to_minutes(dhms)
+            if total_min > 0:
+                telemetry["total_print_time"] = total_min
+                telemetry["remain_time"] = total_min
+                b_name = os.path.basename(filename)
+                job_estimated_times[b_name] = total_min
+                job_estimated_times[os.path.basename(target_filename)] = total_min
+                if b_name.lower().endswith(".gcode"):
+                    job_estimated_times[b_name[:-6]] = total_min
+                elif b_name.lower().endswith(".3mf"):
+                    job_estimated_times[b_name[:-4]] = total_min
+
+            record_job_cost(target_filename, data.get("estimated_cost"), data.get("estimated_weight_g"),
+                            data.get("estimated_filament_mm"))
+            mqtt_client.publish(topic_print, json.dumps(msg))
+            print(f"[Bridge] Published print:start for {filename} with use_ams={use_ams} ams_mapping={json.dumps(ams_mapping)}")
+        else:
+            result = {"status": "error", "message": "Print filename or printer connection is unavailable", "ip": PRINTER_IP}
+
+    elif action == "feed_filament":
+        slot_idx = int(data.get("slot", 0))
+        box_id = int(data.get("box_id", -1))
+        m_type = data.get("type", "PLA")
+        topic_feed = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/multiColorBox"
+        msg = {
+            "type": "multiColorBox",
+            "action": "feedFilament",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "multi_color_box": [{
+                    "id": box_id,
+                    "feed_status": {
+                        "slot_index": slot_idx,
+                        "type": 1,
+                        "material_type": m_type
+                    }
+                }]
+            }
+        }
+        topic_ext = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/extrudeControl"
+        msg_ext = {
+            "type": "extrudeControl",
+            "action": "switchChannel",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {"index": slot_idx}
+        }
+        if mqtt_client:
+            mqtt_client.publish(topic_feed, json.dumps(msg))
+            mqtt_client.publish(topic_ext, json.dumps(msg_ext))
+            telemetry["feed_status"] = {"box_id": box_id, "slot_index": slot_idx, "type": 1, "current_status": 1, "code": 0}
+            print(f"[Bridge] Published feedFilament box {box_id} slot {slot_idx} ({m_type}) and switchChannel {slot_idx}")
+
+    elif action == "unfeed_filament":
+        slot_idx = int(data.get("slot", 0))
+        box_id = int(data.get("box_id", -1))
+        topic_feed = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/multiColorBox"
+        msg = {
+            "type": "multiColorBox",
+            "action": "feedFilament",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "multi_color_box": [{
+                    "id": box_id,
+                    "feed_status": {"slot_index": slot_idx, "type": 2}
+                }]
+            }
+        }
+        if mqtt_client:
+            mqtt_client.publish(topic_feed, json.dumps(msg))
+            telemetry["feed_status"] = {"box_id": box_id, "slot_index": slot_idx, "type": 2, "current_status": 1, "code": 0}
+            print(f"[Bridge] Published unfeed box {box_id} slot {slot_idx}")
+
+    elif action == "fan":
+        fan_value = max(0, min(100, int(data.get("value", 0))))
+        topic_fan = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/fan"
+        msg = {
+            "type": "fan",
+            "action": "setSpeed",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {"fan_speed_pct": fan_value}
+        }
+        if mqtt_client:
+            mqtt_client.publish(topic_fan, json.dumps(msg))
+            print(f"[Bridge] Published model fan {fan_value}%")
+        telemetry["fan"] = fan_value
+
+    elif action == "temp":
+        heater = data.get("heater", "nozzle")
+        val = int(data.get("value", 0))
+        settings = {}
+        if heater == "nozzle":
+            settings["target_nozzle_temp"] = val
+            telemetry["target_nozzle_temp"] = val
+        elif heater == "bed":
+            settings["target_hotbed_temp"] = val
+            telemetry["target_bed_temp"] = val
+        elif heater in ("both", "all"):
+            nozzle_val = int(data.get("nozzle", val))
+            bed_val = int(data.get("bed", val))
+            settings["target_nozzle_temp"] = nozzle_val
+            settings["target_hotbed_temp"] = bed_val
+            telemetry["target_nozzle_temp"] = nozzle_val
+            telemetry["target_bed_temp"] = bed_val
+
+        # 1. Direct Klipper / Moonraker dispatch (instant native control if Klipper/Rinkhals is running)
+        if PRINTER_IP:
+            try:
+                gcode_cmds = []
+                if heater == "nozzle":
+                    gcode_cmds.append(f"M104 S{val}")
+                elif heater == "bed":
+                    gcode_cmds.append(f"M140 S{val}")
+                elif heater in ("both", "all"):
+                    gcode_cmds.append(f"M104 S{nozzle_val}")
+                    gcode_cmds.append(f"M140 S{bed_val}")
+                for cmd in gcode_cmds:
+                    req = urllib.request.Request(
+                        f"http://{PRINTER_IP}/api/printer/command",
+                        data=json.dumps({"command": cmd}).encode("utf-8"),
+                        headers={"Content-Type": "application/json"}
+                    )
+                    urllib.request.urlopen(req, timeout=1)
+                    print(f"[Bridge] Sent direct Klipper G-code via Moonraker: {cmd}")
+            except Exception as e:
+                # Non-Klipper firmware or Moonraker endpoint unavailable; fallback to MQTT seamlessly
+                pass
+
+        # 2. Primary Kobra 3 protocol: type print, action update, settings target_hotbed_temp / target_nozzle_temp
+        msg = {
+            "type": "print",
+            "action": "update",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "taskid": "-1",
+                "settings": settings
+            }
+        }
+        payload_str = json.dumps(msg)
+        for topic_role in ("slicer", "web"):
+            top = f"anycubic/anycubicCloud/v1/{topic_role}/printer/{model_id}/{device_id}/print"
+            if mqtt_client:
+                mqtt_client.publish(top, payload_str)
+
+        # Legacy fallback for older firmware models
+        legacy_msg = {
+            "type": "tempature",
+            "action": "set",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "type": 0 if heater == "nozzle" else 1,
+                "target_hotbed_temp": settings.get("target_hotbed_temp", 0),
+                "target_nozzle_temp": settings.get("target_nozzle_temp", 0)
+            }
+        }
+        legacy_str = json.dumps(legacy_msg)
+        for topic_role in ("slicer", "web"):
+            top_legacy = f"anycubic/anycubicCloud/v1/{topic_role}/printer/{model_id}/{device_id}/tempature"
+            if mqtt_client:
+                mqtt_client.publish(top_legacy, legacy_str)
+
+        print(f"[Bridge] Published set temperature {heater}={val} (settings={settings})")
+
+    elif action == "extrude":
+        direction = data.get("dir", "extrude")
+        dist = abs(float(data.get("dist", 10)))
+        sign = 1 if direction == "extrude" else -1
+        e_dist = sign * dist
+        gcode = f"; Extrude filament\nM83\nG1 E{e_dist:.1f} F150\nM400\n"
+        try:
+            result = upload_and_run_gcode(gcode, delete_after=True)
+            print(f"[Bridge] Extrude executed: {direction} {dist}mm")
+        except Exception as e:
+            result = {"status": "error", "message": str(e)}
+
+    elif action == "set_ace_drying":
+        box_id = int(data.get("box_id", 0))
+        status = 1 if data.get("status", 1) else 0
+        target_temp = int(data.get("target_temp", 50))
+        raw_duration = int(data.get("duration", 240))
+        duration = raw_duration * 60 if raw_duration <= 24 else raw_duration
+        topic_dry = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/multiColorBox"
+        topic_dry_slicer = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/multiColorBox"
+        msg = {
+            "type": "multiColorBox",
+            "action": "setDry",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "multi_color_box": [{
+                    "id": box_id,
+                    "drying_status": {
+                        "status": status,
+                        "target_temp": target_temp,
+                        "duration": duration,
+                        "remain_time": duration if status else 0
+                    }
+                }]
+            }
+        }
+        if mqtt_client:
+            payload_str = json.dumps(msg)
+            mqtt_client.publish(topic_dry, payload_str)
+            mqtt_client.publish(topic_dry_slicer, payload_str)
+            print(f"[Bridge] Published setDry for box {box_id}: status={status}, temp={target_temp}C, duration={duration}m")
+        telemetry["ace_drying"] = {
+            "box_id": box_id,
+            "status": status,
+            "target_temp": target_temp,
+            "duration": duration,
+            "remain_time": duration if status else 0
+        }
+        result = {"status": "ok", "box_id": box_id, "drying_status": telemetry["ace_drying"], "ip": PRINTER_IP}
+
+    elif action == "set_ace_auto_feed":
+        box_id = int(data.get("box_id", 0))
+        auto_feed = 1 if data.get("auto_feed", 1) else 0
+        topic_auto = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/multiColorBox"
+        topic_auto_slicer = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/multiColorBox"
+        msg = {
+            "type": "multiColorBox",
+            "action": "setAutoFeed",
+            "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "multi_color_box": [{
+                    "id": box_id,
+                    "auto_feed": auto_feed
+                }]
+            }
+        }
+        if mqtt_client:
+            payload_str = json.dumps(msg)
+            mqtt_client.publish(topic_auto, payload_str)
+            mqtt_client.publish(topic_auto_slicer, payload_str)
+            print(f"[Bridge] Published setAutoFeed for box {box_id}: auto_feed={auto_feed}")
+        telemetry["ace_auto_feed"] = auto_feed
+        result = {"status": "ok", "box_id": box_id, "auto_feed": auto_feed, "ip": PRINTER_IP}
+
+    return result
+
+
 class BridgeServer(BaseHTTPRequestHandler):
     def authorized(self):
         token = self.headers.get("X-OrcaCubic-Token", "")
@@ -1790,15 +2604,15 @@ class BridgeServer(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path.startswith("/camera/snapshot/wait"):
+        if self.path.startswith("/slicer/wait"):
             if not self.require_authorized():
                 return
-            sid = wait_snapshot_request()
-            if sid is None:
+            request = wait_slicer_request()
+            if request is None:
                 self.send_response(204)
                 self.end_headers()
             else:
-                self.send_json(200, {"id": sid, "url": f"http://127.0.0.1:{HTTP_PORT}/camera"})
+                self.send_json(200, request)
         elif self.path.startswith("/health"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -1967,12 +2781,14 @@ class BridgeServer(BaseHTTPRequestHandler):
         if urllib.parse.urlparse(self.path).path == "/mcp":
             self.handle_mcp()
             return
-        if urllib.parse.urlparse(self.path).path == "/camera/snapshot":
+        if urllib.parse.urlparse(self.path).path == "/slicer/result":
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             length = _as_int(self.headers.get("Content-Length", 0))
-            data = self.rfile.read(length) if 0 < length <= SNAPSHOT_MAX_BYTES else b""
-            deliver_snapshot(_as_int(query.get("id", ["0"])[0]), data if data.startswith(b"\xff\xd8") else b"",
-                             query.get("error", [""])[0])
+            try:
+                answer = json.loads(self.rfile.read(length).decode("utf-8")) if 0 < length <= 2 * SNAPSHOT_MAX_BYTES else None
+            except ValueError:
+                answer = None
+            deliver_slicer_result(_as_int(query.get("id", ["0"])[0]), answer)
             self.send_json(200, {"status": "ok"})
             return
         expected_printer = self.headers.get("X-OrcaCubic-Printer", "")
@@ -2019,504 +2835,7 @@ class BridgeServer(BaseHTTPRequestHandler):
             if server_instance:
                 threading.Thread(target=server_instance.shutdown, daemon=True).start()
         elif self.path.startswith("/control"):
-            action = data.get("action", "")
-            if action and action not in ("clear_alert", "set_camera_url") and (not mqtt_client or not telemetry.get("connected")):
-                result = {"status": "error", "message": "Printer bridge is not connected", "ip": PRINTER_IP}
-                action = ""
-            if action in ["pause", "resume", "stop"]:
-                topic = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/print"
-                msg = {
-                    "type": "print",
-                    "action": action,
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": None
-                }
-                if mqtt_client:
-                    mqtt_client.publish(topic, json.dumps(msg))
-
-            elif action in ("light", "nozzle_light", "camera_light"):
-                target = data.get("target", "")
-                if action == "nozzle_light" or target == "nozzle":
-                    light_type = 1
-                elif action == "camera_light" or target == "camera":
-                    light_type = 2
-                else:
-                    light_type = int(data.get("type", 2))
-
-                status = int(data.get("status", 1))
-                brightness = 100 if status == 1 else 0
-
-                msg = {
-                    "type": "light",
-                    "action": "control",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {
-                        "type": light_type,
-                        "status": status,
-                        "brightness": brightness
-                    }
-                }
-                payload_str = json.dumps(msg)
-                if mqtt_client:
-                    for top in (
-                        f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/light",
-                        f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/light"
-                    ):
-                        try:
-                            mqtt_client.publish(top, payload_str)
-                        except Exception:
-                            pass
-                    # If camera light (type 2), also publish type 3 for Kobra X compatibility
-                    if light_type == 2:
-                        try:
-                            msg3 = dict(msg)
-                            msg3["data"] = {"type": 3, "status": status, "brightness": brightness}
-                            mqtt_client.publish(f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/light", json.dumps(msg3))
-                        except Exception:
-                            pass
-                    print(f"[Bridge] Published light (type={light_type}) status={status} to light topics")
-
-                if light_type == 1:
-                    telemetry["nozzle_light"] = status
-                    try:
-                        upload_and_run_gcode(f"M355 S{status}\nSET_PIN PIN=head_light VALUE={status}")
-                    except Exception:
-                        pass
-                else:
-                    telemetry["camera_light"] = status
-                    telemetry["light"] = status
-
-            elif action == "set_camera_url":
-                custom_url = str(data.get("url", "")).strip()
-                telemetry["custom_camera_url"] = custom_url
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok", "custom_camera_url": custom_url}).encode("utf-8"))
-                return
-
-            elif action == "start_capture" or action == "video_start":
-                send_video_command("startCapture")
-
-            elif action == "stop_capture" or action == "video_stop":
-                send_video_command("stopCapture")
-
-            elif action == "speed":
-                mode = int(data.get("mode", 2))
-                topic = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/print"
-                msg = {
-                    "type": "print",
-                    "action": "setSpeedMode",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {
-                        "print_speed_mode": mode
-                    }
-                }
-                if mqtt_client:
-                    mqtt_client.publish(topic, json.dumps(msg))
-                telemetry["speed_mode"] = mode
-
-            elif action == "jog":
-                axis_name = data.get("axis", "X").upper()
-                axis_map = {"X": 1, "Y": 2, "Z": 3, "XY": 4, "XYZ": 5}
-                ax = axis_map.get(axis_name, 1)
-                direction = int(data.get("dir", 1))
-                move_type = 1 if direction > 0 else 0
-                dist = abs(float(data.get("dist", 10)))
-                topic = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/axis"
-                msg = {
-                    "type": "axis",
-                    "action": "move",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {
-                        "axis": ax,
-                        "move_type": move_type,
-                        "distance": dist
-                    }
-                }
-                if mqtt_client:
-                    mqtt_client.publish(topic, json.dumps(msg))
-                    print(f"[Bridge] Published jog {axis_name} {direction} {dist}mm")
-
-            elif action == "home":
-                axis_name = data.get("axis", "XYZ").upper()
-                ax = 5 if axis_name == "XYZ" else (4 if axis_name == "XY" else (3 if axis_name == "Z" else 1))
-                topic = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/axis"
-                msg = {
-                    "type": "axis",
-                    "action": "move",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {
-                        "axis": ax,
-                        "move_type": 2,
-                        "distance": 0
-                    }
-                }
-                if mqtt_client:
-                    mqtt_client.publish(topic, json.dumps(msg))
-                    print(f"[Bridge] Published Home {axis_name}")
-
-            elif action == "clear_alert":
-                telemetry["last_error"] = ""
-                telemetry["last_error_code"] = 0
-                telemetry["axis_error"] = ""
-
-            elif action == "motor_off" or action == "turnOff":
-                topic = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/axis"
-                msg = {
-                    "type": "axis",
-                    "action": "turnOff",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": None
-                }
-                if mqtt_client:
-                    mqtt_client.publish(topic, json.dumps(msg))
-                    print("[Bridge] Published Motor Turn Off")
-
-            elif action == "switch_channel":
-                channel_idx = max(0, min(3, _as_int(data.get("index", data.get("slot", 0)), 0)))
-                msg = {
-                    "type": "extrudeControl",
-                    "action": "switchChannel",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {"index": channel_idx}
-                }
-                if mqtt_client:
-                    topic_ext = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/extrudeControl"
-                    mqtt_client.publish(topic_ext, json.dumps(msg))
-                    print(f"[Bridge] Published switchChannel to slot {channel_idx + 1} (index {channel_idx})")
-                    threading.Timer(1.5, query_extrude_control).start()
-
-            elif action == "start_print_job":
-                filename = data.get("filename", "")
-                if filename and mqtt_client:
-                    topic_print = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/print"
-                    # Construct 1-to-1 AMS box mapping for all 4 slots matching physical feeder
-                    ams_mapping = data.get("ams_box_mapping")
-                    use_ams = bool(data.get("use_ams", True))
-                    if not ams_mapping:
-                        ams_mapping = []
-                        fils = [f for f in telemetry.get("filaments", []) if f.get("source") not in ("external", "external_mcb") and f.get("available", True)]
-                        for i in range(len(fils) if fils else (4 if use_ams else 0)):
-                            f = fils[i] if fils and i < len(fils) else {}
-                            col = f.get("color", "#23a3c7")
-                            if isinstance(col, str) and col.startswith("#"):
-                                c_hex = col.lstrip("#")
-                                r = int(c_hex[0:2], 16) if len(c_hex) >= 2 else 0
-                                g = int(c_hex[2:4], 16) if len(c_hex) >= 4 else 210
-                                b = int(c_hex[4:6], 16) if len(c_hex) >= 6 else 255
-                                rgb = [r, g, b]
-                            else:
-                                rgb = [35, 163, 199]
-                            ams_mapping.append({
-                                "ams_index": int(f.get("slot", i)),
-                                "paint_index": i,
-                                "material_type": f.get("type", "PLA"),
-                                "ams_color": rgb,
-                                "paint_color": rgb
-                            })
-
-                    requested_tasks = data.get("task_settings", {})
-                    auto_leveling = 1 if requested_tasks.get("auto_leveling", 1) else 0
-                    vibration_compensation = 1 if requested_tasks.get("vibration_compensation", 0) else 0
-                    flow_calibration = 1 if requested_tasks.get("flow_calibration", 0) else 0
-                    timelapse_status = 1 if requested_tasks.get("timelapse", 0) else 0
-
-                    target_filename = start_filename_for_print(filename)
-
-                    msg = {
-                        "type": "print",
-                        "action": "start",
-                        "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                        "timestamp": int(time.time() * 1000),
-                        "data": {
-                            "taskid": "-1",
-                            "filename": target_filename,
-                            "url": "",
-                            "md5": "",
-                            "filepath": None,
-                            "filetype": 1,
-                            "project_type": 1,
-                            "filesize": 0,
-                            "ams_settings": {
-                                "use_ams": use_ams,
-                                "ams_box_mapping": ams_mapping
-                            },
-                            "task_settings": {
-                                "auto_leveling": auto_leveling,
-                                "vibration_compensation": vibration_compensation,
-                                "flow_calibration": flow_calibration,
-                                "dry_mode": 0,
-                                "ai_settings": {"status": 0, "count": 0, "type": 0},
-                                "timelapse": {"status": timelapse_status, "count": 0, "type": 0},
-                                "drying_settings": {"status": 0, "target_temp": 0, "duration": 0, "remain_time": 0},
-                                "model_objects_skip_parts": []
-                            }
-                        }
-                    }
-                    total_layers = _as_int(data.get("total_layers", 0), 0)
-                    if total_layers > 0:
-                        telemetry["total_layers"] = total_layers
-                        telemetry["curr_layer"] = 0
-                    if filename and not is_command_filename(filename):
-                        telemetry["job_name"] = filename
-
-                    total_min = _as_int(data.get("estimated_print_time_min", 0), 0)
-                    if total_min <= 0:
-                        dhms = data.get("estimated_print_time_dhms")
-                        if dhms:
-                            total_min = _parse_time_str_to_minutes(dhms)
-                    if total_min > 0:
-                        telemetry["total_print_time"] = total_min
-                        telemetry["remain_time"] = total_min
-                        b_name = os.path.basename(filename)
-                        job_estimated_times[b_name] = total_min
-                        job_estimated_times[os.path.basename(target_filename)] = total_min
-                        if b_name.lower().endswith(".gcode"):
-                            job_estimated_times[b_name[:-6]] = total_min
-                        elif b_name.lower().endswith(".3mf"):
-                            job_estimated_times[b_name[:-4]] = total_min
-
-                    record_job_cost(target_filename, data.get("estimated_cost"), data.get("estimated_weight_g"),
-                                    data.get("estimated_filament_mm"))
-                    mqtt_client.publish(topic_print, json.dumps(msg))
-                    print(f"[Bridge] Published print:start for {filename} with use_ams={use_ams} ams_mapping={json.dumps(ams_mapping)}")
-                else:
-                    result = {"status": "error", "message": "Print filename or printer connection is unavailable", "ip": PRINTER_IP}
-
-            elif action == "feed_filament":
-                slot_idx = int(data.get("slot", 0))
-                box_id = int(data.get("box_id", -1))
-                m_type = data.get("type", "PLA")
-                topic_feed = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/multiColorBox"
-                msg = {
-                    "type": "multiColorBox",
-                    "action": "feedFilament",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {
-                        "multi_color_box": [{
-                            "id": box_id,
-                            "feed_status": {
-                                "slot_index": slot_idx,
-                                "type": 1,
-                                "material_type": m_type
-                            }
-                        }]
-                    }
-                }
-                topic_ext = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/extrudeControl"
-                msg_ext = {
-                    "type": "extrudeControl",
-                    "action": "switchChannel",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {"index": slot_idx}
-                }
-                if mqtt_client:
-                    mqtt_client.publish(topic_feed, json.dumps(msg))
-                    mqtt_client.publish(topic_ext, json.dumps(msg_ext))
-                    telemetry["feed_status"] = {"box_id": box_id, "slot_index": slot_idx, "type": 1, "current_status": 1, "code": 0}
-                    print(f"[Bridge] Published feedFilament box {box_id} slot {slot_idx} ({m_type}) and switchChannel {slot_idx}")
-
-            elif action == "unfeed_filament":
-                slot_idx = int(data.get("slot", 0))
-                box_id = int(data.get("box_id", -1))
-                topic_feed = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/multiColorBox"
-                msg = {
-                    "type": "multiColorBox",
-                    "action": "feedFilament",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {
-                        "multi_color_box": [{
-                            "id": box_id,
-                            "feed_status": {"slot_index": slot_idx, "type": 2}
-                        }]
-                    }
-                }
-                if mqtt_client:
-                    mqtt_client.publish(topic_feed, json.dumps(msg))
-                    telemetry["feed_status"] = {"box_id": box_id, "slot_index": slot_idx, "type": 2, "current_status": 1, "code": 0}
-                    print(f"[Bridge] Published unfeed box {box_id} slot {slot_idx}")
-
-            elif action == "fan":
-                fan_value = max(0, min(100, int(data.get("value", 0))))
-                topic_fan = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/fan"
-                msg = {
-                    "type": "fan",
-                    "action": "setSpeed",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {"fan_speed_pct": fan_value}
-                }
-                if mqtt_client:
-                    mqtt_client.publish(topic_fan, json.dumps(msg))
-                    print(f"[Bridge] Published model fan {fan_value}%")
-                telemetry["fan"] = fan_value
-
-            elif action == "temp":
-                heater = data.get("heater", "nozzle")
-                val = int(data.get("value", 0))
-                settings = {}
-                if heater == "nozzle":
-                    settings["target_nozzle_temp"] = val
-                    telemetry["target_nozzle_temp"] = val
-                elif heater == "bed":
-                    settings["target_hotbed_temp"] = val
-                    telemetry["target_bed_temp"] = val
-                elif heater in ("both", "all"):
-                    nozzle_val = int(data.get("nozzle", val))
-                    bed_val = int(data.get("bed", val))
-                    settings["target_nozzle_temp"] = nozzle_val
-                    settings["target_hotbed_temp"] = bed_val
-                    telemetry["target_nozzle_temp"] = nozzle_val
-                    telemetry["target_bed_temp"] = bed_val
-
-                # 1. Direct Klipper / Moonraker dispatch (instant native control if Klipper/Rinkhals is running)
-                if PRINTER_IP:
-                    try:
-                        gcode_cmds = []
-                        if heater == "nozzle":
-                            gcode_cmds.append(f"M104 S{val}")
-                        elif heater == "bed":
-                            gcode_cmds.append(f"M140 S{val}")
-                        elif heater in ("both", "all"):
-                            gcode_cmds.append(f"M104 S{nozzle_val}")
-                            gcode_cmds.append(f"M140 S{bed_val}")
-                        for cmd in gcode_cmds:
-                            req = urllib.request.Request(
-                                f"http://{PRINTER_IP}/api/printer/command",
-                                data=json.dumps({"command": cmd}).encode("utf-8"),
-                                headers={"Content-Type": "application/json"}
-                            )
-                            urllib.request.urlopen(req, timeout=1)
-                            print(f"[Bridge] Sent direct Klipper G-code via Moonraker: {cmd}")
-                    except Exception as e:
-                        # Non-Klipper firmware or Moonraker endpoint unavailable; fallback to MQTT seamlessly
-                        pass
-
-                # 2. Primary Kobra 3 protocol: type print, action update, settings target_hotbed_temp / target_nozzle_temp
-                msg = {
-                    "type": "print",
-                    "action": "update",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {
-                        "taskid": "-1",
-                        "settings": settings
-                    }
-                }
-                payload_str = json.dumps(msg)
-                for topic_role in ("slicer", "web"):
-                    top = f"anycubic/anycubicCloud/v1/{topic_role}/printer/{model_id}/{device_id}/print"
-                    if mqtt_client:
-                        mqtt_client.publish(top, payload_str)
-
-                # Legacy fallback for older firmware models
-                legacy_msg = {
-                    "type": "tempature",
-                    "action": "set",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {
-                        "type": 0 if heater == "nozzle" else 1,
-                        "target_hotbed_temp": settings.get("target_hotbed_temp", 0),
-                        "target_nozzle_temp": settings.get("target_nozzle_temp", 0)
-                    }
-                }
-                legacy_str = json.dumps(legacy_msg)
-                for topic_role in ("slicer", "web"):
-                    top_legacy = f"anycubic/anycubicCloud/v1/{topic_role}/printer/{model_id}/{device_id}/tempature"
-                    if mqtt_client:
-                        mqtt_client.publish(top_legacy, legacy_str)
-
-                print(f"[Bridge] Published set temperature {heater}={val} (settings={settings})")
-
-            elif action == "extrude":
-                direction = data.get("dir", "extrude")
-                dist = abs(float(data.get("dist", 10)))
-                sign = 1 if direction == "extrude" else -1
-                e_dist = sign * dist
-                gcode = f"; Extrude filament\nM83\nG1 E{e_dist:.1f} F150\nM400\n"
-                try:
-                    result = upload_and_run_gcode(gcode, delete_after=True)
-                    print(f"[Bridge] Extrude executed: {direction} {dist}mm")
-                except Exception as e:
-                    result = {"status": "error", "message": str(e)}
-
-            elif action == "set_ace_drying":
-                box_id = int(data.get("box_id", 0))
-                status = 1 if data.get("status", 1) else 0
-                target_temp = int(data.get("target_temp", 50))
-                raw_duration = int(data.get("duration", 240))
-                duration = raw_duration * 60 if raw_duration <= 24 else raw_duration
-                topic_dry = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/multiColorBox"
-                topic_dry_slicer = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/multiColorBox"
-                msg = {
-                    "type": "multiColorBox",
-                    "action": "setDry",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {
-                        "multi_color_box": [{
-                            "id": box_id,
-                            "drying_status": {
-                                "status": status,
-                                "target_temp": target_temp,
-                                "duration": duration,
-                                "remain_time": duration if status else 0
-                            }
-                        }]
-                    }
-                }
-                if mqtt_client:
-                    payload_str = json.dumps(msg)
-                    mqtt_client.publish(topic_dry, payload_str)
-                    mqtt_client.publish(topic_dry_slicer, payload_str)
-                    print(f"[Bridge] Published setDry for box {box_id}: status={status}, temp={target_temp}C, duration={duration}m")
-                telemetry["ace_drying"] = {
-                    "box_id": box_id,
-                    "status": status,
-                    "target_temp": target_temp,
-                    "duration": duration,
-                    "remain_time": duration if status else 0
-                }
-                result = {"status": "ok", "box_id": box_id, "drying_status": telemetry["ace_drying"], "ip": PRINTER_IP}
-
-            elif action == "set_ace_auto_feed":
-                box_id = int(data.get("box_id", 0))
-                auto_feed = 1 if data.get("auto_feed", 1) else 0
-                topic_auto = f"anycubic/anycubicCloud/v1/web/printer/{model_id}/{device_id}/multiColorBox"
-                topic_auto_slicer = f"anycubic/anycubicCloud/v1/slicer/printer/{model_id}/{device_id}/multiColorBox"
-                msg = {
-                    "type": "multiColorBox",
-                    "action": "setAutoFeed",
-                    "msgid": "".join(random.choices(string.hexdigits.lower(), k=32)),
-                    "timestamp": int(time.time() * 1000),
-                    "data": {
-                        "multi_color_box": [{
-                            "id": box_id,
-                            "auto_feed": auto_feed
-                        }]
-                    }
-                }
-                if mqtt_client:
-                    payload_str = json.dumps(msg)
-                    mqtt_client.publish(topic_auto, payload_str)
-                    mqtt_client.publish(topic_auto_slicer, payload_str)
-                    print(f"[Bridge] Published setAutoFeed for box {box_id}: auto_feed={auto_feed}")
-                telemetry["ace_auto_feed"] = auto_feed
-                result = {"status": "ok", "box_id": box_id, "auto_feed": auto_feed, "ip": PRINTER_IP}
-
+            result = perform_control(data)
         elif self.path.endswith("/mach_mqtt/publish"):
             topic = data.get("topic", "")
             payload_raw = data.get("payload", "")
