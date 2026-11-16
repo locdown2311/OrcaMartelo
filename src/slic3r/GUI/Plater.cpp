@@ -1297,6 +1297,10 @@ std::vector<int> get_min_flush_volumes(const DynamicPrintConfig &full_config, si
         filament_long_retractions_when_cut = filament_long_retractions_when_cut_opt->values;
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": get filament_long_retractions_when_cut from config, size=%1%, values=%2%")%filament_long_retractions_when_cut.size() %filament_long_retractions_when_cut_opt->serialize();
     }
+    // A standalone preset that omits either key leaves it shorter than the filament list; the rest follow
+    // the first filament, as get_at() reads them when slicing.
+    filament_retraction_distance_when_cut.resize(filament_size, filament_retraction_distance_when_cut.empty() ? 18.0 : filament_retraction_distance_when_cut.front());
+    filament_long_retractions_when_cut.resize(filament_size, filament_long_retractions_when_cut.empty() ? 0 : filament_long_retractions_when_cut.front());
 
     for (size_t idx = 0; idx < filament_size; ++idx) {
         int extra_flush_volume = nozzle_volume_val;
@@ -10184,7 +10188,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             if (!isUtf8StepFile) {
                                 const auto no_warn = wxGetApp().app_config->get_bool("step_not_utf8_no_warn");
                                 if (!no_warn) {
-                                    MessageDialog dlg(nullptr, _L("Component name(s) inside step file not in UTF-8 format!") + "\n\n" + _L("Because of unsupported text encoding, garbage characters may appear!"),
+                                    MessageDialog dlg(nullptr, _L("Component name(s) inside STEP file not in UTF-8 format!") + "\n\n" + _L("Because of unsupported text encoding, garbage characters may appear!"),
                                                       wxString(SLIC3R_APP_FULL_NAME " - ") + _L("Attention!"), wxOK | wxICON_INFORMATION);
                                     dlg.show_dsa_button(_L("Remember my choice."));
                                     dlg.ShowModal();
@@ -14283,12 +14287,7 @@ void Plater::priv::on_tab_selection_changing(wxBookCtrlEvent& e)
     const bool use_printer_agents = wxGetApp().app_config->get_bool("use_printer_agents");
     const bool use_native_device_tab = wxGetApp().preset_bundle &&
         (wxGetApp().preset_bundle->use_bbl_device_tab() || use_printer_agents);
-    // Pointer test, not a name lookup: in printer-agents mode this page is TAB_ID_MONITOR_WEB
-    // while the native Device tab holds TAB_ID_MONITOR, and in legacy-web mode, or for an agent
-    // without the native tab, it holds TAB_ID_MONITOR itself.
-    const bool selecting_web_device_tab = main_frame->m_printer_view_page &&
-        main_frame->m_tabpanel->GetPage(new_sel) == main_frame->m_printer_view_page;
-    if (use_native_device_tab && new_name == TAB_ID_MONITOR && !selecting_web_device_tab) {
+    if (use_native_device_tab && new_name == TAB_ID_MONITOR) {
         // BBL network module is only required for BBL-vendor printers.
         // Non-BBL Python plugins (e.g. moonraker) drive the Device tab without it.
         if (!use_printer_agents && wxGetApp().preset_bundle->is_bbl_vendor() && !Slic3r::NetworkAgent::is_network_module_loaded()) {
@@ -14300,6 +14299,11 @@ void Plater::priv::on_tab_selection_changing(wxBookCtrlEvent& e)
             }
         }
     } else {
+        // Pointer test, not a name lookup: in printer-agents mode this page is TAB_ID_MONITOR_WEB
+        // while the native Device tab holds TAB_ID_MONITOR, and in legacy-web mode it holds
+        // TAB_ID_MONITOR itself.
+        const bool selecting_web_device_tab = main_frame->m_printer_view_page &&
+            main_frame->m_tabpanel->GetPage(new_sel) == main_frame->m_printer_view_page;
         if (selecting_web_device_tab) {
             // Use the selected discovered machine when the preset has no host.
             main_frame->load_printer_url();
@@ -15276,8 +15280,11 @@ bool Plater::priv::has_assemble_view() const
 bool Plater::priv::can_scale_to_print_volume() const
 {
     const BuildVolume_Type type = this->bed.build_volume().type();
+    const Selection& selection = get_selection();
+    // Selection::scale_to_fit_print_volume() does nothing for a selection of parts, so don't offer it
     return !sidebar->obj_list()->has_selected_cut_object()
-        && !view3D->get_canvas3d()->get_selection().is_empty()
+        && !selection.is_empty()
+        && selection.get_mode() != Selection::Volume
         && (type == BuildVolume_Type::Rectangle || type == BuildVolume_Type::Circle);
 }
 #endif // ENABLE_ENHANCED_PRINT_VOLUME_FIT
@@ -22919,6 +22926,8 @@ void Plater::changed_objects(const std::vector<size_t>& object_idxs)
         p->view3D->reload_scene(false);
         p->view3D->get_canvas3d()->update_instance_printable_state_for_objects(object_idxs);
     }
+
+    mark_plate_toolbar_image_dirty();
 
     // update print
     this->p->schedule_background_process();
