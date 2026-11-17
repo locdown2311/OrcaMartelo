@@ -351,6 +351,49 @@ class CameraServiceTests(unittest.TestCase):
         self.assertEqual(daemon.telemetry["last_error_code"], 10501)
 
 
+class MjpegFallbackTests(unittest.TestCase):
+    JPEG = b"\xff\xd8\xff\xe0snapshot\xff\xd9"
+
+    def setUp(self):
+        test = self
+
+        class Snapshot(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.end_headers()
+                self.wfile.write(test.JPEG)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Snapshot)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        for patch in (mock.patch.object(daemon, "PRINTER_IP", "127.0.0.1"),
+                      mock.patch.object(daemon, "MJPEG_CAMERA_PORTS", (1, self.server.server_address[1])),
+                      mock.patch.dict(daemon.mjpeg_camera, {"url": None, "checked": 0.0})):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_a_failing_native_camera_offers_the_printers_mjpeg_camera(self):
+        relay = daemon.FlvRelay(lambda: "http://127.0.0.1:1/flv")
+        relay.error = "the camera answered HTTP 503"
+        self.assertEqual(daemon.find_mjpeg_camera(), f"http://127.0.0.1:{self.server.server_address[1]}/?action=stream")
+        self.assertEqual(relay.status()["mjpeg_url"], daemon.mjpeg_camera["url"])
+
+    def test_a_working_native_camera_offers_no_fallback(self):
+        daemon.find_mjpeg_camera()
+        relay = daemon.FlvRelay(lambda: "http://127.0.0.1:1/flv")
+        self.assertIsNone(relay.status()["mjpeg_url"])
+
+    def test_a_snapshot_falls_back_to_the_mjpeg_camera(self):
+        with mock.patch.dict(daemon.telemetry, {"custom_camera_url": "", "connected": True}), \
+             mock.patch.object(daemon, "slicer_call", side_effect=ValueError("no frame")):
+            self.assertEqual(daemon.capture_camera_jpeg(), self.JPEG)
+
+
 class DirectAndSettingsTests(unittest.TestCase):
     def test_direct_mode_gives_the_viewer_its_own_connection(self):
         cam = FakeCamera(synthetic_flv())

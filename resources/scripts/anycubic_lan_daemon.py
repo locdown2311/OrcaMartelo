@@ -879,7 +879,15 @@ def capture_camera_jpeg():
         raise ValueError(f"Could not read a picture from the camera at {custom}")
     if not telemetry.get("connected"):
         raise ValueError("The printer is not connected")
-    answer = slicer_call("camera_snapshot", {"url": f"http://127.0.0.1:{HTTP_PORT}/camera"}, SNAPSHOT_TIMEOUT)
+    try:
+        answer = slicer_call("camera_snapshot", {"url": f"http://127.0.0.1:{HTTP_PORT}/camera"}, SNAPSHOT_TIMEOUT)
+    except ValueError:
+        # The native camera failed: an MJPEG camera on the printer may still answer.
+        mjpeg = find_mjpeg_camera()
+        data = _jpeg_from_stream(mjpeg.replace("action=stream", "action=snapshot")) if mjpeg else None
+        if data:
+            return data
+        raise
     try:
         data = base64.b64decode(answer.get("jpeg_base64", ""), validate=True)
     except ValueError:
@@ -2240,6 +2248,8 @@ class FlvRelay:
                 "seconds_since_last_frame": round(now - self.last_tag_time, 1) if self.last_tag_time else None,
                 "keyframe_interval_s": round(sum(gaps) / len(gaps), 1) if gaps else None,
                 "url": self.url_fn(),
+                # Where an MJPEG camera answers on the printer, for a player the native one fails.
+                "mjpeg_url": mjpeg_camera["url"] if (self.error or self.camera_reply) and not self.connected else None,
             }
 
     def detach(self, client):
@@ -2415,6 +2425,36 @@ class FlvRelay:
                             setattr(c, attr, seq)
                 c.push(tag)
             self.cond.notify_all()
+
+
+# An MJPEG camera some printers serve beside or instead of the native one (a Rinkhals
+# camera app, mjpg-streamer, acproxycam). Probed when the native camera fails, at most
+# once a minute.
+MJPEG_CAMERA_PORTS = (8080, 8000)
+mjpeg_camera = {"url": None, "checked": 0.0}
+mjpeg_camera_lock = threading.Lock()
+
+
+def find_mjpeg_camera():
+    with mjpeg_camera_lock:
+        if time.time() - mjpeg_camera["checked"] < 60:
+            return mjpeg_camera["url"]
+        mjpeg_camera["checked"] = time.time()
+        found = None
+        for port in MJPEG_CAMERA_PORTS:
+            try:
+                conn = http.client.HTTPConnection(PRINTER_IP, port, timeout=2)
+                conn.request("GET", "/?action=snapshot", headers={"User-Agent": "OrcaMartelo"})
+                resp = conn.getresponse()
+                ok = resp.status == 200 and resp.getheader("Content-Type", "").startswith("image/")
+                conn.close()
+                if ok:
+                    found = f"http://{PRINTER_IP}:{port}/?action=stream"
+                    break
+            except Exception:
+                pass
+        mjpeg_camera["url"] = found
+        return found
 
 
 def native_camera_url():
@@ -2967,8 +3007,9 @@ class BridgeServer(BaseHTTPRequestHandler):
             try:
                 client = camera_relay.attach()
             except ValueError as e:
-                if self._serve_direct_camera(None, fallback_only=True):
-                    return
+                # An MJPEG camera on the printer is offered through /status/camera: this
+                # answer goes to an FLV player, which cannot play MJPEG.
+                find_mjpeg_camera()
                 self._send_camera_error(f"Failed to start the printer camera: {e}")
                 return
             try:
@@ -2989,15 +3030,12 @@ class BridgeServer(BaseHTTPRequestHandler):
         if not self._serve_direct_camera(upstream_url):
             self._send_camera_error("Failed to connect to the camera stream at " + upstream_url)
 
-    def _serve_direct_camera(self, url, fallback_only=False, attempts=3):
-        """Relay a custom camera (MJPEG and the like) to this viewer alone. With fallback_only,
-        try the MJPEG ports a camera add-on on the printer may serve. Returns False when none answers."""
-        urls = [url] if url else []
-        if fallback_only:
-            urls = [f"http://{PRINTER_IP}:{port}/?action=stream" for port in (8080, 8000)]
+    def _serve_direct_camera(self, url, attempts=3):
+        """Relay a camera (a custom MJPEG one, or the native one in Direct mode) to this viewer
+        alone. Returns False when it does not answer."""
         resp = None
-        for candidate in urls:
-            for _ in range(1 if fallback_only else attempts):
+        for candidate in [url]:
+            for _ in range(attempts):
                 try:
                     parsed = urllib.parse.urlparse(candidate)
                     conn_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection

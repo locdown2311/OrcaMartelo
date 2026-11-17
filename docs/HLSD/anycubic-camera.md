@@ -25,7 +25,7 @@ Connections use a short connect timeout and a separate read timeout. One timeout
 
 The camera settings also offer **Direct** (`/camera?direct=1`). In this mode each view gets its own connection to the printer, as before the relay existed. It is a fallback for a camera the shared stream does not suit, and then only one view can watch at a time.
 
-When the printer's camera does not start, the bridge tries the MJPEG ports a camera add-on may serve (8080, 8000) for that viewer.
+Some printers serve an MJPEG camera beside or instead of the native one, such as a Rinkhals camera app, mjpg-streamer or acproxycam. While that MJPEG camera runs, the native camera can answer HTTP 503 or time out. When the native camera fails, the bridge looks for an MJPEG snapshot on ports 8080 and 8000, at most once a minute, and `GET /status/camera` returns the stream as `mjpeg_url`. In Auto mode the player then shows that stream in an `<img>`, since flv.js cannot play MJPEG, and an MCP snapshot reads a frame from it.
 
 ## Custom cameras
 

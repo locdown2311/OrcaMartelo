@@ -2245,6 +2245,8 @@
         let camRetries = 0;
         let camLastFrames = 0;
         let camLastProgress = 0;
+        // An MJPEG camera the bridge found on the printer when the native one failed (Auto mode).
+        let camMjpegFallback = "";
 
         function setCameraUi(state, message) {
             const btn = document.getElementById("btn-cam-stream");
@@ -2308,21 +2310,30 @@
             showCameraProblem(camRetries);
             camReconnectTimer = setTimeout(() => {
                 camReconnectTimer = null;
-                initCameraStream(activeCameraUrl);
+                initCameraStream(camMjpegFallback || activeCameraUrl);
             }, delay);
         }
 
         // Says why the stream failed, from the bridge's view of the printer's camera.
         async function showCameraProblem(attempt) {
-            let why;
+            let why, st;
             try {
                 const res = await fetch("http://127.0.0.1:18988/status/camera", { cache: "no-store" });
-                const st = await res.json();
+                st = await res.json();
                 if (st.error) why = `Printer camera: ${st.error}`;
                 else if (st.connected && st.seconds_since_last_frame > 5) why = "The printer stopped sending video.";
                 else if (!st.connected && st.running) why = "Waiting for the printer to start its camera.";
             } catch (e) {
                 why = "The printer bridge is not running. OrcaMartelo starts it again within a few seconds.";
+            }
+            if (st && st.mjpeg_url && !camMjpegFallback && (localStorage.getItem("orca_ac_cam_preset") || "auto") === "auto"
+                && !userStoppedCamera && !isCameraStreaming) {
+                camMjpegFallback = st.mjpeg_url;
+                clearTimeout(camReconnectTimer);
+                camReconnectTimer = null;
+                setCameraUi("connecting", "The native camera does not answer. Showing the printer's MJPEG camera...");
+                initCameraStream(camMjpegFallback);
+                return;
             }
             const span = document.querySelector("#cam-placeholder span");
             if (why && span && camRetries === attempt && !userStoppedCamera && !isCameraStreaming)
@@ -2357,6 +2368,7 @@
         async function startCameraStream() {
             userStoppedCamera = false;
             camRetries = 0;
+            camMjpegFallback = "";
             clearCameraTimers();
             setCameraUi("connecting", "Connecting to camera stream...");
 
