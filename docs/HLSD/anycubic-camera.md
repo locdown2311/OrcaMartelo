@@ -42,3 +42,5 @@ Retries back off from 1 to 10 seconds. The player shows Live only once frames ar
 ## The bridge process
 
 The camera, the notifications and MCP all depend on the bridge process. The slicer starts it when an Anycubic printer is selected, and a watchdog in `AnycubicLink.cpp` checks every five seconds that it still runs. If the process has ended and no other OrcaMartelo window serves the same printer, the watchdog starts it again.
+
+The bundled Python is started with `-I`, so `PYTHONPATH`, `PYTHONHOME` and the user packages of other Python installations on the machine do not reach it. The MCP stdio command uses `-I` for the same reason. The bridge's output goes to `log/anycubic_bridge.log` in the data folder, and the previous run's log is kept as `anycubic_bridge.prev.log`.

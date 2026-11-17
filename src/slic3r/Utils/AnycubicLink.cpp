@@ -172,9 +172,25 @@ bool ensure_anycubic_bridge(const std::string& host)
         return false;
     }
 
+    // The bridge's output goes to a log beside OrcaMartelo's own; the previous run's is kept.
+    const fs::path log_dir = fs::path(data_dir()) / "log";
+    const fs::path log     = log_dir / "anycubic_bridge.log";
     try {
+        fs::create_directories(log_dir);
+        if (fs::exists(log))
+            fs::rename(log, log_dir / "anycubic_bridge.prev.log");
+    } catch (const std::exception &) {}
+
+    try {
+        // -I: isolated from the PYTHON* variables and user packages of other Python
+        // installations, which could load the wrong libraries into the bundled runtime.
+        // -u and -X utf8: an unbuffered log that any file or printer name can be written to.
         g_anycubic_bridge_process = std::make_unique<boost::process::child>(
             python,
+            "-I",
+            "-u",
+            "-X",
+            "utf8",
             script.string(),
             host,
             g_anycubic_bridge_token,
@@ -182,8 +198,8 @@ bool ensure_anycubic_bridge(const std::string& host)
 #ifdef _WIN32
             boost::process::windows::create_no_window,
 #endif
-            boost::process::std_out > boost::process::null,
-            boost::process::std_err > boost::process::null);
+            (boost::process::std_out & boost::process::std_err) > log.string(),
+            boost::process::std_in < boost::process::null);
         g_anycubic_bridge_host = host;
         BOOST_LOG_TRIVIAL(info) << "[AnycubicLink] Started bundled LAN bridge for configured printer host";
         return true;

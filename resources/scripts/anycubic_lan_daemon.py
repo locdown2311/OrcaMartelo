@@ -1397,8 +1397,8 @@ def mcp_client_config():
     return {
         "url": url,
         "command": sys.executable,
-        "args": [stdio_script],
-        "claude_desktop_config": {"mcpServers": {"orcamartelo": {"command": sys.executable, "args": [stdio_script]}}},
+        "args": ["-I", stdio_script],
+        "claude_desktop_config": {"mcpServers": {"orcamartelo": {"command": sys.executable, "args": ["-I", stdio_script]}}},
         "claude_code_command": f"claude mcp add --transport http orcamartelo {url}",
     }
 
