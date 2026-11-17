@@ -54,7 +54,8 @@ TOOLS = [
     _tool("get_temperatures", "Temperatures", "Current and target temperatures of the nozzle and the bed, in degrees Celsius."),
     _tool("get_camera_snapshot", "Camera snapshot",
           "Take a picture with the printer's camera now and return it as a JPEG image, to check the print "
-          "(spaghetti, detached parts, first layer) or the bed."),
+          "(spaghetti, detached parts, first layer) or the bed. The picture is also saved as a file, whose path "
+          "the result gives, to pass to a model that reads images."),
     _tool("get_print_cost", "Print cost",
           "Estimated cost, filament weight and length of the current print, or of the last one when the printer is idle, "
           "as sliced by OrcaMartelo, and the part spent so far in proportion to the progress. Only prints sent from "

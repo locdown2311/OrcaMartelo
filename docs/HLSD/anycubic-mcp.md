@@ -26,7 +26,7 @@ Some work only the slicer process can do. The bridge hands these requests to the
 
 The kinds are:
 
-- **`camera_snapshot`:** a JPEG frame of the printer's camera.
+- **`camera_snapshot`:** a JPEG frame of the printer's camera. `get_camera_snapshot` returns it as image content and also saves it under `camera_snapshots/` in the data folder (the newest 30), giving the path, so a client can hand the file to a model that reads images. The slicer passes its data folder to the bridge as `ORCAMARTELO_DATA_DIR`.
   - An MJPEG camera (a custom URL) is read by the bridge directly, without the slicer.
   - The printer's own camera streams H.264 in FLV, which the bundled Python cannot decode. The slicer takes this picture with the FFmpeg it already links for the camera view. It decodes a frame of the bridge's `/camera` proxy on a worker thread and scales it to at most 1280 px wide.
 - **`confirm`:** a yes/no dialog in OrcaMartelo.

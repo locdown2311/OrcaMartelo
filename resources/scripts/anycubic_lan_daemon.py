@@ -865,6 +865,32 @@ def confirm_action(action, **details):
         raise ValueError("Not done: the user declined it in OrcaMartelo.")
 
 
+# Where the camera snapshots are kept: the slicer passes its data folder; a temp folder
+# stands in when the bridge runs alone.
+DATA_DIR = os.environ.get("ORCAMARTELO_DATA_DIR") or os.path.join(tempfile.gettempdir(), "orcamartelo")
+SNAPSHOT_DIR = os.path.join(DATA_DIR, "camera_snapshots")
+SNAPSHOT_KEEP = 30
+
+
+def save_snapshot(jpeg):
+    """Keep a snapshot as a file, for MCP clients that cannot show an image. Returns its path."""
+    try:
+        os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+        stem = os.path.join(SNAPSHOT_DIR, time.strftime("snapshot-%Y%m%d-%H%M%S"))
+        n = 1
+        while os.path.exists(f"{stem}-{n:02d}.jpg"):  # Several pictures in one second; names sort by age.
+            n += 1
+        path = f"{stem}-{n:02d}.jpg"
+        with open(path, "wb") as fh:
+            fh.write(jpeg)
+        old = sorted(f for f in os.listdir(SNAPSHOT_DIR) if f.startswith("snapshot-") and f.endswith(".jpg"))
+        for name in old[:-SNAPSHOT_KEEP]:
+            os.remove(os.path.join(SNAPSHOT_DIR, name))
+        return path
+    except OSError:
+        return None
+
+
 def capture_camera_jpeg():
     custom = telemetry.get("custom_camera_url") or ""
     if custom and _is_mjpeg_url(custom):
@@ -1125,11 +1151,12 @@ class McpBackend:
 
     def camera_snapshot(self):
         data = capture_camera_jpeg()
+        path = save_snapshot(data)
         t = public_telemetry()
         job = t.get("job_name", "")
         caption = (f"Printer camera at {time.strftime('%Y-%m-%d %H:%M:%S')}. State: {t.get('state')}"
                    + (f", printing {job} at {_as_int(t.get('progress', 0))}%" if _is_real_job(job) and t.get("state") in ACTIVE_STATES else "")
-                   + ".")
+                   + "." + (f" Saved to {path}" if path else ""))
         return orcamartelo_mcp.ImageResult(base64.b64encode(data).decode("ascii"), "image/jpeg", caption)
 
     # Printer control. Anything that heats, moves or can spoil a print is confirmed in OrcaMartelo.

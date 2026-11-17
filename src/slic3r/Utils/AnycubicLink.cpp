@@ -195,6 +195,8 @@ bool ensure_anycubic_bridge(const std::string& host)
             host,
             g_anycubic_bridge_token,
             boost::process::start_dir(script.parent_path().string()),
+            // Where the bridge keeps the camera snapshots it takes for MCP clients.
+            boost::process::env["ORCAMARTELO_DATA_DIR"] = data_dir(),
 #ifdef _WIN32
             boost::process::windows::create_no_window,
 #endif

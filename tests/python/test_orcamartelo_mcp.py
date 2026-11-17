@@ -230,6 +230,19 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual((image["type"], image["mimeType"]), ("image", "image/jpeg"))
         self.assertEqual(base64.b64decode(image["data"]), JPEG)
 
+    def test_each_picture_is_also_saved_as_a_file(self):
+        daemon.telemetry.update({"custom_camera_url": "", "connected": True})
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(daemon, "SNAPSHOT_DIR", tmp), \
+             mock.patch.object(daemon, "SNAPSHOT_KEEP", 2), \
+             mock.patch.object(daemon, "capture_camera_jpeg", lambda: JPEG):
+            captions = [self.snapshot()["content"][1]["text"] for _ in range(3)]
+            saved = sorted(os.listdir(tmp))
+            self.assertEqual(len(saved), 2)
+            path = os.path.join(tmp, saved[-1])
+            self.assertIn(f"Saved to {path}", captions[-1])
+            with open(path, "rb") as fh:
+                self.assertEqual(fh.read(), JPEG)
+
     def test_a_slicer_that_never_answers_gives_a_tool_error(self):
         daemon.telemetry.update({"custom_camera_url": "", "connected": True})
         with mock.patch.object(daemon, "SNAPSHOT_TIMEOUT", 0.1):
