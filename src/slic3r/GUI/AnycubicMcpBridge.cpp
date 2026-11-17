@@ -37,9 +37,11 @@ extern "C" {
 #include "MainFrame.hpp"
 #include "MsgDialog.hpp"
 #include "PartPlate.hpp"
+#include "PrintHostDialogs.hpp"
 #include "Plater.hpp"
 #include "Tab.hpp"
 #include "slic3r/Utils/AnycubicLink.hpp"
+#include "slic3r/Utils/PrintHost.hpp"
 
 namespace Slic3r {
 namespace GUI {
@@ -402,6 +404,45 @@ json plate_filaments(const json &args)
     return ok({{"plate", index + 1}, {"filaments", list}});
 }
 
+// The send dialog for a print file an MCP client prints: the user maps its filaments to ACE slots
+// (the proposed ones preselected) and picks the print options, as for a plate sent by hand.
+json choose_mapping(const json &args)
+{
+    DynamicPrintConfig *printer = &wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    PrintHostJob        job(printer);
+    auto               *host = dynamic_cast<AnycubicLink *>(job.printhost.get());
+    if (host == nullptr)
+        return failed("The selected printer is not connected through the Anycubic LAN host");
+    std::vector<AnycubicMaterialSlot> slots;
+    wxString                          message;
+    host->fetch_material_slots(slots, message);
+    std::vector<AnycubicToolFilament> tools;
+    for (const auto &f : args.value("filaments", json::array()))
+        tools.push_back({f.value("filament", 1) - 1, f.value("type", std::string()), f.value("color", std::string("#FFFFFF"))});
+    if (slots.empty() && tools.size() > 1)
+        return failed("This multi-color print needs the ACE, and the printer reported no ACE slots");
+    std::vector<int> preselect;
+    for (const auto &slot : args.value("preselect", json::array()))
+        if (slot.is_number_integer())
+            preselect.push_back(slot.get<int>());
+
+    AnycubicPrintHostSendDialog dialog(fs::path(args.value("file", std::string("print.gcode"))), PrintHostPostUploadAction::StartPrint,
+                                       wxArrayString(), wxArrayString(), wxArrayString(), false, host, std::move(slots), std::move(tools));
+    dialog.init();
+    dialog.preselect_slots(preselect);
+    if (MainFrame *frame = wxGetApp().mainframe) {
+        if (frame->IsIconized())
+            frame->Iconize(false);
+        frame->Raise();
+    }
+    if (dialog.ShowModal() != wxID_OK)
+        return failed("The user cancelled the print in OrcaMartelo's send dialog");
+    json info = json::object();
+    for (const auto &[key, value] : dialog.extendedInfo())
+        info[key] = value;
+    return ok(info);
+}
+
 // The question shown for an action, or empty for one this version does not know (it is refused).
 wxString confirm_question(const json &a)
 {
@@ -446,35 +487,8 @@ wxString confirm_question(const json &a)
         return format_wxstr(_L("Load the filament of ACE slot %1% (%2%)."), int(number("slot").value_or(0)), text("material"));
     if (action == "unload_filament")
         return format_wxstr(_L("Unload the filament of ACE slot %1%."), int(number("slot").value_or(0)));
-    // Which ACE slot prints each filament, under the question of a print.
-    auto mapping_lines = [&]() {
-        wxString lines;
-        for (const auto &m : a.value("mapping", json::array())) {
-            if (!m.is_object())
-                continue;
-            const wxString filament = wxString::Format("%d", m.value("filament", 0));
-            const wxString material = from_u8(m.value("filament_type", std::string()) + " " + m.value("filament_color", std::string()));
-            const wxString slot_material = from_u8(m.value("slot_type", std::string()) + " " + m.value("slot_color", std::string()));
-            if (m.contains("slot") && m["slot"].is_string())
-                // TRN %1% is a filament number, %2% and %3% material and color, such as "PLA #FF0000".
-                lines += "\n" + format_wxstr(_L("Filament %1% (%2%) from the external spool (%3%)"), filament, material, slot_material);
-            else
-                // TRN %1% is a filament number, %2% its material and color, %3% an ACE slot number, %4% its material and color.
-                lines += "\n" + format_wxstr(_L("Filament %1% (%2%) from ACE slot %3% (%4%)"), filament, material,
-                                              wxString::Format("%d", m.value("slot", 0)), slot_material);
-        }
-        return lines;
-    };
     if (action == "start_print")
-        return format_wxstr(_L("Start printing %1%."), text("file")) + mapping_lines();
-    if (action == "print_plate") {
-        wxString question = format_wxstr(_L("Print plate %1% on the printer."), int(number("plate").value_or(0))) + mapping_lines();
-        if (auto minutes = number("minutes"); minutes && *minutes > 0)
-            question += "\n" + format_wxstr(_L("Estimated time: %1%"), from_u8(get_time_dhms(float(*minutes * 60.))));
-        if (auto cost = number("cost"); cost && *cost > 0)
-            question += "\n" + format_wxstr(_L("Estimated cost: %1%"), wxString::FromCDouble(*cost, 2));
-        return question;
-    }
+        return format_wxstr(_L("Start printing %1%."), text("file"));
     if (action == "clear_plate")
         return _L("Delete every object of the project.");
     return {};
@@ -580,6 +594,8 @@ void AnycubicMcpBridge::run(long long id, const std::string &kind, const json &a
     try {
         if (kind == "confirm")
             result = ok({{"allowed", ask_user(args)}});
+        else if (kind == "choose_mapping")
+            result = choose_mapping(args);
         else if (kind == "plate_filaments")
             result = plate_filaments(args);
         else if (kind == "get_state")
@@ -663,8 +679,8 @@ void AnycubicMcpBridge::check_slice()
     m_slice                 = {};
     m_slice_timer.Stop();
     if (ready && done.send) {
-        // The upload the send dialog would start, without the dialog: its options as last chosen there.
-        Plater::AnycubicHeadlessSend send{done.slot_ids, {}};
+        // The send dialog, as for a print sent by hand, with the proposed slots preselected.
+        Plater::McpSend send{done.slot_ids, {}};
         plater->send_gcode_legacy(done.plate, nullptr, &send);
         if (!send.error.empty())
             result = failed(send.error);

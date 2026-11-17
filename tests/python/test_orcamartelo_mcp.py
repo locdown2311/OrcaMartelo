@@ -71,7 +71,8 @@ class ProtocolTests(unittest.TestCase):
     def test_tools_that_can_spoil_a_print_say_they_are_confirmed(self):
         for tool in mcp.TOOLS:
             if tool["annotations"]["destructiveHint"]:
-                self.assertIn("confirms it in OrcaMartelo", tool["description"], tool["name"])
+                self.assertTrue("confirms it in OrcaMartelo" in tool["description"] or "send dialog" in tool["description"],
+                                tool["name"])
 
     def test_without_the_bridge_a_tool_call_explains_what_to_do(self):
         result = mcp.handle_message(rpc("tools/call", {"name": "get_print_status"}), None)["result"]
@@ -357,17 +358,10 @@ class MappingTests(unittest.TestCase):
     def test_the_external_spool_only_serves_a_single_filament(self):
         single = [{"filament": 1, "type": "ABS", "color": "#808080"}]
         chosen = daemon.resolve_mapping(single, self.slots, [{"filament": 1, "slot": "external"}])
-        self.assertEqual(daemon.ams_box_mapping(single, chosen, self.slots), [])
+        self.assertEqual(chosen[1]["slot_id"], -1)
         with self.assertRaisesRegex(ValueError, "single-filament"):
             daemon.resolve_mapping(self.filaments + [{"filament": 4, "type": "ABS", "color": "#808080"}],
                                    self.slots, [{"filament": 4, "slot": "external"}])
-
-    def test_the_printer_mapping_lists_the_filaments_then_fills_four_slots(self):
-        chosen = daemon.resolve_mapping(self.filaments, self.slots, [{"filament": 3, "slot": 3}])
-        mapping = daemon.ams_box_mapping(self.filaments, chosen, self.slots)
-        self.assertEqual([(m["ams_index"], m["paint_index"]) for m in mapping], [(0, 0), (2, 2), (1, 1), (3, 3)])
-        self.assertEqual(mapping[0]["paint_color"], [255, 0, 0, 255])
-        self.assertEqual(mapping[0]["material_type"], "PETG")
 
 
 class ControlTests(unittest.TestCase):
@@ -473,69 +467,67 @@ class ControlTests(unittest.TestCase):
         self.assertEqual([f["filename"] for f in files], ["cube.gcode"])
         self.assertEqual(files[0]["size_bytes"], 1234)
 
-    def test_a_local_file_is_uploaded_after_confirmation(self):
-        self.with_user(True)
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "part.gcode")
-            with open(path, "wb") as fh:
-                fh.write(GCODE)
-            with mock.patch.object(daemon, "upload_and_start_print_file", return_value={"status": "ok", "filename": "part.gcode"}) as upload:
-                result = self.call("print_file", {"path": path})
-        self.assertFalse(result["isError"])
-        self.assertEqual(upload.call_args.args[:2], (GCODE, "part.gcode"))
-
-    def test_print_plate_maps_confirms_and_sends_through_the_slicer(self):
+    def test_print_plate_opens_the_send_dialog_with_the_proposed_slots(self):
         daemon.telemetry["filaments"] = ACE
         answers = {
             "plate_filaments": {"plate": 1, "filaments": [{"filament": 1, "type": "PETG", "color": "#FF0000"},
                                                           {"filament": 3, "type": "PLA", "color": "#0000FF"}]},
-            "slice": {"plate": 1, "estimated_minutes": 42, "estimated_cost": 0.45},
-            "confirm": {"allowed": True},
             "send_plate": {},
         }
         slicer = Slicer(lambda r: {"ok": True, "result": answers[r["kind"]]})
         self.addCleanup(slicer.close)
         result = self.call("print_plate", {"plate": 1, "mapping": [{"filament": 3, "slot": 4}]})
         self.assertFalse(result["isError"], result)
-        self.assertEqual([r["kind"] for r in slicer.requests], ["plate_filaments", "slice", "confirm", "send_plate"])
-        confirm = slicer.requests[2]["args"]
-        self.assertEqual([(m["filament"], m["slot"]) for m in confirm["mapping"]], [(1, 1), (3, 4)])
-        # slot_ids are the printer's 0-based slot numbers, in the plate's filament order.
-        self.assertEqual(slicer.requests[3]["args"]["slot_ids"], [0, 3])
+        self.assertEqual([r["kind"] for r in slicer.requests], ["plate_filaments", "send_plate"])
+        # Preselected for the dialog: the printer's 0-based slots in the plate's filament order,
+        # filament 1 with the suggested slot.
+        self.assertEqual(slicer.requests[1]["args"]["slot_ids"], [0, 3])
 
-    def test_a_declined_plate_is_not_sent(self):
+    def test_without_a_proposal_the_dialog_picks_the_slots(self):
         daemon.telemetry["filaments"] = ACE
-        answers = {"plate_filaments": {"plate": 1, "filaments": [{"filament": 1, "type": "PLA", "color": "#FFFFFF"}]},
-                   "slice": {"plate": 1}, "confirm": {"allowed": False}}
+        answers = {"plate_filaments": {"plate": 2, "filaments": [{"filament": 1, "type": "PLA", "color": "#FFFFFF"}]},
+                   "send_plate": {}}
         slicer = Slicer(lambda r: {"ok": True, "result": answers[r["kind"]]})
         self.addCleanup(slicer.close)
-        self.assertTrue(self.call("print_plate")["isError"])
-        self.assertNotIn("send_plate", [r["kind"] for r in slicer.requests])
+        self.assertFalse(self.call("print_plate", {"plate": 2})["isError"])
+        self.assertEqual(slicer.requests[1]["args"], {"plate": 2, "slot_ids": []})
 
-    def test_print_file_sends_the_mapping_shown_in_the_confirmation(self):
+    def test_a_cancelled_send_dialog_is_reported(self):
         daemon.telemetry["filaments"] = ACE
-        slicer = self.with_user(True)
+
+        def answer(request):
+            if request["kind"] == "plate_filaments":
+                return {"ok": True, "result": {"plate": 1, "filaments": [{"filament": 1, "type": "PLA", "color": "#FFFFFF"}]}}
+            return {"ok": False, "error": "The user cancelled the print in OrcaMartelo's send dialog"}
+
+        slicer = Slicer(answer)
+        self.addCleanup(slicer.close)
+        result = self.call("print_plate")
+        self.assertTrue(result["isError"])
+        self.assertIn("cancelled", result["content"][0]["text"])
+
+    def test_print_file_uploads_with_the_mapping_and_options_of_the_send_dialog(self):
+        daemon.telemetry["filaments"] = ACE
+        dialog = {"ams_mapping": json.dumps([{"ams_index": 0, "paint_index": 0}, {"ams_index": 2, "paint_index": 2},
+                                             {"ams_index": 1, "paint_index": 1}, {"ams_index": 3, "paint_index": 3}]),
+                  "use_ams": "1", "auto_leveling": "0", "timelapse": "1"}
+        slicer = Slicer(lambda r: {"ok": True, "result": dialog})
+        self.addCleanup(slicer.close)
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "two.gcode")
             with open(path, "wb") as fh:
                 fh.write(GCODE_TWO)
             with mock.patch.object(daemon, "upload_and_start_print_file", return_value={"status": "ok", "filename": "two.gcode"}) as upload:
-                result = self.call("print_file", {"path": path, "mapping": [{"filament": 3, "slot": 3}]})
+                result = self.call("print_file", {"path": path})
         self.assertFalse(result["isError"], result)
-        self.assertEqual([(m["filament"], m["slot"]) for m in slicer.requests[0]["args"]["mapping"]], [(1, 1), (3, 3)])
-        sent = upload.call_args.kwargs["ams_mapping"]
-        self.assertEqual([(m["ams_index"], m["paint_index"]) for m in sent[:2]], [(0, 0), (2, 2)])
-
-    def test_get_print_filaments_suggests_a_slot_for_each_filament(self):
-        daemon.telemetry["filaments"] = ACE
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "two.gcode")
-            with open(path, "wb") as fh:
-                fh.write(GCODE_TWO)
-            data = self.call("get_print_filaments", {"path": path})["structuredContent"]
-        self.assertEqual(data["suggested_mapping"], [{"filament": 1, "slot": 1}, {"filament": 3, "slot": 4}])
-        self.assertEqual(data["unmatched_filaments"], [])
-        self.assertEqual(len(data["loaded_slots"]), 5)
+        request = slicer.requests[0]
+        self.assertEqual(request["kind"], "choose_mapping")
+        self.assertEqual([f["filament"] for f in request["args"]["filaments"]], [1, 3])
+        kwargs = upload.call_args.kwargs
+        self.assertEqual(kwargs["ams_mapping"][1]["ams_index"], 2)
+        self.assertTrue(kwargs["use_ams"])
+        self.assertEqual((kwargs["task_settings"]["auto_leveling"], kwargs["task_settings"]["timelapse"]), (False, True))
+        self.assertEqual(result["structuredContent"]["mapping"], [{"filament": 1, "slot": 1}, {"filament": 3, "slot": 3}])
 
     def test_slicer_errors_reach_the_model(self):
         slicer = Slicer(lambda r: {"ok": False, "error": "No preset named Foo"})

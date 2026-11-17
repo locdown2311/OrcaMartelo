@@ -21471,11 +21471,11 @@ void Plater::reslice_SLA_until_step(SLAPrintObjectStep step, const ModelObject &
     // and let the background processing start.
     this->p->restart_background_process(state | priv::UPDATE_BACKGROUND_PROCESS_FORCE_RESTART);
 }
-void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, AnycubicHeadlessSend* headless)
+void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, McpSend* mcp)
 {
     // Cleared once the upload is queued; a failure on the way shows its own message in OrcaMartelo.
-    if (headless != nullptr)
-        headless->error = "OrcaMartelo could not prepare the plate for sending; it shows why";
+    if (mcp != nullptr)
+        mcp->error = "OrcaMartelo could not prepare the plate for sending; it shows why";
     // if physical_printer is selected, send gcode for this printer
     // DynamicPrintConfig* physical_printer_config = wxGetApp().preset_bundle->physical_printers.get_selected_printer_config();
     DynamicPrintConfig* physical_printer_config = &Slic3r::GUI::wxGetApp().preset_bundle->printers.get_edited_preset().config;
@@ -21584,9 +21584,8 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, Anycubi
         }
 
         std::unique_ptr<PrintHostSendDialog> pDlg;
-        std::map<std::string, std::string>   headless_info;
-        if (headless != nullptr && host_type != htAnycubic) {
-            headless->error = "Only a printer connected through the Anycubic LAN host can be sent a plate this way";
+        if (mcp != nullptr && host_type != htAnycubic) {
+            mcp->error = "Only a printer connected through the Anycubic LAN host can be sent a plate this way";
             return;
         }
         if (host_type == htElegooLink) {
@@ -21616,30 +21615,16 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, Anycubi
             // Only block if this is a multi-material print that requires an ACE/multi-material unit
             // but no material slots were found.
             if (slots.empty() && project_filaments.size() > 1) {
-                if (headless != nullptr) {
-                    headless->error = "This multi-color plate needs the ACE, and the printer reported no ACE slots";
-                    return;
-                }
+                if (mcp != nullptr)
+                    mcp->error = "This multi-color plate needs the ACE, and the printer reported no ACE slots";
                 show_error(this, _L("This multi-color print requires an ACE unit or material changer. Please connect an ACE unit or slice as a single-material print."), false);
                 return;
             }
 
-            if (headless != nullptr) {
-                if (!slots.empty() && headless->slot_ids.size() != project_filaments.size()) {
-                    headless->error = (boost::format("The plate uses %1% filaments; give one ACE slot for each") % project_filaments.size()).str();
-                    return;
-                }
-                headless_info = anycubic_upload_info(project_filaments, slots, headless->slot_ids, AnycubicSendOptions::load());
-                if (headless_info.empty() || (headless_info["use_ams"] == "1" && headless_info["ams_mapping"] == "[]")) {
-                    headless->error = "A chosen ACE slot does not exist, is empty or holds another material than its filament";
-                    return;
-                }
-            } else {
-                pDlg = std::make_unique<AnycubicPrintHostSendDialog>(default_output_file, upload_job.printhost->get_post_upload_actions(), groups,
-                                                                     storage_paths, storage_names,
-                                                                     config->get_bool("open_device_tab_post_upload"),
-                                                                     anycubic_host, std::move(slots), std::move(project_filaments));
-            }
+            pDlg = std::make_unique<AnycubicPrintHostSendDialog>(default_output_file, upload_job.printhost->get_post_upload_actions(), groups,
+                                                                 storage_paths, storage_names,
+                                                                 config->get_bool("open_device_tab_post_upload"),
+                                                                 anycubic_host, std::move(slots), std::move(project_filaments));
         } else if (rinkhals_host != nullptr) {
             std::vector<AnycubicToolFilament> project_filaments = anycubic_project_filaments();
             if (rinkhals_slots.empty() && project_filaments.size() > 1) {
@@ -21727,26 +21712,31 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, Anycubi
                                                          storage_paths, storage_names, config->get_bool("open_device_tab_post_upload"));
         }
 
-        if (headless != nullptr) {
-            upload_job.switch_to_device_tab      = false;
-            upload_job.upload_data.upload_path   = default_output_file.filename();
-            upload_job.upload_data.post_action   = PrintHostPostUploadAction::StartPrint;
-            upload_job.upload_data.extended_info = std::move(headless_info);
-        } else {
-            pDlg->init();
-            if (pDlg->ShowModal() != wxID_OK) {
-                return;
+        pDlg->init();
+        if (mcp != nullptr) {
+            if (auto* anycubic_dlg = dynamic_cast<AnycubicPrintHostSendDialog*>(pDlg.get()); anycubic_dlg != nullptr)
+                anycubic_dlg->preselect_slots(mcp->preselect);
+            // The request comes from another app: bring OrcaMartelo to the front for the user to answer.
+            if (wxGetApp().mainframe != nullptr) {
+                if (wxGetApp().mainframe->IsIconized())
+                    wxGetApp().mainframe->Iconize(false);
+                wxGetApp().mainframe->Raise();
             }
-
-            config->set_bool("open_device_tab_post_upload", pDlg->switch_to_device_tab());
-            // PrintHostUpload upload_data;
-            upload_job.switch_to_device_tab    = pDlg->switch_to_device_tab();
-            upload_job.upload_data.upload_path = pDlg->filename();
-            upload_job.upload_data.post_action = pDlg->post_action();
-            upload_job.upload_data.group       = pDlg->group();
-            upload_job.upload_data.storage     = pDlg->storage();
-            upload_job.upload_data.extended_info = pDlg->extendedInfo();
         }
+        if (pDlg->ShowModal() != wxID_OK) {
+            if (mcp != nullptr)
+                mcp->error = "The user cancelled the print in OrcaMartelo's send dialog";
+            return;
+        }
+
+        config->set_bool("open_device_tab_post_upload", pDlg->switch_to_device_tab());
+        // PrintHostUpload upload_data;
+        upload_job.switch_to_device_tab    = pDlg->switch_to_device_tab();
+        upload_job.upload_data.upload_path = pDlg->filename();
+        upload_job.upload_data.post_action = pDlg->post_action();
+        upload_job.upload_data.group       = pDlg->group();
+        upload_job.upload_data.storage     = pDlg->storage();
+        upload_job.upload_data.extended_info = pDlg->extendedInfo();
         // Orca: gcode inside a .gcode.3mf is index-coded (Metadata/plate_<N>.gcode) and a bundle may
         // carry several of them, so the upload must name which plate to print via a 1-based plateindex.
         // Even a single-plate bundle needs it, since its gcode entry is still indexed. The host upload
@@ -21831,8 +21821,8 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, Anycubi
         upload_job.upload_data.source_path = p->m_print_job_data._3mf_path;
     }
 
-    if (headless != nullptr)
-        headless->error.clear();
+    if (mcp != nullptr)
+        mcp->error.clear();
     p->export_gcode(fs::path(), false, std::move(upload_job));
 }
 int Plater::send_gcode(int plate_idx, Export3mfProgressFn proFn)

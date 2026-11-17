@@ -630,15 +630,15 @@ public:
     /* -1: send current gcode if not specified
      * -2: send all gcode to target machine */
     int send_gcode(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
-    // A plate sent to an Anycubic printer without the send dialog, as the MCP server does: the ACE slot
-    // (slot_id) of each filament the plate uses, in the order of its filaments, and the send dialog's last
-    // options. error is empty once the upload is queued.
-    struct AnycubicHeadlessSend
+    // A plate an MCP client asks to print on an Anycubic printer: the send dialog opens with the ACE
+    // slot (slot_id) of each filament of the plate preselected, in the order of its filaments, and the
+    // user confirms or changes them. error is empty once the upload is queued.
+    struct McpSend
     {
-        std::vector<int> slot_ids;
+        std::vector<int> preselect;
         std::string      error;
     };
-    void send_gcode_legacy(int plate_idx = -1, Export3mfProgressFn proFn = nullptr, AnycubicHeadlessSend* headless = nullptr);
+    void send_gcode_legacy(int plate_idx = -1, Export3mfProgressFn proFn = nullptr, McpSend* mcp = nullptr);
     int export_config_3mf(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
     //BBS jump to nonitor after print job finished
     void send_calibration_job_finished(wxCommandEvent &evt);

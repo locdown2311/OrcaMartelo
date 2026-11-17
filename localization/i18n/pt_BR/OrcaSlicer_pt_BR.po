@@ -39955,13 +39955,3 @@ msgstr "Permitir?"
 # AI Translated
 msgid "AI assistant request"
 msgstr "Pedido do assistente de IA"
-
-# AI Translated
-#, boost-format
-msgid "Filament %1% (%2%) from the external spool (%3%)"
-msgstr "Filamento %1% (%2%) do carretel externo (%3%)"
-
-# AI Translated
-#, boost-format
-msgid "Filament %1% (%2%) from ACE slot %3% (%4%)"
-msgstr "Filamento %1% (%2%) do slot %3% do ACE (%4%)"

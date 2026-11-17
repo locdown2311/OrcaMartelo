@@ -21,8 +21,8 @@ INSTRUCTIONS = (
     "start or stop a print, or clear the plate ask the user to confirm in an OrcaMartelo window and "
     "fail if they decline; do not retry a declined action. Moving, homing, extruding, G-code and "
     "loading filament are refused while a print runs. To print a model: slicer_load_models, then "
-    "slicer_slice to see the time and cost, get_print_filaments to agree with the user which ACE slot prints "
-    "each filament, then print_plate with that mapping. Costs use the currency of the filament profiles. set_filament_slot only changes what "
+    "slicer_slice to see the time and cost, then print_plate, which opens OrcaMartelo's send dialog where "
+    "the user picks the ACE slot of each filament. Costs use the currency of the filament profiles. set_filament_slot only changes what "
     "the printer records for a slot; load_filament moves filament."
 )
 
@@ -48,9 +48,9 @@ _CONFIRM_NOTE = " The user confirms it in OrcaMartelo."
 _MAPPING = {"type": "array",
             "items": {"type": "object", "properties": {"filament": {"type": "integer"}, "slot": {"type": ["integer", "string"]}},
                       "required": ["filament", "slot"]},
-            "description": "Which ACE slot prints each filament, such as [{\"filament\": 1, \"slot\": 3}]. Filaments left "
-                           "out get the suggested slot. A slot must hold the filament's material; \"external\" is the "
-                           "external spool, for a single-filament print."}
+            "description": "Optional: the ACE slot to preselect for each filament, such as [{\"filament\": 1, \"slot\": 3}]. "
+                           "The user sees and changes the mapping in OrcaMartelo's send dialog anyway; leave it out to "
+                           "let the dialog match materials and colors."}
 
 TOOLS = [
     # Printer state.
@@ -133,12 +133,12 @@ TOOLS = [
           {"filename": {"type": "string", "description": "As list_printer_files names it."}}, ["filename"], _CONFIRMED),
     _tool("get_print_filaments", "Filaments of a print",
           "The filaments a plate (or a .gcode/.gcode.3mf file on this computer) prints with, their material and color, "
-          "the loaded ACE slots, and a suggested slot for each filament: same material, nearest color. Call it before "
-          "print_plate or print_file to agree the color mapping with the user.",
+          "the loaded ACE slots, and a suggested slot for each filament: same material, nearest color. The user picks "
+          "the slots visually in the send dialog that print_plate and print_file open.",
           {"plate": _PLATE, "path": {"type": "string", "description": "A print file instead of a plate."}}),
     _tool("print_file", "Print a file from this computer",
-          "Upload a .gcode or .gcode.3mf file from this computer to the printer and start it, each filament from the "
-          "ACE slot the mapping gives. Only while idle." + _CONFIRM_NOTE,
+          "Open OrcaMartelo's send dialog for a .gcode or .gcode.3mf file from this computer: the user maps its "
+          "filaments to ACE slots there, picks the options and starts it, or cancels. Only while idle.",
           {"path": {"type": "string", "description": "Full path of the file."}, "mapping": _MAPPING}, ["path"], _CONFIRMED),
 
     # The slicer.
@@ -169,8 +169,8 @@ TOOLS = [
     _tool("slicer_slice", "Slice", "Slice a plate and return its estimated time, filament weight, cost and filament changes.",
           {"plate": _PLATE}, annotations=_WRITE),
     _tool("print_plate", "Print plate",
-          "Slice a plate if needed, send it to the printer and start it, each filament from the ACE slot the mapping "
-          "gives, with the options last chosen in OrcaMartelo's send dialog. Only while idle." + _CONFIRM_NOTE,
+          "Slice a plate if needed and open OrcaMartelo's send dialog for it, as its Print button does: the user maps "
+          "the filaments to ACE slots there, picks the options and starts it, or cancels. Only while idle.",
           {"plate": _PLATE, "mapping": _MAPPING}, annotations=_CONFIRMED),
 ]
 

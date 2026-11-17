@@ -41,7 +41,7 @@ An assistant must not spoil a print or move the machine on its own, so tools tha
 - heat (`set_temperature`);
 - move (`home_axes`, `move_axis`, `extrude`, `run_gcode`);
 - feed filament (`load_filament`, `unload_filament`);
-- start or stop a print (`stop_print`, `print_printer_file`, `print_file`, `print_plate`);
+- start or stop a print (`stop_print`, `print_printer_file`; `print_file` and `print_plate` open the send dialog instead, where the user starts the print);
 - delete objects (`slicer_clear_plate`).
 
 The bridge asks first (`confirm_action()`). The slicer shows what will happen, in the user's language, and the action runs only on Yes. An unanswered dialog (two minutes) or an action the slicer does not recognise counts as No.
@@ -59,16 +59,9 @@ The cost spent so far is the estimate scaled by progress. Prints started from th
 
 ## Filament mapping
 
-A multi-color print needs to know which ACE slot prints each filament. The assistant settles this with the user, typically in the prompt ("filament 2 from slot 4"):
+A multi-color print needs to know which ACE slot prints each filament. Choosing that by text proved impractical, so the user picks it visually in the Anycubic send dialog, with its spool icons and per-filament slot lists:
 
-1. `get_print_filaments` lists the filaments of a plate (`plate_filaments`), or of a `.gcode`/`.gcode.3mf` file read from its config lines. It also lists the loaded slots and suggests a slot for each filament. A suggestion is a loaded slot of the same material, compared as `normalize_anycubic_material()` does, with the nearest color, preferring slots not yet used.
-2. `print_plate` and `print_file` take a `mapping`. Filaments left out keep the suggestion.
+- `print_plate` slices the plate when needed, then calls `Plater::send_gcode_legacy()` with an `McpSend`. That opens the same send dialog as the Print button and raises OrcaMartelo. The upload, the Anycubic header processing and the options are those of a print sent by hand. Cancelling the dialog is reported to the assistant.
+- `print_file` reads the file's filaments from its config lines. The slicer opens the dialog for them (`choose_mapping`) and returns the dialog's extended info. The bridge then uploads the file with that `ams_mapping` and those options.
 
-The rules are those of the send dialog (`build_anycubic_ams_mapping()`):
-
-- A filament prints from a loaded slot of its own material.
-- The external spool serves only a single-filament print.
-
-A mapping that breaks them is refused with the reason. The confirmation dialog lists each filament with its slot.
-
-The mapping is sent in the form the dialog builds through `anycubic_upload_info()`, which the dialog and `send_plate` share: the mapped filaments, then the other ACE slots up to the four entries the firmware expects. A file printed with `print_file` gets that mapping from the bridge (`ams_box_mapping()`).
+The dialog matches materials and nearest colors by itself. An assistant may still propose a `mapping`, which is checked against the dialog's rules (a loaded slot of the filament's material; the external spool only for a single filament) and preselected with `preselect_slots()`. The user can change it. `get_print_filaments` lists the filaments, the loaded slots and a suggestion, for the assistant to talk about.

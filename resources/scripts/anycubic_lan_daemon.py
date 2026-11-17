@@ -796,6 +796,7 @@ SNAPSHOT_TIMEOUT = 32  # The camera may need FLV_START_TIMEOUT to start, then a 
 SNAPSHOT_MAX_BYTES = 8 * 1024 * 1024
 SLICER_TIMEOUT = 30
 CONFIRM_TIMEOUT = 120
+SEND_DIALOG_TIMEOUT = 600  # The user maps the filaments in the send dialog: give them time.
 slicer_cond = threading.Condition()
 slicer_state = {"next_id": 1, "pending": [], "results": {}}
 
@@ -1369,22 +1370,35 @@ class McpBackend:
                     note="A filament prints from a loaded slot of the same material. Pass a mapping to "
                          "print_plate or print_file to choose others; filaments left out keep the suggestion.")
 
+    def _preselect(self, filaments, mapping):
+        """The slot_id of each filament, in order, for the send dialog to preselect; empty when the
+        assistant proposed nothing and the dialog picks by itself."""
+        if not mapping:
+            return []
+        chosen = resolve_mapping(filaments, ace_slots(), mapping)
+        return [chosen[f["filament"]]["slot_id"] for f in filaments]
+
     def print_file(self, path, mapping=None):
         _require_connected()
         _require_idle("Starting a print")
         path, content = self._read_print_file(path)
         filaments = file_filaments(content, path)
-        slots = ace_slots()
-        chosen = resolve_mapping(filaments, slots, mapping) if filaments and slots else {}
-        summary = mapping_summary(filaments, chosen) if chosen else []
-        confirm_action("start_print", file=os.path.basename(path), mapping=summary)
-        box_mapping = ams_box_mapping(filaments, chosen, slots) if chosen else None
-        result = upload_and_start_print_file(content, os.path.basename(path),
-                                             use_ams=bool(box_mapping) if chosen else bool(telemetry.get("has_multi_color_box")),
+        # The user maps the filaments and picks the options in OrcaMartelo's send dialog.
+        info = slicer_call("choose_mapping", {"file": os.path.basename(path), "filaments": filaments,
+                                              "preselect": self._preselect(filaments, mapping)}, SEND_DIALOG_TIMEOUT)
+        try:
+            box_mapping = json.loads(info.get("ams_mapping") or "[]")
+        except ValueError:
+            box_mapping = []
+        result = upload_and_start_print_file(content, os.path.basename(path), use_ams=info.get("use_ams") == "1",
+                                             task_settings={k: info.get(k) == "1" for k in
+                                                            ("auto_leveling", "vibration_compensation", "flow_calibration", "timelapse")},
                                              ams_mapping=box_mapping)
         if result.get("status") == "error":
             raise ValueError(result.get("message") or "The upload failed")
-        return {"status": "sent", "filename": result.get("filename"), "mapping": summary}
+        return {"status": "sent", "filename": result.get("filename"),
+                "mapping": [{"filament": m["paint_index"] + 1, "slot": m["ams_index"] + 1}
+                            for m in box_mapping if m.get("paint_index", 99) + 1 in {f["filament"] for f in filaments}]}
 
     # The slicer: these run in OrcaMartelo itself.
 
@@ -1417,22 +1431,15 @@ class McpBackend:
         return slicer_call("slice", {"plate": plate}, 900)
 
     def print_plate(self, plate=None, mapping=None):
-        """Slice a plate if needed and send it through OrcaMartelo's own Anycubic upload, with the
-        send dialog's last options and the ACE slot chosen for each filament."""
+        """Slice a plate if needed and open OrcaMartelo's send dialog for it, as the Print button does:
+        the user maps the filaments to ACE slots (a proposed mapping preselected) and starts it."""
         _require_connected()
         _require_idle("Starting a print")
         filaments, source = self._print_filaments(plate, None)
-        slots = ace_slots()
-        chosen = resolve_mapping(filaments, slots, mapping) if filaments and slots else {}
-        summary = mapping_summary(filaments, chosen) if chosen else []
-        estimate = slicer_call("slice", {"plate": source.get("plate")}, 900)
-        confirm_action("print_plate", plate=source.get("plate"), minutes=estimate.get("estimated_minutes"),
-                       cost=estimate.get("estimated_cost"), mapping=summary)
-        slicer_call("send_plate", {"plate": source.get("plate"),
-                                   "slot_ids": [chosen[f["filament"]]["slot_id"] for f in filaments] if chosen else []}, 900)
-        return {"status": "sent", "plate": source.get("plate"), "mapping": summary,
-                "estimated_minutes": estimate.get("estimated_minutes"), "estimated_cost": estimate.get("estimated_cost"),
-                "note": "OrcaMartelo uploads the plate and starts it; its upload queue shows the progress."}
+        slicer_call("send_plate", {"plate": source.get("plate"), "slot_ids": self._preselect(filaments, mapping)},
+                    SEND_DIALOG_TIMEOUT + 900)
+        return {"status": "sent", "plate": source.get("plate"),
+                "note": "The user started the print in OrcaMartelo's send dialog; its upload queue shows the progress."}
 
     def printer_info(self):
         t = public_telemetry()
@@ -2007,10 +2014,11 @@ def start_filename_for_print(filename):
     return filename
 
 
-# Filament mapping for prints the MCP server starts: which ACE slot prints each filament of
-# the print. It follows the rules of the Device tab's send dialog (build_anycubic_ams_mapping):
-# a filament prints from a loaded slot of the same material, and the external spool only
-# serves a single-filament print.
+# Filament mapping for prints the MCP server starts: which ACE slot prints each filament. The
+# user settles it in OrcaMartelo's send dialog; these give the assistant the filaments, the
+# loaded slots and a suggestion, and check a mapping it proposes against the dialog's rules
+# (build_anycubic_ams_mapping): a filament prints from a loaded slot of the same material, and
+# the external spool only serves a single-filament print.
 _MATERIAL_PREFIXES = ("GENERIC", "ANYCUBIC", "ESUN", "SUNLU", "BAMBU", "POLYMAKER", "OVERTURE", "ELEGOO")
 
 
@@ -2125,41 +2133,6 @@ def resolve_mapping(filaments, slots, mapping):
     if problems:
         raise ValueError("Cannot map the filaments: " + "; ".join(problems) + ".")
     return chosen
-
-
-def mapping_summary(filaments, chosen):
-    return [{"filament": f["filament"], "filament_type": f["type"], "filament_color": f["color"],
-             "slot": chosen[f["filament"]]["slot"], "slot_type": chosen[f["filament"]]["type"],
-             "slot_color": chosen[f["filament"]]["color"]} for f in filaments]
-
-
-def ams_box_mapping(filaments, chosen, slots):
-    """The print start's ams_box_mapping, as the send dialog builds it: the mapped filaments, then the
-    other ACE slots up to the four entries the firmware expects."""
-    def color(c):
-        rgb = _rgb(c) or (255, 255, 255)
-        return [rgb[0], rgb[1], rgb[2], 255]
-
-    if any(chosen[f["filament"]]["slot"] == "external" for f in filaments):
-        return []
-    mapping = [{"ams_index": chosen[f["filament"]]["slot_id"], "paint_index": f["filament"] - 1,
-                "material_type": chosen[f["filament"]]["type"], "ams_color": color(chosen[f["filament"]]["color"]),
-                "paint_color": color(f["color"])} for f in filaments]
-    mapped = {m["ams_index"] for m in mapping}
-    paints = {m["paint_index"] for m in mapping}
-    next_paint = 0
-    for s in slots:
-        if len(mapping) >= 4:
-            break
-        if s["slot"] == "external" or s["slot_id"] in mapped:
-            continue
-        while next_paint in paints:
-            next_paint += 1
-        mapping.append({"ams_index": s["slot_id"], "paint_index": next_paint, "material_type": s["type"],
-                        "ams_color": color(s["color"]), "paint_color": color(s["color"])})
-        mapped.add(s["slot_id"])
-        paints.add(next_paint)
-    return mapping
 
 
 def _default_ams_mapping(use_ams=True):
