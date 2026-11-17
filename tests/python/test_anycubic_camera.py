@@ -1,5 +1,6 @@
 import http.client
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -305,6 +306,49 @@ class HttpCameraTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(response.getheader("Content-Type"), "video/x-flv")
         self.assertEqual(data[:3], b"FLV")
+
+
+class CameraServiceTests(unittest.TestCase):
+    def mqtt(self, topic_type, payload):
+        class Msg:
+            pass
+        msg = Msg()
+        msg.topic = f"anycubic/anycubicCloud/v1/printer/public/20025/dev/{topic_type}/report"
+        msg.payload = json.dumps(payload).encode()
+        daemon._handle_mqtt_message(None, None, msg)
+
+    def setUp(self):
+        relay = daemon.FlvRelay(lambda: "http://192.0.2.31:18088/flv")
+        for patch in (mock.patch.object(daemon, "camera_relay", relay),
+                      mock.patch.dict(daemon.telemetry, {"last_error": "", "last_error_code": 0})):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.relay = relay
+
+    def test_a_camera_service_timeout_is_not_a_printer_error(self):
+        self.mqtt("video", {"type": "video", "action": "startCapture", "code": 11402,
+                            "msg": "Camera service response timeout", "state": "failed"})
+        self.assertEqual(daemon.telemetry["last_error"], "")
+        self.assertIn("11402", self.relay.status()["error"])
+
+    def test_a_busy_camera_service_is_asked_less_often_until_it_answers(self):
+        for _ in range(2):
+            self.mqtt("video", {"type": "video", "code": 11402, "msg": "timeout"})
+        self.assertEqual(self.relay.keepalive, daemon.FLV_KEEPALIVE * 4)
+        for _ in range(4):
+            self.mqtt("video", {"type": "video", "code": 11402, "msg": "timeout"})
+        self.assertEqual(self.relay.keepalive, daemon.FLV_KEEPALIVE_MAX)
+        self.mqtt("video", {"type": "video", "action": "startCapture", "code": 200, "state": "done"})
+        self.assertEqual(self.relay.keepalive, daemon.FLV_KEEPALIVE)
+        self.assertIsNone(self.relay.status()["error"])
+
+    def test_a_camera_code_on_another_report_is_not_a_printer_error(self):
+        self.mqtt("print", {"type": "print", "code": 11402, "msg": "Camera service response timeout"})
+        self.assertEqual(daemon.telemetry["last_error"], "")
+
+    def test_other_printer_errors_still_count(self):
+        self.mqtt("print", {"type": "print", "code": 10501, "msg": "Nozzle heating failed", "state": "failed"})
+        self.assertEqual(daemon.telemetry["last_error_code"], 10501)
 
 
 class DirectAndSettingsTests(unittest.TestCase):

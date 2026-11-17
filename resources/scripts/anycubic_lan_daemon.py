@@ -1423,6 +1423,15 @@ def _handle_mqtt_message(c, userdata, msg):
         msg_str = payload.get("msg", "")
         state_str = payload.get("state", "")
 
+        # A camera command's answer, and the camera service's codes (114xx), are the camera's
+        # state, not printer errors: a slow camera service (11402) during a print must not
+        # raise a "printer error" notification.
+        if t == "video" or 11400 <= _as_int(code) < 11500:
+            camera_relay.on_camera_reply(_as_int(code), msg_str, state_str)
+            if t == "video":
+                return
+            code = 200  # The rest of this report (a print status, say) is still read.
+
         # Always capture printer LCD warnings and error reports
         if (code != 200 and code != 0) or state_str in ["failed", "abnormal"]:
             if msg_str:
@@ -2112,6 +2121,7 @@ FLV_READ_TIMEOUT = 10        # No data for this long: the stream stalled; reconn
 FLV_START_TIMEOUT = 20       # The camera can take this long to start after startCapture.
 FLV_IDLE_CLOSE = 15          # Keep the stream this long after the last viewer, for a quick reconnect.
 FLV_KEEPALIVE = 20           # The printer stops the camera without a periodic startCapture.
+FLV_KEEPALIVE_MAX = 120      # The longest it grows to while the camera service answers slowly.
 FLV_CLIENT_MAX_BYTES = 8 * 1024 * 1024  # A viewer this far behind is dropped; it reconnects.
 FLV_GOP_MAX_BYTES = 4 * 1024 * 1024     # The frames since the last keyframe kept for new viewers.
 
@@ -2160,6 +2170,8 @@ class FlvRelay:
         self.gop = []
         self.gop_bytes = 0
         self.connected = False
+        self.keepalive = FLV_KEEPALIVE
+        self.camera_reply = None
         self.last_tag_time = 0.0
         self.keyframe_times = []
         self.offset = None
@@ -2202,6 +2214,20 @@ class FlvRelay:
             client.push(tag)
         client.waiting_keyframe = False
 
+    def on_camera_reply(self, code, message, state):
+        """The printer's answer to startCapture or stopCapture."""
+        failed = (code not in (200, 0)) or state in ("failed", "abnormal")
+        with self.cond:
+            if failed:
+                self.camera_reply = f"the printer's camera service answered {code}: {message or state}".strip()
+                # The service is busy (11402 is its timeout): ask it less often.
+                self.keepalive = min(FLV_KEEPALIVE_MAX, self.keepalive * 2)
+            else:
+                self.camera_reply = None
+                self.keepalive = FLV_KEEPALIVE
+        if failed:
+            print(f"[Bridge] Camera command failed ({code}): {message or state}")
+
     def status(self):
         with self.cond:
             now = time.time()
@@ -2210,7 +2236,7 @@ class FlvRelay:
                 "running": self.thread is not None,
                 "connected": self.connected,
                 "viewers": len(self.clients),
-                "error": self.error or None,
+                "error": self.error or self.camera_reply or None,
                 "seconds_since_last_frame": round(now - self.last_tag_time, 1) if self.last_tag_time else None,
                 "keyframe_interval_s": round(sum(gaps) / len(gaps), 1) if gaps else None,
                 "url": self.url_fn(),
@@ -2288,7 +2314,7 @@ class FlvRelay:
                 time.sleep(0.7)
                 if self._idle():
                     break
-        raise OSError(f"no camera stream at {self.url_fn()} ({last_error})")
+        raise OSError(self.camera_reply or f"no camera stream at {self.url_fn()} ({last_error})")
 
     @staticmethod
     def _read_exact(resp, n):
@@ -2323,7 +2349,7 @@ class FlvRelay:
                 ts = int.from_bytes(h[4:7], "big") | (h[7] << 24)
                 body = self._read_exact(resp, size)
                 self._read_exact(resp, 4)
-                if time.time() - last_keepalive > FLV_KEEPALIVE:
+                if time.time() - last_keepalive > self.keepalive:
                     send_video_command("startCapture")
                     last_keepalive = time.time()
                 self._on_tag(tag_type, body, ts)
