@@ -1423,6 +1423,7 @@
                     <label for="cam-preset-select">Stream Mode / Source</label>
                     <select id="cam-preset-select" class="modal-select" onchange="onCamPresetChange(this.value)">
                         <option value="auto">Auto: Anycubic Native Camera (FLV Port 18088)</option>
+                        <option value="direct">Direct: Anycubic Native Camera, one connection per view</option>
                         <option value="mjpeg_8080">MJPEG Streamer (Port 8080 - Moonraker / acproxycam)</option>
                         <option value="custom">Custom Stream URL (MJPEG / FLV / HTTP)</option>
                     </select>
@@ -1435,6 +1436,7 @@
                     <b>Tips:</b>
                     <ul style="margin:4px 0 0 16px;padding:0;">
                         <li>If using the official USB camera: ensure <i>LAN Mode</i> is enabled in printer settings.</li>
+                        <li>If the native camera keeps reconnecting in Auto, try Direct: each view opens its own connection to the printer, and only one view can watch at a time.</li>
                         <li>If using Moonraker, Mainsail, or external webcam: enter the MJPEG or stream URL above.</li>
                     </ul>
                 </div>
@@ -2206,12 +2208,15 @@
         let jogStep = 10;
         let currentPrinterState = "idle";
         let flvPlayer = null;
-        let activeCameraUrl = "http://127.0.0.1:18988/camera";
-        const _initCamPreset = localStorage.getItem("orca_ac_cam_preset") || "auto";
-        const _initCustomCam = localStorage.getItem("orca_ac_custom_cam_url") || "";
-        if ((_initCamPreset === "custom" || _initCamPreset === "mjpeg_8080") && _initCustomCam) {
-            activeCameraUrl = _initCustomCam;
+        // The stream URL for the camera mode chosen in the camera settings.
+        function cameraUrlForSettings(bridgeUrl) {
+            const preset = localStorage.getItem("orca_ac_cam_preset") || "auto";
+            const custom = localStorage.getItem("orca_ac_custom_cam_url") || "";
+            if ((preset === "custom" || preset === "mjpeg_8080") && custom) return custom;
+            if (preset === "direct") return "http://127.0.0.1:18988/camera?direct=1";
+            return bridgeUrl || "http://127.0.0.1:18988/camera";
         }
+        let activeCameraUrl = cameraUrlForSettings();
         let alertDismissed = false;
         let lastSeenAlert = "";
 
@@ -2300,10 +2305,28 @@
             camRetries += 1;
             const delay = Math.min(10000, 1000 * Math.pow(2, Math.min(camRetries - 1, 4)));
             setCameraUi("reconnecting", `Camera connection lost. Reconnecting (attempt ${camRetries})...`);
+            showCameraProblem(camRetries);
             camReconnectTimer = setTimeout(() => {
                 camReconnectTimer = null;
                 initCameraStream(activeCameraUrl);
             }, delay);
+        }
+
+        // Says why the stream failed, from the bridge's view of the printer's camera.
+        async function showCameraProblem(attempt) {
+            let why;
+            try {
+                const res = await fetch("http://127.0.0.1:18988/status/camera", { cache: "no-store" });
+                const st = await res.json();
+                if (st.error) why = `Printer camera: ${st.error}`;
+                else if (st.connected && st.seconds_since_last_frame > 5) why = "The printer stopped sending video.";
+                else if (!st.connected && st.running) why = "Waiting for the printer to start its camera.";
+            } catch (e) {
+                why = "The printer bridge is not running. OrcaMartelo starts it again within a few seconds.";
+            }
+            const span = document.querySelector("#cam-placeholder span");
+            if (why && span && camRetries === attempt && !userStoppedCamera && !isCameraStreaming)
+                span.innerText = `Camera connection lost. Reconnecting (attempt ${attempt})...\n${why}`;
         }
 
         function watchCamera() {
@@ -2337,14 +2360,17 @@
             clearCameraTimers();
             setCameraUi("connecting", "Connecting to camera stream...");
 
+            // The bridge may have restarted without the custom URL; snapshots read it there.
             const savedPreset = localStorage.getItem("orca_ac_cam_preset") || "auto";
-            const savedCustom = localStorage.getItem("orca_ac_custom_cam_url") || "";
-            let streamUrl = activeCameraUrl || "http://127.0.0.1:18988/camera";
-            if ((savedPreset === "custom" || savedPreset === "mjpeg_8080") && savedCustom) {
-                streamUrl = savedCustom;
+            if (savedPreset === "custom" || savedPreset === "mjpeg_8080") {
+                fetch("http://127.0.0.1:18988/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "set_camera_url", url: localStorage.getItem("orca_ac_custom_cam_url") || "" })
+                }).catch(() => {});
             }
             // The bridge starts the printer's camera and waits for it when the player connects.
-            initCameraStream(streamUrl);
+            initCameraStream(cameraUrlForSettings());
         }
 
         async function stopCameraStream() {
@@ -2500,7 +2526,7 @@
         function onCamPresetChange(val) {
             const input = document.getElementById("cam-custom-url-input");
             if (!input) return;
-            if (val === "auto") {
+            if (val === "auto" || val === "direct") {
                 input.placeholder = "Auto: http://127.0.0.1:18988/camera";
                 input.disabled = true;
             } else if (val === "mjpeg_8080") {
@@ -2520,7 +2546,7 @@
             const status = document.getElementById("cam-settings-status");
             const preset = select ? select.value : "auto";
             let customUrl = input ? input.value.trim() : "";
-            if (preset === "auto") {
+            if (preset === "auto" || preset === "direct") {
                 customUrl = "";
             } else if (preset === "mjpeg_8080" && !customUrl) {
                 customUrl = "http://" + (printerIP || "127.0.0.1") + ":8080/?action=stream";
@@ -2538,13 +2564,13 @@
                 await fetch("http://127.0.0.1:18988/control", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ action: "set_camera_url", camera_url: customUrl })
+                    body: JSON.stringify({ action: "set_camera_url", url: customUrl })
                 });
             } catch(e) {
                 console.warn("set_camera_url backend notify:", e);
             }
 
-            activeCameraUrl = customUrl || "http://127.0.0.1:18988/camera";
+            activeCameraUrl = cameraUrlForSettings();
 
             if (status) {
                 status.innerText = "Saved!";
@@ -3592,13 +3618,7 @@
                     }
 
                     if (data.camera_url && data.camera_url.startsWith("http")) {
-                        const savedPreset = localStorage.getItem("orca_ac_cam_preset") || "auto";
-                        const savedCustom = localStorage.getItem("orca_ac_custom_cam_url") || "";
-                        if (savedPreset !== "custom" && savedPreset !== "mjpeg_8080") {
-                            activeCameraUrl = data.camera_url;
-                        } else if (savedCustom) {
-                            activeCameraUrl = savedCustom;
-                        }
+                        activeCameraUrl = cameraUrlForSettings(data.camera_url);
                     }
                     if (data.active_slot !== undefined && Number(data.active_slot) >= 0) {
                         activeSlotIndex = Number(data.active_slot);

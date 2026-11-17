@@ -15,9 +15,14 @@ The printer serves its camera as H.264 in FLV at `http://<printer>:18088/flv`, b
 - **New viewers.** The relay parses the FLV tags. A new viewer receives the stream header and the metadata tag first. Then, at the next keyframe, it receives the cached AVC (and AAC) sequence headers followed by that keyframe and the frames after it. It never starts on a frame that depends on one it did not see.
 - **Drops and stalls.** When the printer closes the stream, or sends nothing for `FLV_READ_TIMEOUT`, the relay reconnects and viewers wait for the next keyframe. The relay rewrites timestamps so they keep rising by one frame interval across the gap, and players see one continuous stream rather than a restart they would stall on.
 - **Closing.** After the last viewer leaves, the relay keeps the connection for `FLV_IDLE_CLOSE` seconds, so a reconnecting player or a snapshot finds it warm. Then it closes and sends `stopCapture`. The Device tab's own stop request does nothing while the relay runs.
+- **Rare keyframes.** The printer's camera sends keyframes seldom, so the relay keeps the frames since the last keyframe (up to `FLV_GOP_MAX_BYTES`). A new viewer starts on them at once rather than waiting for the next keyframe, which could take longer than the player's stall limit.
 - **Slow viewers.** A viewer more than `FLV_CLIENT_MAX_BYTES` behind is dropped and reconnects. It does not hold the others back.
 
 Connections use a short connect timeout and a separate read timeout. One timeout for both used to end healthy streams at the first pause in the data.
+
+`GET /status/camera` reports whether the stream runs and is connected, its last error, the seconds since the last frame and the keyframe interval. The player shows this reason while it reconnects.
+
+The camera settings also offer **Direct** (`/camera?direct=1`). In this mode each view gets its own connection to the printer, as before the relay existed. It is a fallback for a camera the shared stream does not suit, and then only one view can watch at a time.
 
 When the printer's camera does not start, the bridge tries the MJPEG ports a camera add-on may serve (8080, 8000) for that viewer.
 

@@ -2113,6 +2113,7 @@ FLV_START_TIMEOUT = 20       # The camera can take this long to start after star
 FLV_IDLE_CLOSE = 15          # Keep the stream this long after the last viewer, for a quick reconnect.
 FLV_KEEPALIVE = 20           # The printer stops the camera without a periodic startCapture.
 FLV_CLIENT_MAX_BYTES = 8 * 1024 * 1024  # A viewer this far behind is dropped; it reconnects.
+FLV_GOP_MAX_BYTES = 4 * 1024 * 1024     # The frames since the last keyframe kept for new viewers.
 
 
 def _flv_tag(tag_type, body, timestamp):
@@ -2154,6 +2155,13 @@ class FlvRelay:
         self.new_segment = True
         self.last_ts = -1
         self.frame_gap = 40
+        # The tags since the last keyframe: a new viewer starts on them at once instead of
+        # waiting for the next keyframe, which the printer's camera sends seldom.
+        self.gop = []
+        self.gop_bytes = 0
+        self.connected = False
+        self.last_tag_time = 0.0
+        self.keyframe_times = []
         self.offset = None
 
     # Viewers.
@@ -2179,8 +2187,34 @@ class FlvRelay:
             client.push(self.header)
             if self.meta:
                 client.push(self.meta)
+            self._start_on_gop(client)
             self.clients.add(client)
         return client
+
+    def _start_on_gop(self, client):
+        if self.video_seq is None or not self.gop:
+            return
+        for seq, attr in ((self.video_seq, "video_seq"), (self.audio_seq, "audio_seq")):
+            if seq is not None:
+                client.push(seq)
+                setattr(client, attr, seq)
+        for tag in self.gop:
+            client.push(tag)
+        client.waiting_keyframe = False
+
+    def status(self):
+        with self.cond:
+            now = time.time()
+            gaps = [b - a for a, b in zip(self.keyframe_times, self.keyframe_times[1:])]
+            return {
+                "running": self.thread is not None,
+                "connected": self.connected,
+                "viewers": len(self.clients),
+                "error": self.error or None,
+                "seconds_since_last_frame": round(now - self.last_tag_time, 1) if self.last_tag_time else None,
+                "keyframe_interval_s": round(sum(gaps) / len(gaps), 1) if gaps else None,
+                "url": self.url_fn(),
+            }
 
     def detach(self, client):
         with self.cond:
@@ -2277,6 +2311,7 @@ class FlvRelay:
                 if self.header is None:
                     self.header = head[:5] + (9).to_bytes(4, "big") + b"\x00\x00\x00\x00"
                 self.error = ""
+                self.connected = True
                 self.cond.notify_all()
             with self.cond:
                 self.new_segment = True
@@ -2293,6 +2328,11 @@ class FlvRelay:
                     last_keepalive = time.time()
                 self._on_tag(tag_type, body, ts)
         finally:
+            with self.cond:
+                self.connected = False
+                # Frames of the old connection cannot start a viewer on the new one.
+                self.gop = []
+                self.gop_bytes = 0
             resp.close()
 
     def _on_tag(self, tag_type, body, ts):
@@ -2326,6 +2366,18 @@ class FlvRelay:
             self.last_ts = max(self.last_ts, out_ts)
             tag = _flv_tag(tag_type, body, out_ts)
             keyframe = is_video and (body[0] >> 4) == 1
+            now = time.time()
+            self.last_tag_time = now
+            if keyframe:
+                self.gop = [tag]
+                self.gop_bytes = len(tag)
+                self.keyframe_times = (self.keyframe_times + [now])[-6:]
+            elif self.gop:
+                self.gop.append(tag)
+                self.gop_bytes += len(tag)
+                if self.gop_bytes > FLV_GOP_MAX_BYTES:
+                    self.gop = []
+                    self.gop_bytes = 0
             for c in self.clients:
                 if c.waiting_keyframe:
                     if not keyframe or self.video_seq is None:
@@ -2420,7 +2472,7 @@ def perform_control(data):
             telemetry["light"] = status
 
     elif action == "set_camera_url":
-        custom_url = str(data.get("url", "")).strip()
+        custom_url = str(data.get("url", data.get("camera_url", "")) or "").strip()
         telemetry["custom_camera_url"] = custom_url
         return {"status": "ok", "custom_camera_url": custom_url}
 
@@ -2876,6 +2928,14 @@ class BridgeServer(BaseHTTPRequestHandler):
         if upstream_url and not upstream_url.startswith("http"):
             upstream_url = ""
 
+        if not upstream_url and query_params.get("direct", [""])[0] == "1":
+            # The printer's own camera on a connection of this viewer alone, as before the
+            # shared stream: a fallback for a camera the shared stream does not suit.
+            send_video_command("startCapture")
+            if not self._serve_direct_camera(native_camera_url(), attempts=int(FLV_START_TIMEOUT / 0.7)):
+                self._send_camera_error("Failed to connect to the printer camera at " + native_camera_url())
+            return
+
         if not upstream_url:
             # The printer's own camera, shared by every viewer.
             try:
@@ -2903,7 +2963,7 @@ class BridgeServer(BaseHTTPRequestHandler):
         if not self._serve_direct_camera(upstream_url):
             self._send_camera_error("Failed to connect to the camera stream at " + upstream_url)
 
-    def _serve_direct_camera(self, url, fallback_only=False):
+    def _serve_direct_camera(self, url, fallback_only=False, attempts=3):
         """Relay a custom camera (MJPEG and the like) to this viewer alone. With fallback_only,
         try the MJPEG ports a camera add-on on the printer may serve. Returns False when none answers."""
         urls = [url] if url else []
@@ -2911,7 +2971,7 @@ class BridgeServer(BaseHTTPRequestHandler):
             urls = [f"http://{PRINTER_IP}:{port}/?action=stream" for port in (8080, 8000)]
         resp = None
         for candidate in urls:
-            for _ in range(1 if fallback_only else 3):
+            for _ in range(1 if fallback_only else attempts):
                 try:
                     parsed = urllib.parse.urlparse(candidate)
                     conn_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
@@ -2926,7 +2986,8 @@ class BridgeServer(BaseHTTPRequestHandler):
                         break
                     conn.close()
                 except Exception:
-                    time.sleep(0.5)
+                    pass
+                time.sleep(0.7)
             if resp:
                 break
         if resp is None:
@@ -2993,6 +3054,8 @@ class BridgeServer(BaseHTTPRequestHandler):
             self.serve_camera()
         elif not self.require_authorized():
             return
+        elif self.path.startswith("/status/camera"):
+            self.send_json(200, camera_relay.status())
         elif self.path.startswith("/mcp/info"):
             self.send_json(200, mcp_client_config())
         elif urllib.parse.urlparse(self.path).path == "/mcp":

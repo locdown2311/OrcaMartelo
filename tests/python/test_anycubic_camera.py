@@ -194,6 +194,24 @@ class RelayTests(unittest.TestCase):
                 self.assertGreater(len(self.assert_playable(results[name])), 1)
         self.assertEqual(self.commands[0], "startCapture")
 
+    def test_a_late_viewer_starts_at_once_when_keyframes_are_rare(self):
+        cam, relay = self.camera(synthetic_flv(seconds=4, gop=1000))  # One keyframe, at the start.
+        first = relay.attach()
+        self.addCleanup(relay.detach, first)
+        time.sleep(0.4)
+        frames = self.assert_playable(self.watch(relay, 0.4))
+        self.assertGreater(len(frames), 3)
+        self.assertEqual(cam.connections, 1)
+
+    def test_the_status_reports_the_stream(self):
+        cam, relay = self.camera()
+        client = relay.attach()
+        self.addCleanup(relay.detach, client)
+        time.sleep(0.5)
+        status = relay.status()
+        self.assertEqual((status["running"], status["connected"], status["viewers"], status["error"]), (True, True, 1, None))
+        self.assertLess(status["seconds_since_last_frame"], 1)
+
     def test_a_dropped_stream_reconnects_with_rising_timestamps(self):
         cam, relay = self.camera(cut_after_tags=12)
         frames = self.assert_playable(self.watch(relay, 2.5))
@@ -287,6 +305,35 @@ class HttpCameraTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(response.getheader("Content-Type"), "video/x-flv")
         self.assertEqual(data[:3], b"FLV")
+
+
+class DirectAndSettingsTests(unittest.TestCase):
+    def test_direct_mode_gives_the_viewer_its_own_connection(self):
+        cam = FakeCamera(synthetic_flv())
+        self.addCleanup(cam.close)
+        server = daemon.ThreadingHTTPServer(("127.0.0.1", 0), daemon.BridgeServer)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        commands = []
+        with mock.patch.object(daemon, "native_camera_url", lambda: cam.url), \
+             mock.patch.object(daemon, "send_video_command", commands.append), \
+             mock.patch.dict(daemon.telemetry, {"custom_camera_url": ""}):
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+            connection.request("GET", "/camera?direct=1")
+            response = connection.getresponse()
+            data = response.read1(65536)
+            connection.close()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(data[:3], b"FLV")
+        self.assertEqual(commands, ["startCapture"])
+        self.assertEqual(cam.connections, 1)
+
+    def test_the_settings_dialog_custom_url_reaches_the_bridge(self):
+        with mock.patch.dict(daemon.telemetry, {"custom_camera_url": ""}):
+            for key in ("url", "camera_url"):
+                daemon.perform_control({"action": "set_camera_url", key: f"http://cam.local/{key}"})
+                self.assertEqual(daemon.telemetry["custom_camera_url"], f"http://cam.local/{key}")
 
 
 if __name__ == "__main__":
