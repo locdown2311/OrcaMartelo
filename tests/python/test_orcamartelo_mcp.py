@@ -295,6 +295,81 @@ class Slicer:
         self.thread.join()
 
 
+ACE = [
+    {"slot": 0, "box_id": 0, "box_slot": 0, "source": "ace", "type": "PETG", "color": "#E01010", "available": True},
+    {"slot": 1, "box_id": 0, "box_slot": 1, "source": "ace", "type": "PLA", "color": "#FFFFFF", "available": True},
+    {"slot": 2, "box_id": 0, "box_slot": 2, "source": "ace", "type": "PLA", "color": "#101010", "available": True},
+    {"slot": 3, "box_id": 0, "box_slot": 3, "source": "ace", "type": "Generic PLA", "color": "#1020E0", "available": True},
+    {"slot": -1, "box_id": -1, "source": "external", "type": "ABS", "color": "#808080", "available": True},
+]
+
+GCODE_TWO = b"""; HEADER_BLOCK_START
+G1 X1
+; filament used [g] = 3.00, 0.00, 1.50
+; filament_type = PETG;PLA;PLA
+; filament_colour = #FF0000;#00FF00;#0000FF
+"""
+
+
+class MappingTests(unittest.TestCase):
+    def setUp(self):
+        patch = mock.patch.dict(daemon.telemetry, {"filaments": ACE})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.slots = daemon.ace_slots()
+        self.filaments = daemon.file_filaments(GCODE_TWO, "two.gcode")
+
+    def test_a_files_filaments_are_the_ones_it_uses(self):
+        self.assertEqual(self.filaments, [{"filament": 1, "type": "PETG", "color": "#FF0000"},
+                                          {"filament": 3, "type": "PLA", "color": "#0000FF"}])
+
+    def test_the_filaments_of_a_gcode_3mf_are_read_from_its_plate(self):
+        import io as _io
+        import zipfile
+        buffer = _io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as z:
+            z.writestr("Metadata/plate_1.gcode", GCODE_TWO)
+        self.assertEqual(daemon.file_filaments(buffer.getvalue(), "two.gcode.3mf"), self.filaments)
+
+    def test_the_suggestion_matches_material_then_nearest_color(self):
+        chosen = daemon.suggest_mapping(self.filaments, self.slots)
+        # PETG red goes to the only PETG; PLA blue to the blue PLA, whose name has a brand prefix.
+        self.assertEqual({n: s["slot"] for n, s in chosen.items()}, {1: 1, 3: 4})
+
+    def test_the_users_mapping_wins_and_the_rest_is_suggested(self):
+        chosen = daemon.resolve_mapping(self.filaments, self.slots, [{"filament": 3, "slot": 2}])
+        self.assertEqual({n: s["slot"] for n, s in chosen.items()}, {1: 1, 3: 2})
+
+    def test_a_mapping_to_another_material_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "filament 1 is PETG but slot 2 holds PLA"):
+            daemon.resolve_mapping(self.filaments, self.slots, [{"filament": 1, "slot": 2}])
+
+    def test_unknown_filaments_and_slots_are_refused(self):
+        with self.assertRaisesRegex(ValueError, "no filament 2"):
+            daemon.resolve_mapping(self.filaments, self.slots, [{"filament": 2, "slot": 1}])
+        with self.assertRaisesRegex(ValueError, "Slot 7 is empty"):
+            daemon.resolve_mapping(self.filaments, self.slots, [{"filament": 1, "slot": 7}])
+
+    def test_a_material_no_slot_holds_is_reported(self):
+        with self.assertRaisesRegex(ValueError, "no loaded slot holds TPU"):
+            daemon.resolve_mapping([{"filament": 1, "type": "TPU", "color": "#000000"}], self.slots, None)
+
+    def test_the_external_spool_only_serves_a_single_filament(self):
+        single = [{"filament": 1, "type": "ABS", "color": "#808080"}]
+        chosen = daemon.resolve_mapping(single, self.slots, [{"filament": 1, "slot": "external"}])
+        self.assertEqual(daemon.ams_box_mapping(single, chosen, self.slots), [])
+        with self.assertRaisesRegex(ValueError, "single-filament"):
+            daemon.resolve_mapping(self.filaments + [{"filament": 4, "type": "ABS", "color": "#808080"}],
+                                   self.slots, [{"filament": 4, "slot": "external"}])
+
+    def test_the_printer_mapping_lists_the_filaments_then_fills_four_slots(self):
+        chosen = daemon.resolve_mapping(self.filaments, self.slots, [{"filament": 3, "slot": 3}])
+        mapping = daemon.ams_box_mapping(self.filaments, chosen, self.slots)
+        self.assertEqual([(m["ams_index"], m["paint_index"]) for m in mapping], [(0, 0), (2, 2), (1, 1), (3, 3)])
+        self.assertEqual(mapping[0]["paint_color"], [255, 0, 0, 255])
+        self.assertEqual(mapping[0]["material_type"], "PETG")
+
+
 class ControlTests(unittest.TestCase):
     def setUp(self):
         self.mqtt = FakeMqtt()
@@ -409,27 +484,58 @@ class ControlTests(unittest.TestCase):
         self.assertFalse(result["isError"])
         self.assertEqual(upload.call_args.args[:2], (GCODE, "part.gcode"))
 
-    def test_print_plate_exports_confirms_uploads_and_removes_the_file(self):
+    def test_print_plate_maps_confirms_and_sends_through_the_slicer(self):
+        daemon.telemetry["filaments"] = ACE
+        answers = {
+            "plate_filaments": {"plate": 1, "filaments": [{"filament": 1, "type": "PETG", "color": "#FF0000"},
+                                                          {"filament": 3, "type": "PLA", "color": "#0000FF"}]},
+            "slice": {"plate": 1, "estimated_minutes": 42, "estimated_cost": 0.45},
+            "confirm": {"allowed": True},
+            "send_plate": {},
+        }
+        slicer = Slicer(lambda r: {"ok": True, "result": answers[r["kind"]]})
+        self.addCleanup(slicer.close)
+        result = self.call("print_plate", {"plate": 1, "mapping": [{"filament": 3, "slot": 4}]})
+        self.assertFalse(result["isError"], result)
+        self.assertEqual([r["kind"] for r in slicer.requests], ["plate_filaments", "slice", "confirm", "send_plate"])
+        confirm = slicer.requests[2]["args"]
+        self.assertEqual([(m["filament"], m["slot"]) for m in confirm["mapping"]], [(1, 1), (3, 4)])
+        # slot_ids are the printer's 0-based slot numbers, in the plate's filament order.
+        self.assertEqual(slicer.requests[3]["args"]["slot_ids"], [0, 3])
+
+    def test_a_declined_plate_is_not_sent(self):
+        daemon.telemetry["filaments"] = ACE
+        answers = {"plate_filaments": {"plate": 1, "filaments": [{"filament": 1, "type": "PLA", "color": "#FFFFFF"}]},
+                   "slice": {"plate": 1}, "confirm": {"allowed": False}}
+        slicer = Slicer(lambda r: {"ok": True, "result": answers[r["kind"]]})
+        self.addCleanup(slicer.close)
+        self.assertTrue(self.call("print_plate")["isError"])
+        self.assertNotIn("send_plate", [r["kind"] for r in slicer.requests])
+
+    def test_print_file_sends_the_mapping_shown_in_the_confirmation(self):
+        daemon.telemetry["filaments"] = ACE
+        slicer = self.with_user(True)
         with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "Plate_1.gcode")
+            path = os.path.join(tmp, "two.gcode")
             with open(path, "wb") as fh:
-                fh.write(GCODE)
+                fh.write(GCODE_TWO)
+            with mock.patch.object(daemon, "upload_and_start_print_file", return_value={"status": "ok", "filename": "two.gcode"}) as upload:
+                result = self.call("print_file", {"path": path, "mapping": [{"filament": 3, "slot": 3}]})
+        self.assertFalse(result["isError"], result)
+        self.assertEqual([(m["filament"], m["slot"]) for m in slicer.requests[0]["args"]["mapping"]], [(1, 1), (3, 3)])
+        sent = upload.call_args.kwargs["ams_mapping"]
+        self.assertEqual([(m["ams_index"], m["paint_index"]) for m in sent[:2]], [(0, 0), (2, 2)])
 
-            def answer(request):
-                if request["kind"] == "export_plate":
-                    return {"ok": True, "result": {"path": path, "filename": "Box_plate1.gcode", "plate": 1,
-                                                   "estimated_minutes": 42, "estimated_cost": 0.45}}
-                return {"ok": True, "result": {"allowed": True}}
-
-            slicer = Slicer(answer)
-            self.addCleanup(slicer.close)
-            with mock.patch.object(daemon, "upload_and_start_print_file", return_value={"status": "ok", "filename": "Box_plate1.gcode"}) as upload:
-                result = self.call("print_plate", {"plate": 1})
-            self.assertFalse(result["isError"])
-            self.assertEqual([r["kind"] for r in slicer.requests], ["export_plate", "confirm"])
-            self.assertEqual(slicer.requests[1]["args"]["action"], "print_plate")
-            self.assertEqual(upload.call_args.args[1], "Box_plate1.gcode")
-            self.assertFalse(os.path.exists(path))
+    def test_get_print_filaments_suggests_a_slot_for_each_filament(self):
+        daemon.telemetry["filaments"] = ACE
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "two.gcode")
+            with open(path, "wb") as fh:
+                fh.write(GCODE_TWO)
+            data = self.call("get_print_filaments", {"path": path})["structuredContent"]
+        self.assertEqual(data["suggested_mapping"], [{"filament": 1, "slot": 1}, {"filament": 3, "slot": 4}])
+        self.assertEqual(data["unmatched_filaments"], [])
+        self.assertEqual(len(data["loaded_slots"]), 5)
 
     def test_slicer_errors_reach_the_model(self):
         slicer = Slicer(lambda r: {"ok": False, "error": "No preset named Foo"})

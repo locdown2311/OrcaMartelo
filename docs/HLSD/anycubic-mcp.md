@@ -30,9 +30,9 @@ The kinds are:
   - An MJPEG camera (a custom URL) is read by the bridge directly, without the slicer.
   - The printer's own camera streams H.264 in FLV, which the bundled Python cannot decode. The slicer takes this picture with the FFmpeg it already links for the camera view. It decodes a frame of the bridge's `/camera` proxy on a worker thread and scales it to at most 1280 px wide.
 - **`confirm`:** a yes/no dialog in OrcaMartelo.
-- **Slicer tools:** `get_state`, `list_presets`, `select_preset`, `get_settings`, `set_settings`, `load_models`, `arrange`, `clear_plate`, `slice` and `export_plate`.
+- **Slicer tools:** `get_state`, `list_presets`, `select_preset`, `get_settings`, `set_settings`, `load_models`, `arrange`, `clear_plate`, `plate_filaments`, `slice` and `send_plate`.
   - `select_preset` and `set_settings` act as the sidebar and the settings tabs do. Changed settings leave the preset modified and unsaved.
-  - `slice` and `export_plate` post the plate's slice event and poll until the result is ready for printing. `export_plate` then copies the plate's G-code to a temp file. The bridge uploads that file and starts it like a file sent from the Device tab, then deletes it.
+  - `slice` and `send_plate` post the plate's slice event when needed, then poll until the result is ready for printing. `send_plate` then sends the plate through `Plater::send_gcode_legacy()` without its dialog. That is the same upload the send dialog starts, with the same Anycubic header processing and the dialog's options as last chosen (`AnycubicSendOptions::load()`), so a plate sent from MCP prints like one sent by hand.
 
 ## Confirmation
 
@@ -59,4 +59,16 @@ The cost spent so far is the estimate scaled by progress. Prints started from th
 
 ## Filament mapping
 
-A print started by the MCP tools uses the bridge's one-to-one mapping: filament N of the slicer prints from ACE slot N. The Plater's upload dialog matches materials and colors instead.
+A multi-color print needs to know which ACE slot prints each filament. The assistant settles this with the user, typically in the prompt ("filament 2 from slot 4"):
+
+1. `get_print_filaments` lists the filaments of a plate (`plate_filaments`), or of a `.gcode`/`.gcode.3mf` file read from its config lines. It also lists the loaded slots and suggests a slot for each filament. A suggestion is a loaded slot of the same material, compared as `normalize_anycubic_material()` does, with the nearest color, preferring slots not yet used.
+2. `print_plate` and `print_file` take a `mapping`. Filaments left out keep the suggestion.
+
+The rules are those of the send dialog (`build_anycubic_ams_mapping()`):
+
+- A filament prints from a loaded slot of its own material.
+- The external spool serves only a single-filament print.
+
+A mapping that breaks them is refused with the reason. The confirmation dialog lists each filament with its slot.
+
+The mapping is sent in the form the dialog builds through `anycubic_upload_info()`, which the dialog and `send_plate` share: the mapped filaments, then the other ACE slots up to the four entries the firmware expects. A file printed with `print_file` gets that mapping from the bridge (`ams_box_mapping()`).

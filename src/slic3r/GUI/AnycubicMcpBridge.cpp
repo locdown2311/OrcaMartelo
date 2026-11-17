@@ -376,6 +376,32 @@ json load_models(const json &args)
     return ok({{"loaded", names}, {"current_plate", plater->get_partplate_list().get_curr_plate_index() + 1}});
 }
 
+// The filaments a plate prints with, as the send dialog lists them: [{filament (1-based), type, color}].
+json plate_filaments(const json &args)
+{
+    int         index = 0;
+    std::string error;
+    PartPlate  *plate = requested_plate(args, index, error);
+    if (plate == nullptr)
+        return failed(error);
+    std::vector<int> used = plate->get_extruders(true);
+    std::sort(used.begin(), used.end());
+    used.erase(std::unique(used.begin(), used.end()), used.end());
+    const DynamicPrintConfig config  = wxGetApp().preset_bundle->full_config();
+    const auto              *colours = config.option<ConfigOptionStrings>("filament_colour");
+    const auto              *types   = config.option<ConfigOptionStrings>("filament_type");
+    json                     list    = json::array();
+    for (const int extruder : used) {
+        if (extruder < 1)
+            continue;
+        const size_t i = size_t(extruder - 1);
+        list.push_back({{"filament", extruder},
+                        {"type", types != nullptr && i < types->values.size() ? types->values[i] : std::string()},
+                        {"color", colours != nullptr && i < colours->values.size() ? colours->values[i] : std::string()}});
+    }
+    return ok({{"plate", index + 1}, {"filaments", list}});
+}
+
 // The question shown for an action, or empty for one this version does not know (it is refused).
 wxString confirm_question(const json &a)
 {
@@ -420,10 +446,29 @@ wxString confirm_question(const json &a)
         return format_wxstr(_L("Load the filament of ACE slot %1% (%2%)."), int(number("slot").value_or(0)), text("material"));
     if (action == "unload_filament")
         return format_wxstr(_L("Unload the filament of ACE slot %1%."), int(number("slot").value_or(0)));
+    // Which ACE slot prints each filament, under the question of a print.
+    auto mapping_lines = [&]() {
+        wxString lines;
+        for (const auto &m : a.value("mapping", json::array())) {
+            if (!m.is_object())
+                continue;
+            const wxString filament = wxString::Format("%d", m.value("filament", 0));
+            const wxString material = from_u8(m.value("filament_type", std::string()) + " " + m.value("filament_color", std::string()));
+            const wxString slot_material = from_u8(m.value("slot_type", std::string()) + " " + m.value("slot_color", std::string()));
+            if (m.contains("slot") && m["slot"].is_string())
+                // TRN %1% is a filament number, %2% and %3% material and color, such as "PLA #FF0000".
+                lines += "\n" + format_wxstr(_L("Filament %1% (%2%) from the external spool (%3%)"), filament, material, slot_material);
+            else
+                // TRN %1% is a filament number, %2% its material and color, %3% an ACE slot number, %4% its material and color.
+                lines += "\n" + format_wxstr(_L("Filament %1% (%2%) from ACE slot %3% (%4%)"), filament, material,
+                                              wxString::Format("%d", m.value("slot", 0)), slot_material);
+        }
+        return lines;
+    };
     if (action == "start_print")
-        return format_wxstr(_L("Start printing %1%."), text("file"));
+        return format_wxstr(_L("Start printing %1%."), text("file")) + mapping_lines();
     if (action == "print_plate") {
-        wxString question = format_wxstr(_L("Print plate %1% on the printer."), int(number("plate").value_or(0)));
+        wxString question = format_wxstr(_L("Print plate %1% on the printer."), int(number("plate").value_or(0))) + mapping_lines();
         if (auto minutes = number("minutes"); minutes && *minutes > 0)
             question += "\n" + format_wxstr(_L("Estimated time: %1%"), from_u8(get_time_dhms(float(*minutes * 60.))));
         if (auto cost = number("cost"); cost && *cost > 0)
@@ -448,14 +493,6 @@ bool ask_user(const json &args)
     MessageDialog dialog(frame, _L("An AI assistant connected over MCP asks to do this:") + "\n\n" + question + "\n\n" + _L("Allow it?"),
                          _L("AI assistant request"), wxYES_NO | wxICON_WARNING);
     return dialog.ShowModal() == wxID_YES;
-}
-
-std::string safe_file_stem(const wxString &name)
-{
-    std::string stem;
-    for (char c : into_u8(name))
-        stem += std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' ? c : '_';
-    return stem.empty() ? std::string("OrcaMartelo") : stem.substr(0, 60);
 }
 
 } // namespace
@@ -537,12 +574,14 @@ void AnycubicMcpBridge::run(long long id, const std::string &kind, const json &a
 {
     if (kind == "camera_snapshot")
         return take_snapshot(id, args.value("url", std::string()));
-    if (kind == "slice" || kind == "export_plate")
-        return start_slice(id, args, kind == "export_plate");
+    if (kind == "slice" || kind == "send_plate")
+        return start_slice(id, args, kind == "send_plate");
     json result;
     try {
         if (kind == "confirm")
             result = ok({{"allowed", ask_user(args)}});
+        else if (kind == "plate_filaments")
+            result = plate_filaments(args);
         else if (kind == "get_state")
             result = ok(slicer_state());
         else if (kind == "list_presets")
@@ -570,7 +609,7 @@ void AnycubicMcpBridge::run(long long id, const std::string &kind, const json &a
         answer(id, result);
 }
 
-void AnycubicMcpBridge::start_slice(long long id, const json &args, bool export_gcode)
+void AnycubicMcpBridge::start_slice(long long id, const json &args, bool send)
 {
     if (m_slice.id != 0)
         return answer(id, failed("OrcaMartelo is already slicing for another request"));
@@ -584,7 +623,10 @@ void AnycubicMcpBridge::start_slice(long long id, const json &args, bool export_
     Plater *plater = wxGetApp().plater();
     if (plater->get_partplate_list().get_curr_plate_index() != index)
         plater->select_plate(index);
-    m_slice = {id, index, export_gcode, 0};
+    m_slice = {id, index, 0, send, {}};
+    for (const auto &slot : args.value("slot_ids", json::array()))
+        if (slot.is_number_integer())
+            m_slice.slot_ids.push_back(slot.get<int>());
     // Sliced already and unchanged since: the result is ready.
     if (!plate->is_slice_result_ready_for_print())
         wxPostEvent(plater, SimpleEvent(EVT_GLTOOLBAR_SLICE_PLATE));
@@ -603,34 +645,31 @@ void AnycubicMcpBridge::check_slice()
     const bool slicing = plater->is_background_process_slicing();
     ++m_slice.ticks;
     json result;
+    bool ready = false;
     if (plate == nullptr)
         result = failed("The plate was removed while slicing");
     else if (!slicing && plate->is_slice_result_ready_for_print()) {
         json estimate     = plate_estimate(*plate);
         estimate["plate"] = m_slice.plate + 1;
         result            = ok(estimate);
-        if (m_slice.export_gcode) {
-            try {
-                const fs::path    source(plate->get_tmp_gcode_path());
-                const std::string filename = safe_file_stem(plater->get_project_name()) + "_plate" + std::to_string(m_slice.plate + 1) + ".gcode";
-                const fs::path    target   = fs::temp_directory_path() / fs::unique_path("orcamartelo-mcp-%%%%%%%%.gcode");
-                fs::copy_file(source, target, fs::copy_options::overwrite_existing);
-                result["result"]["path"]     = target.string();
-                result["result"]["filename"] = filename;
-            } catch (const std::exception &e) {
-                result = failed(std::string("Could not export the G-code: ") + e.what());
-            }
-        }
+        ready             = true;
     } else if (!slicing && m_slice.ticks > SLICE_START_TICKS)
         result = failed("Slicing stopped without a result. OrcaMartelo shows why, such as an object outside the plate or a setting conflict.");
     else if (m_slice.ticks > SLICE_MAX_TICKS)
         result = failed("Slicing took too long");
     else
         return;
-    const long long id = m_slice.id;
-    m_slice            = {};
+    const PendingSlice done = std::move(m_slice);
+    m_slice                 = {};
     m_slice_timer.Stop();
-    answer(id, result);
+    if (ready && done.send) {
+        // The upload the send dialog would start, without the dialog: its options as last chosen there.
+        Plater::AnycubicHeadlessSend send{done.slot_ids, {}};
+        plater->send_gcode_legacy(done.plate, nullptr, &send);
+        if (!send.error.empty())
+            result = failed(send.error);
+    }
+    answer(done.id, result);
 }
 
 void AnycubicMcpBridge::take_snapshot(long long id, std::string url)

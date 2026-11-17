@@ -130,34 +130,15 @@ AnycubicPrintHostSendDialog::AnycubicPrintHostSendDialog(const fs::path& path,
 void AnycubicPrintHostSendDialog::init()
 {
     AppConfig* app_config = wxGetApp().app_config;
-    auto load_bool = [app_config](const char* key, bool fallback) {
-        if (!app_config || !app_config->has("recent", key))
-            return fallback;
-        const std::string value = app_config->get("recent", key);
-        return value == "1" || value == "true";
-    };
-    m_auto_leveling = load_bool(CONFIG_KEY_LEVELING, true);
-    m_resonance_compensation = load_bool(CONFIG_KEY_RESONANCE, false);
-    m_flow_calibration = load_bool(CONFIG_KEY_FLOW, false);
-    m_timelapse = load_bool(CONFIG_KEY_TIMELAPSE, false);
-    m_pre_engage_filament = load_bool(CONFIG_KEY_PRE_ENGAGE, true);
-    m_skip_first_toolchange = load_bool(CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE, true) && m_pre_engage_filament;
-    // Current built-in default script for Skip First Tool Change.
-    m_skip_first_toolchange_script = "M83\nG28 X\nG1 E40 F300\nM106 S229\nM400 P2000\nG1 X20 F15000\nG28 X";
-    // Earlier built-in defaults; a saved value equal to one of these means the user
-    // never customized the script, so upgrade it to the current default.
-    const std::string legacy_default_v1 = "M83\nG28 X\nG1 E12 F300";
-    const std::string legacy_default_v2 = "M83\nG28 X\nG1 E40 F300\nM106 S229\nM400 P2000\nG1 X20 F7000\nG28 X";
-    if (app_config && app_config->has("recent", CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE_SCRIPT)) {
-        std::string saved_script = app_config->get("recent", CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE_SCRIPT);
-        if (!saved_script.empty() && saved_script != legacy_default_v1 && saved_script != legacy_default_v2)
-            m_skip_first_toolchange_script = saved_script;
-    }
-#ifdef ORCACUBIC_DEV_BUILD
-    m_save_dev_copy = load_bool(CONFIG_KEY_SAVE_DEV_COPY, false);
-#else
-    m_save_dev_copy = false;
-#endif
+    const AnycubicSendOptions options = AnycubicSendOptions::load();
+    m_auto_leveling                = options.auto_leveling;
+    m_resonance_compensation       = options.resonance_compensation;
+    m_flow_calibration             = options.flow_calibration;
+    m_timelapse                    = options.timelapse;
+    m_pre_engage_filament          = options.pre_engage_filament;
+    m_skip_first_toolchange        = options.skip_first_toolchange;
+    m_skip_first_toolchange_script = options.skip_first_toolchange_script;
+    m_save_dev_copy                = options.save_dev_copy;
 
     SetTitle(_L("Remote Print"));
     SetMinSize(wxSize(FromDIP(580), FromDIP(380)));
@@ -553,25 +534,79 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
         return {{"ttg_map", map}};
     }
 
-    if (m_slots.empty()) {
+    AnycubicSendOptions options;
+    options.auto_leveling                = m_auto_leveling;
+    options.resonance_compensation       = m_resonance_compensation;
+    options.flow_calibration             = m_flow_calibration;
+    options.timelapse                    = m_timelapse;
+    options.pre_engage_filament          = m_pre_engage_filament;
+    options.skip_first_toolchange        = m_skip_first_toolchange;
+    options.skip_first_toolchange_script = m_skip_first_toolchange_script;
+    options.save_dev_copy                = m_save_dev_copy;
+    std::vector<int> selections;
+    if (!m_slots.empty())
+        for (const auto* combo : m_slot_combos) {
+            const int selected = combo->GetSelection();
+            if (selected < 0 || selected >= static_cast<int>(m_slots.size()))
+                return {};
+            selections.push_back(m_slots[selected].slot_id);
+        }
+    return anycubic_upload_info(m_project_filaments, m_slots, selections, options);
+}
+
+AnycubicSendOptions AnycubicSendOptions::load()
+{
+    AnycubicSendOptions options;
+    AppConfig* app_config = wxGetApp().app_config;
+    auto load_bool = [app_config](const char* key, bool fallback) {
+        if (!app_config || !app_config->has("recent", key))
+            return fallback;
+        const std::string value = app_config->get("recent", key);
+        return value == "1" || value == "true";
+    };
+    options.auto_leveling          = load_bool("anycubic_auto_leveling", true);
+    options.resonance_compensation = load_bool("anycubic_resonance_compensation", false);
+    options.flow_calibration       = load_bool("anycubic_flow_calibration", false);
+    options.timelapse              = load_bool("anycubic_timelapse", false);
+    options.pre_engage_filament    = load_bool("anycubic_pre_engage_filament", true);
+    options.skip_first_toolchange  = load_bool("anycubic_skip_first_toolchange", true) && options.pre_engage_filament;
+    // Earlier built-in default scripts; a saved value equal to one of these means the user
+    // never customized the script, so the current default applies.
+    const std::string legacy_default_v1 = "M83\nG28 X\nG1 E12 F300";
+    const std::string legacy_default_v2 = "M83\nG28 X\nG1 E40 F300\nM106 S229\nM400 P2000\nG1 X20 F7000\nG28 X";
+    if (app_config && app_config->has("recent", "anycubic_skip_first_toolchange_script")) {
+        const std::string saved_script = app_config->get("recent", "anycubic_skip_first_toolchange_script");
+        if (!saved_script.empty() && saved_script != legacy_default_v1 && saved_script != legacy_default_v2)
+            options.skip_first_toolchange_script = saved_script;
+    }
+#ifdef ORCACUBIC_DEV_BUILD
+    options.save_dev_copy = load_bool("anycubic_save_dev_copy", false);
+#endif
+    return options;
+}
+
+std::map<std::string, std::string> anycubic_upload_info(const std::vector<AnycubicToolFilament>& tools,
+                                                        const std::vector<AnycubicMaterialSlot>& slots,
+                                                        const std::vector<int>&                  selected_slot_ids,
+                                                        const AnycubicSendOptions&               options)
+{
+    if (slots.empty()) {
         return {
             {"ams_mapping", "[]"},
             {"use_ams", "0"},
-            {"auto_leveling", m_auto_leveling ? "1" : "0"},
-            {"vibration_compensation", m_resonance_compensation ? "1" : "0"},
-            {"flow_calibration", m_flow_calibration ? "1" : "0"},
-            {"timelapse", m_timelapse ? "1" : "0"}
+            {"auto_leveling", options.auto_leveling ? "1" : "0"},
+            {"vibration_compensation", options.resonance_compensation ? "1" : "0"},
+            {"flow_calibration", options.flow_calibration ? "1" : "0"},
+            {"timelapse", options.timelapse ? "1" : "0"}
         };
     }
 
-    std::vector<int> selections;
     bool use_ams = true;
-    for (const auto* combo : m_slot_combos) {
-        const int selected = combo->GetSelection();
-        if (selected < 0 || selected >= static_cast<int>(m_slots.size()))
+    for (const int slot_id : selected_slot_ids) {
+        const auto slot = std::find_if(slots.begin(), slots.end(), [slot_id](const AnycubicMaterialSlot& s) { return s.slot_id == slot_id; });
+        if (slot == slots.end())
             return {};
-        selections.push_back(m_slots[selected].slot_id);
-        if (m_slots[selected].source == "external" || m_slots[selected].source == "external_mcb")
+        if (slot->source == "external" || slot->source == "external_mcb")
             use_ams = false;
     }
 
@@ -584,7 +619,7 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
     std::set<int> mapped_ams_indices;
     std::set<int> used_paint_indices;
 
-    for (const auto& entry : build_anycubic_ams_mapping(m_project_filaments, m_slots, selections)) {
+    for (const auto& entry : build_anycubic_ams_mapping(tools, slots, selected_slot_ids)) {
         mapped_ams_indices.insert(entry.ams_index);
         used_paint_indices.insert(entry.paint_index);
         mapping.push_back({
@@ -605,7 +640,7 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
         while (used_paint_indices.count(next_paint_idx))
             ++next_paint_idx;
 
-        for (const auto& slot : m_slots) {
+        for (const auto& slot : slots) {
             if (mapping.size() >= 4)
                 break;
             if (slot.slot_id < 0 || slot.source == "external" || slot.source == "external_mcb")
@@ -635,14 +670,14 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
     return {
         {"ams_mapping", mapping.dump()},
         {"use_ams", use_ams ? "1" : "0"},
-        {"auto_leveling", m_auto_leveling ? "1" : "0"},
-        {"vibration_compensation", m_resonance_compensation ? "1" : "0"},
-        {"flow_calibration", m_flow_calibration ? "1" : "0"},
-        {"timelapse", m_timelapse ? "1" : "0"},
-        {"pre_engage_filament", m_pre_engage_filament ? "1" : "0"},
-        {"skip_first_toolchange", m_skip_first_toolchange ? "1" : "0"},
-        {"skip_first_toolchange_script", m_skip_first_toolchange_script},
-        {"save_dev_copy", m_save_dev_copy ? "1" : "0"},
+        {"auto_leveling", options.auto_leveling ? "1" : "0"},
+        {"vibration_compensation", options.resonance_compensation ? "1" : "0"},
+        {"flow_calibration", options.flow_calibration ? "1" : "0"},
+        {"timelapse", options.timelapse ? "1" : "0"},
+        {"pre_engage_filament", options.pre_engage_filament ? "1" : "0"},
+        {"skip_first_toolchange", options.skip_first_toolchange ? "1" : "0"},
+        {"skip_first_toolchange_script", options.skip_first_toolchange_script},
+        {"save_dev_copy", options.save_dev_copy ? "1" : "0"},
         {"initial_slot", std::to_string(initial_slot)}
     };
 }

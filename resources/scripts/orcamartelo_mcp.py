@@ -21,8 +21,8 @@ INSTRUCTIONS = (
     "start or stop a print, or clear the plate ask the user to confirm in an OrcaMartelo window and "
     "fail if they decline; do not retry a declined action. Moving, homing, extruding, G-code and "
     "loading filament are refused while a print runs. To print a model: slicer_load_models, then "
-    "slicer_slice to see the time and cost, then print_plate. Filament N of the slicer prints from "
-    "ACE slot N. Costs use the currency of the filament profiles. set_filament_slot only changes what "
+    "slicer_slice to see the time and cost, get_print_filaments to agree with the user which ACE slot prints "
+    "each filament, then print_plate with that mapping. Costs use the currency of the filament profiles. set_filament_slot only changes what "
     "the printer records for a slot; load_filament moves filament."
 )
 
@@ -45,6 +45,12 @@ _SLOT = {"type": ["integer", "string"], "description": "Slot number as get_filam
 _PRESET_TYPE = {"type": "string", "enum": ["printer", "print", "filament"], "description": "Kind of preset."}
 _PLATE = {"type": "integer", "description": "Plate number, 1 for the first; the current plate when left out."}
 _CONFIRM_NOTE = " The user confirms it in OrcaMartelo."
+_MAPPING = {"type": "array",
+            "items": {"type": "object", "properties": {"filament": {"type": "integer"}, "slot": {"type": ["integer", "string"]}},
+                      "required": ["filament", "slot"]},
+            "description": "Which ACE slot prints each filament, such as [{\"filament\": 1, \"slot\": 3}]. Filaments left "
+                           "out get the suggested slot. A slot must hold the filament's material; \"external\" is the "
+                           "external spool, for a single-filament print."}
 
 TOOLS = [
     # Printer state.
@@ -125,9 +131,15 @@ TOOLS = [
     _tool("list_printer_files", "Printer files", "Print files stored on the printer."),
     _tool("print_printer_file", "Print a printer file", "Start printing a file stored on the printer. Only while idle." + _CONFIRM_NOTE,
           {"filename": {"type": "string", "description": "As list_printer_files names it."}}, ["filename"], _CONFIRMED),
+    _tool("get_print_filaments", "Filaments of a print",
+          "The filaments a plate (or a .gcode/.gcode.3mf file on this computer) prints with, their material and color, "
+          "the loaded ACE slots, and a suggested slot for each filament: same material, nearest color. Call it before "
+          "print_plate or print_file to agree the color mapping with the user.",
+          {"plate": _PLATE, "path": {"type": "string", "description": "A print file instead of a plate."}}),
     _tool("print_file", "Print a file from this computer",
-          "Upload a .gcode or .gcode.3mf file from this computer to the printer and start it. Only while idle." + _CONFIRM_NOTE,
-          {"path": {"type": "string", "description": "Full path of the file."}}, ["path"], _CONFIRMED),
+          "Upload a .gcode or .gcode.3mf file from this computer to the printer and start it, each filament from the "
+          "ACE slot the mapping gives. Only while idle." + _CONFIRM_NOTE,
+          {"path": {"type": "string", "description": "Full path of the file."}, "mapping": _MAPPING}, ["path"], _CONFIRMED),
 
     # The slicer.
     _tool("slicer_get_state", "Slicer state",
@@ -157,8 +169,9 @@ TOOLS = [
     _tool("slicer_slice", "Slice", "Slice a plate and return its estimated time, filament weight, cost and filament changes.",
           {"plate": _PLATE}, annotations=_WRITE),
     _tool("print_plate", "Print plate",
-          "Slice a plate if needed, send it to the printer and start it. Filament N prints from ACE slot N. Only while idle."
-          + _CONFIRM_NOTE, {"plate": _PLATE}, annotations=_CONFIRMED),
+          "Slice a plate if needed, send it to the printer and start it, each filament from the ACE slot the mapping "
+          "gives, with the options last chosen in OrcaMartelo's send dialog. Only while idle." + _CONFIRM_NOTE,
+          {"plate": _PLATE, "mapping": _MAPPING}, annotations=_CONFIRMED),
 ]
 
 # Each tool runs the backend method of the same name, minus a get_ prefix for the readers that had one.

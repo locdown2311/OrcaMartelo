@@ -2,7 +2,9 @@ import sys
 import os
 import time
 import http.client
+import io
 import json
+import re
 import base64
 import random
 import string
@@ -1339,21 +1341,50 @@ class McpBackend:
         _control({"action": "start_print_job", "filename": filename, "use_ams": bool(telemetry.get("has_multi_color_box"))})
         return {"status": "sent", "filename": filename}
 
-    def print_file(self, path):
+    def _read_print_file(self, path):
         path = os.path.expanduser(path)
         if not path.lower().endswith((".gcode", ".3mf")) or not os.path.isfile(path):
             raise ValueError("path must be an existing .gcode or .gcode.3mf file on this computer")
         if os.path.getsize(path) > MAX_UPLOAD_FILE_BYTES:
             raise ValueError("The file is too large")
+        with open(path, "rb") as fh:
+            return path, fh.read()
+
+    def _print_filaments(self, plate, path):
+        if path:
+            path, content = self._read_print_file(path)
+            return file_filaments(content, path), {"file": os.path.basename(path)}
+        answer = slicer_call("plate_filaments", {"plate": plate}, SLICER_TIMEOUT)
+        return answer.get("filaments") or [], {"plate": answer.get("plate")}
+
+    def get_print_filaments(self, plate=None, path=None):
+        filaments, source = self._print_filaments(plate, path)
+        slots = ace_slots()
+        suggestion = suggest_mapping(filaments, slots)
+        unmatched = [f["filament"] for f in filaments if f["filament"] not in suggestion]
+        return dict(source, filaments=filaments,
+                    loaded_slots=[{k: s[k] for k in ("slot", "type", "color", "brand")} for s in slots],
+                    suggested_mapping=[{"filament": n, "slot": s["slot"]} for n, s in sorted(suggestion.items())],
+                    unmatched_filaments=unmatched,
+                    note="A filament prints from a loaded slot of the same material. Pass a mapping to "
+                         "print_plate or print_file to choose others; filaments left out keep the suggestion.")
+
+    def print_file(self, path, mapping=None):
         _require_connected()
         _require_idle("Starting a print")
-        confirm_action("start_print", file=os.path.basename(path))
-        with open(path, "rb") as fh:
-            content = fh.read()
-        result = upload_and_start_print_file(content, os.path.basename(path), use_ams=bool(telemetry.get("has_multi_color_box")))
+        path, content = self._read_print_file(path)
+        filaments = file_filaments(content, path)
+        slots = ace_slots()
+        chosen = resolve_mapping(filaments, slots, mapping) if filaments and slots else {}
+        summary = mapping_summary(filaments, chosen) if chosen else []
+        confirm_action("start_print", file=os.path.basename(path), mapping=summary)
+        box_mapping = ams_box_mapping(filaments, chosen, slots) if chosen else None
+        result = upload_and_start_print_file(content, os.path.basename(path),
+                                             use_ams=bool(box_mapping) if chosen else bool(telemetry.get("has_multi_color_box")),
+                                             ams_mapping=box_mapping)
         if result.get("status") == "error":
             raise ValueError(result.get("message") or "The upload failed")
-        return {"status": "sent", "filename": result.get("filename")}
+        return {"status": "sent", "filename": result.get("filename"), "mapping": summary}
 
     # The slicer: these run in OrcaMartelo itself.
 
@@ -1385,30 +1416,23 @@ class McpBackend:
     def slicer_slice(self, plate=None):
         return slicer_call("slice", {"plate": plate}, 900)
 
-    def print_plate(self, plate=None):
-        """Slice a plate if needed, then upload it and start it, as from the Device tab."""
+    def print_plate(self, plate=None, mapping=None):
+        """Slice a plate if needed and send it through OrcaMartelo's own Anycubic upload, with the
+        send dialog's last options and the ACE slot chosen for each filament."""
         _require_connected()
         _require_idle("Starting a print")
-        exported = slicer_call("export_plate", {"plate": plate}, 900)
-        path = exported.get("path", "")
-        if not os.path.isfile(path):
-            raise ValueError("OrcaMartelo did not export the plate")
-        try:
-            confirm_action("print_plate", plate=exported.get("plate"), file=exported.get("filename"),
-                           minutes=exported.get("estimated_minutes"), cost=exported.get("estimated_cost"))
-            with open(path, "rb") as fh:
-                content = fh.read()
-            result = upload_and_start_print_file(content, exported.get("filename") or os.path.basename(path),
-                                                 use_ams=bool(telemetry.get("has_multi_color_box")))
-        finally:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-        if result.get("status") == "error":
-            raise ValueError(result.get("message") or "The upload failed")
-        return {"status": "sent", "filename": result.get("filename"), "estimated_minutes": exported.get("estimated_minutes"),
-                "estimated_cost": exported.get("estimated_cost")}
+        filaments, source = self._print_filaments(plate, None)
+        slots = ace_slots()
+        chosen = resolve_mapping(filaments, slots, mapping) if filaments and slots else {}
+        summary = mapping_summary(filaments, chosen) if chosen else []
+        estimate = slicer_call("slice", {"plate": source.get("plate")}, 900)
+        confirm_action("print_plate", plate=source.get("plate"), minutes=estimate.get("estimated_minutes"),
+                       cost=estimate.get("estimated_cost"), mapping=summary)
+        slicer_call("send_plate", {"plate": source.get("plate"),
+                                   "slot_ids": [chosen[f["filament"]]["slot_id"] for f in filaments] if chosen else []}, 900)
+        return {"status": "sent", "plate": source.get("plate"), "mapping": summary,
+                "estimated_minutes": estimate.get("estimated_minutes"), "estimated_cost": estimate.get("estimated_cost"),
+                "note": "OrcaMartelo uploads the plate and starts it; its upload queue shows the progress."}
 
     def printer_info(self):
         t = public_telemetry()
@@ -1983,6 +2007,161 @@ def start_filename_for_print(filename):
     return filename
 
 
+# Filament mapping for prints the MCP server starts: which ACE slot prints each filament of
+# the print. It follows the rules of the Device tab's send dialog (build_anycubic_ams_mapping):
+# a filament prints from a loaded slot of the same material, and the external spool only
+# serves a single-filament print.
+_MATERIAL_PREFIXES = ("GENERIC", "ANYCUBIC", "ESUN", "SUNLU", "BAMBU", "POLYMAKER", "OVERTURE", "ELEGOO")
+
+
+def normalize_material(material):
+    m = str(material or "").upper().strip()
+    for prefix in _MATERIAL_PREFIXES:
+        if m.startswith(prefix):
+            m = m[len(prefix):].strip()
+            break
+    return "".join(ch for ch in m if ch.isalnum())
+
+
+def _rgb(color):
+    h = str(color or "").strip().lstrip("#")
+    try:
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) if len(h) >= 6 else None
+    except ValueError:
+        return None
+
+
+def ace_slots():
+    """The slots a print can use: [{slot (1-based, or "external"), slot_id, type, color, brand}]."""
+    slots = []
+    for f in telemetry.get("filaments") or []:
+        external = f.get("source") in ("external", "external_mcb")
+        slot_id = _as_int(f.get("slot", -1), -1)
+        if not f.get("available", True) or not f.get("type") or f.get("type") == "?" or (slot_id < 0 and not external):
+            continue
+        slots.append({"slot": "external" if external else slot_id + 1, "slot_id": -1 if external else slot_id,
+                      "type": f.get("type"), "color": f.get("color"), "brand": f.get("brand")})
+    return slots
+
+
+def file_filaments(content, name):
+    """The filaments a .gcode or .gcode.3mf print uses: [{filament (1-based), type, color}]."""
+    text = ""
+    if name.lower().endswith(".3mf"):
+        import zipfile
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as z:
+                inner = sorted(n for n in z.namelist() if n.lower().startswith("metadata/plate_") and n.lower().endswith(".gcode"))
+                if inner:
+                    raw = z.read(inner[0])
+                    text = raw[:2097152].decode("utf-8", "ignore") + "\n" + raw[-2097152:].decode("utf-8", "ignore")
+        except zipfile.BadZipFile:
+            raise ValueError("The 3MF file is damaged")
+    else:
+        text = content[:2097152].decode("utf-8", "ignore") + "\n" + content[-2097152:].decode("utf-8", "ignore")
+
+    def value(key):
+        found = re.findall(r"^;\s*" + key + r"\s*=\s*([^\r\n]*)", text, re.MULTILINE | re.IGNORECASE)
+        return found[-1].strip() if found else ""
+
+    types = [t.strip() for t in value("filament_type").split(";") if t.strip()]
+    colors = [c.strip() for c in value("filament_colou?r").split(";")]
+    weights = [_as_float(w) for w in value(r"filament used \[g\]").split(",") if w.strip()]
+    used = [i for i, w in enumerate(weights) if w > 0] or list(range(len(types)))
+    return [{"filament": i + 1, "type": types[i] if i < len(types) else "",
+             "color": colors[i] if i < len(colors) else ""} for i in used]
+
+
+def suggest_mapping(filaments, slots):
+    """For each filament, the loaded slot of its material with the nearest color, preferring unused slots."""
+    chosen, used = {}, set()
+    ace = [s for s in slots if s["slot"] != "external"]
+    for f in filaments:
+        same = [s for s in (ace or slots) if normalize_material(s["type"]) == normalize_material(f["type"])]
+        if not same and len(filaments) == 1:
+            same = [s for s in slots if normalize_material(s["type"]) == normalize_material(f["type"])]
+        if not same:
+            continue
+        frgb = _rgb(f["color"])
+
+        def distance(s):
+            srgb = _rgb(s["color"])
+            return sum((a - b) ** 2 for a, b in zip(frgb, srgb)) if frgb and srgb else 10 ** 6
+
+        best = min(same, key=lambda s: (s["slot"] in used, distance(s)))
+        chosen[f["filament"]] = best
+        used.add(best["slot"])
+    return chosen
+
+
+def resolve_mapping(filaments, slots, mapping):
+    """The slot of each filament: those the user gave, the rest suggested. Raises ValueError with the problem."""
+    by_number = {s["slot"]: s for s in slots}
+    numbers = {f["filament"] for f in filaments}
+    chosen = {}
+    for entry in mapping or []:
+        if not isinstance(entry, dict) or "filament" not in entry or "slot" not in entry:
+            raise ValueError('Each mapping entry needs "filament" and "slot", such as {"filament": 1, "slot": 3}')
+        number = _as_int(entry["filament"], 0)
+        slot_key = "external" if str(entry["slot"]).strip().lower() == "external" else _as_int(entry["slot"], 0)
+        if number not in numbers:
+            raise ValueError(f"The print has no filament {entry['filament']}; it uses {sorted(numbers)}")
+        if slot_key not in by_number:
+            raise ValueError(f"Slot {entry['slot']} is empty or does not exist; loaded: "
+                             + ", ".join(str(s["slot"]) for s in slots))
+        chosen[number] = by_number[slot_key]
+    suggested = suggest_mapping([f for f in filaments if f["filament"] not in chosen], slots)
+    for number, slot in suggested.items():
+        chosen.setdefault(number, slot)
+    problems = []
+    for f in filaments:
+        slot = chosen.get(f["filament"])
+        if slot is None:
+            problems.append(f"no loaded slot holds {f['type']} for filament {f['filament']}")
+        elif normalize_material(slot["type"]) != normalize_material(f["type"]):
+            problems.append(f"filament {f['filament']} is {f['type']} but slot {slot['slot']} holds {slot['type']}")
+        elif slot["slot"] == "external" and len(filaments) > 1:
+            problems.append("the external spool can only print a single-filament print")
+    if problems:
+        raise ValueError("Cannot map the filaments: " + "; ".join(problems) + ".")
+    return chosen
+
+
+def mapping_summary(filaments, chosen):
+    return [{"filament": f["filament"], "filament_type": f["type"], "filament_color": f["color"],
+             "slot": chosen[f["filament"]]["slot"], "slot_type": chosen[f["filament"]]["type"],
+             "slot_color": chosen[f["filament"]]["color"]} for f in filaments]
+
+
+def ams_box_mapping(filaments, chosen, slots):
+    """The print start's ams_box_mapping, as the send dialog builds it: the mapped filaments, then the
+    other ACE slots up to the four entries the firmware expects."""
+    def color(c):
+        rgb = _rgb(c) or (255, 255, 255)
+        return [rgb[0], rgb[1], rgb[2], 255]
+
+    if any(chosen[f["filament"]]["slot"] == "external" for f in filaments):
+        return []
+    mapping = [{"ams_index": chosen[f["filament"]]["slot_id"], "paint_index": f["filament"] - 1,
+                "material_type": chosen[f["filament"]]["type"], "ams_color": color(chosen[f["filament"]]["color"]),
+                "paint_color": color(f["color"])} for f in filaments]
+    mapped = {m["ams_index"] for m in mapping}
+    paints = {m["paint_index"] for m in mapping}
+    next_paint = 0
+    for s in slots:
+        if len(mapping) >= 4:
+            break
+        if s["slot"] == "external" or s["slot_id"] in mapped:
+            continue
+        while next_paint in paints:
+            next_paint += 1
+        mapping.append({"ams_index": s["slot_id"], "paint_index": next_paint, "material_type": s["type"],
+                        "ams_color": color(s["color"]), "paint_color": color(s["color"])})
+        mapped.add(s["slot_id"])
+        paints.add(next_paint)
+    return mapping
+
+
 def _default_ams_mapping(use_ams=True):
     """1-to-1 ACE/rack slot mapping built from current telemetry (mirrors start_print_job)."""
     ams_mapping = []
@@ -2009,7 +2188,7 @@ def _default_ams_mapping(use_ams=True):
     return ams_mapping
 
 
-def upload_and_start_print_file(content_bytes, raw_filename, use_ams=True, task_settings=None):
+def upload_and_start_print_file(content_bytes, raw_filename, use_ams=True, task_settings=None, ams_mapping=None):
     """Upload a user-picked .gcode/.3mf over HTTP, then start it via MQTT as a local task.
 
     Transport mirrors the proven Remote Print path: the file bytes travel over HTTP
@@ -2080,7 +2259,8 @@ def upload_and_start_print_file(content_bytes, raw_filename, use_ams=True, task_
     if parsed_cost:
         record_job_cost(start_name, *parsed_cost)
 
-    ams_mapping = _default_ams_mapping(use_ams)
+    if ams_mapping is None:
+        ams_mapping = _default_ams_mapping(use_ams)
     ts = task_settings or {}
     auto_leveling = 1 if ts.get("auto_leveling", 1) else 0
     vibration_compensation = 1 if ts.get("vibration_compensation", 0) else 0

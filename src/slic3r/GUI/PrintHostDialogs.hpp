@@ -307,6 +307,29 @@ private:
     const char* CONFIG_KEY_IFS       = "flashforge_use_material_station";
 };
 
+// The print options the Anycubic send dialog offers, as last chosen there.
+struct AnycubicSendOptions
+{
+    bool        auto_leveling{true};
+    bool        resonance_compensation{false};
+    bool        flow_calibration{false};
+    bool        timelapse{false};
+    bool        pre_engage_filament{true};
+    bool        skip_first_toolchange{true};
+    std::string skip_first_toolchange_script{"M83\nG28 X\nG1 E40 F300\nM106 S229\nM400 P2000\nG1 X20 F15000\nG28 X"};
+    bool        save_dev_copy{false};
+
+    static AnycubicSendOptions load();
+};
+
+// The extended info of an Anycubic print upload: the options, and the ACE mapping of each project
+// filament to the slot at the same index of selected_slot_ids. Empty when a slot does not exist,
+// or when a mapped slot is not loaded or holds another material.
+std::map<std::string, std::string> anycubic_upload_info(const std::vector<Slic3r::AnycubicToolFilament>& tools,
+                                                        const std::vector<Slic3r::AnycubicMaterialSlot>& slots,
+                                                        const std::vector<int>&                          selected_slot_ids,
+                                                        const AnycubicSendOptions&                       options);
+
 class AnycubicPrintHostSendDialog : public PrintHostSendDialog
 {
 public:

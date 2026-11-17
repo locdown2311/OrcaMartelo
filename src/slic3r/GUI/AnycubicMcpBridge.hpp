@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 #include <wx/event.h>
@@ -30,7 +31,8 @@ private:
     void run(long long id, const std::string &kind, const nlohmann::json &args);
     void answer(long long id, const nlohmann::json &answer);
     void take_snapshot(long long id, std::string url);
-    void start_slice(long long id, const nlohmann::json &args, bool export_gcode);
+    // Slices a plate when needed and answers its estimate, or sends it to the printer when send is set.
+    void start_slice(long long id, const nlohmann::json &args, bool send);
     void check_slice();
 
     wxTimer                           m_retry;
@@ -42,10 +44,11 @@ private:
     // The slice an MCP request waits for; id 0 when none.
     struct PendingSlice
     {
-        long long id{0};
-        int       plate{0};
-        bool      export_gcode{false};
-        int       ticks{0};
+        long long        id{0};
+        int              plate{0};
+        int              ticks{0};
+        bool             send{false};
+        std::vector<int> slot_ids; // For send: the ACE slot of each filament of the plate.
     } m_slice;
 };
 
