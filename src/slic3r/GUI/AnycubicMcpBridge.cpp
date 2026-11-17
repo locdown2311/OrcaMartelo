@@ -54,7 +54,8 @@ constexpr int         RETRY_MS         = 5000;
 constexpr int         MAX_WIDTH        = 1280;
 // The first frames after joining a live H.264 stream can be partly gray; a few frames later the picture is whole.
 constexpr int         FRAMES_TO_SKIP   = 2;
-constexpr auto        CAPTURE_DEADLINE = std::chrono::seconds(12);
+// The bridge answers once the printer's camera has started, which can take up to 20 seconds.
+constexpr auto        CAPTURE_DEADLINE = std::chrono::seconds(28);
 
 struct Interrupt
 {
@@ -88,8 +89,8 @@ std::string capture_video_frame_jpeg(const std::string &url, int max_width, std:
     AVDictionary *options = nullptr;
     av_dict_set(&options, "probesize", "5000000", 0);
     av_dict_set(&options, "analyzeduration", "2000000", 0);
-    av_dict_set(&options, "rw_timeout", "5000000", 0);
-    av_dict_set(&options, "timeout", "5000000", 0);
+    av_dict_set(&options, "rw_timeout", "25000000", 0);
+    av_dict_set(&options, "timeout", "25000000", 0);
     const int opened = avformat_open_input(&format, url.c_str(), nullptr, &options); // Frees format on failure.
     av_dict_free(&options);
 

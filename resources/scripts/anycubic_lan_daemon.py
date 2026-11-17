@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+import http.client
 import json
 import base64
 import random
@@ -789,7 +790,7 @@ def parse_cost_from_bytes(content_bytes):
 # Requests the MCP server hands to the slicer: a camera frame the bundled Python cannot decode,
 # a confirmation the user answers in OrcaMartelo, and the slicer tools. The slicer holds a long
 # poll on /slicer/wait, runs each request and posts its answer to /slicer/result.
-SNAPSHOT_TIMEOUT = 15
+SNAPSHOT_TIMEOUT = 32  # The camera may need FLV_START_TIMEOUT to start, then a few frames.
 SNAPSHOT_MAX_BYTES = 8 * 1024 * 1024
 SLICER_TIMEOUT = 30
 CONFIRM_TIMEOUT = 120
@@ -2099,6 +2100,253 @@ def send_video_command(action_name):
     print(f"[Bridge] Published {action_name} to video topics")
 
 
+# The printer's own camera streams H.264 in FLV from port 18088 once it gets startCapture.
+# All viewers (the Device tab, a reconnecting player, MCP snapshots) share one connection
+# to it: the camera serves few clients and is slow to start, so a second connection or a
+# quick reconnect used to fail while the first one was still open. A new viewer gets the
+# stream header and the codec headers, then the stream from its next keyframe. When the
+# printer drops the stream, the relay reconnects and keeps the timestamps going forward,
+# so players see one continuous stream.
+FLV_CONNECT_TIMEOUT = 3
+FLV_READ_TIMEOUT = 10        # No data for this long: the stream stalled; reconnect.
+FLV_START_TIMEOUT = 20       # The camera can take this long to start after startCapture.
+FLV_IDLE_CLOSE = 15          # Keep the stream this long after the last viewer, for a quick reconnect.
+FLV_KEEPALIVE = 20           # The printer stops the camera without a periodic startCapture.
+FLV_CLIENT_MAX_BYTES = 8 * 1024 * 1024  # A viewer this far behind is dropped; it reconnects.
+
+
+def _flv_tag(tag_type, body, timestamp):
+    ts = max(0, int(timestamp)) & 0xFFFFFFFF
+    header = bytes([tag_type]) + len(body).to_bytes(3, "big") + (ts & 0xFFFFFF).to_bytes(3, "big") + bytes([ts >> 24]) + b"\x00\x00\x00"
+    return header + body + (11 + len(body)).to_bytes(4, "big")
+
+
+class _RelayClient:
+    def __init__(self):
+        self.chunks = []
+        self.size = 0
+        self.closed = False
+        self.waiting_keyframe = True
+        self.video_seq = None
+        self.audio_seq = None
+
+    def push(self, data):
+        self.chunks.append(data)
+        self.size += len(data)
+        if self.size > FLV_CLIENT_MAX_BYTES:
+            self.closed = True
+
+
+class FlvRelay:
+    def __init__(self, url_fn, open_fn=None):
+        self.url_fn = url_fn
+        self.open_fn = open_fn or self._open
+        self.cond = threading.Condition()
+        self.clients = set()
+        self.header = None
+        self.meta = None
+        self.video_seq = None
+        self.audio_seq = None
+        self.thread = None
+        self.error = ""
+        self.idle_since = time.time()
+        self.starting = 0
+        self.new_segment = True
+        self.last_ts = -1
+        self.frame_gap = 40
+        self.offset = None
+
+    # Viewers.
+
+    def attach(self, timeout=FLV_START_TIMEOUT):
+        """A new viewer, once the stream has started. Raises ValueError when the camera does not start."""
+        client = _RelayClient()
+        with self.cond:
+            # Counted while it waits, so the stream does not close as unwatched meanwhile.
+            self.starting += 1
+            try:
+                if self.thread is None or not self.thread.is_alive():
+                    self.error = ""
+                    self.thread = threading.Thread(target=self._run, daemon=True)
+                    self.thread.start()
+                started = self.cond.wait_for(lambda: self.header is not None, timeout)
+            finally:
+                self.starting -= 1
+                self.idle_since = time.time()
+            if not started:
+                raise ValueError(self.error or "the camera did not start")
+            # The stream header goes first; tags reach the viewer only from here on.
+            client.push(self.header)
+            if self.meta:
+                client.push(self.meta)
+            self.clients.add(client)
+        return client
+
+    def detach(self, client):
+        with self.cond:
+            self.clients.discard(client)
+            if not self.clients:
+                self.idle_since = time.time()
+
+    def read(self, client, timeout=FLV_READ_TIMEOUT * 2):
+        """The next bytes for a viewer, or None when it is dropped or nothing came in timeout seconds."""
+        with self.cond:
+            self.cond.wait_for(lambda: client.chunks or client.closed, timeout)
+            if not client.chunks:
+                return None
+            data = b"".join(client.chunks)
+            client.chunks = []
+            client.size = 0
+            return data
+
+    # The printer side.
+
+    def _open(self, url):
+        parsed = urllib.parse.urlparse(url)
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=FLV_CONNECT_TIMEOUT)
+        conn.connect()
+        conn.sock.settimeout(FLV_READ_TIMEOUT)  # Then reads wait this long for data before the stream counts as stalled.
+        conn.request("GET", (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else ""),
+                     headers={"User-Agent": "AnycubicSlicerNext/2.0.0.2"})
+        resp = conn.getresponse()
+        if resp.status != 200:
+            conn.close()
+            raise OSError(f"the camera answered HTTP {resp.status}")
+        return resp
+
+    def _idle(self):
+        with self.cond:
+            return not self.clients and not self.starting and time.time() - self.idle_since > FLV_IDLE_CLOSE
+
+    def _run(self):
+        failures = 0
+        while not shutdown_event.is_set() and not self._idle():
+            try:
+                self._stream_once()
+                failures = 0
+            except Exception as e:
+                failures += 1
+                with self.cond:
+                    self.error = str(e) or e.__class__.__name__
+                    for c in self.clients:
+                        c.waiting_keyframe = True
+                    self.cond.notify_all()
+                print(f"[Bridge] Camera stream interrupted: {self.error}")
+            time.sleep(min(5.0, 0.5 * failures))
+        with self.cond:
+            self.header = None
+            self.meta = None
+            self.thread = None
+            self.cond.notify_all()
+        send_video_command("stopCapture")
+        print("[Bridge] Camera stream closed: no viewers")
+
+    def _connect(self):
+        """Ask the printer to start the camera and connect as soon as it serves the stream."""
+        deadline = time.time() + FLV_START_TIMEOUT
+        last_error = None
+        send_video_command("startCapture")
+        while time.time() < deadline and not shutdown_event.is_set():
+            try:
+                return self.open_fn(self.url_fn())
+            except Exception as e:
+                last_error = e
+                time.sleep(0.7)
+                if self._idle():
+                    break
+        raise OSError(f"no camera stream at {self.url_fn()} ({last_error})")
+
+    @staticmethod
+    def _read_exact(resp, n):
+        data = b""
+        while len(data) < n:
+            chunk = resp.read(n - len(data))
+            if not chunk:
+                raise EOFError("the camera closed the stream")
+            data += chunk
+        return data
+
+    def _stream_once(self):
+        resp = self._connect()
+        try:
+            head = self._read_exact(resp, 9)
+            if head[:3] != b"FLV":
+                raise ValueError("the camera stream is not FLV")
+            self._read_exact(resp, int.from_bytes(head[5:9], "big") - 9 + 4)
+            with self.cond:
+                if self.header is None:
+                    self.header = head[:5] + (9).to_bytes(4, "big") + b"\x00\x00\x00\x00"
+                self.error = ""
+                self.cond.notify_all()
+            with self.cond:
+                self.new_segment = True
+            last_keepalive = time.time()
+            while not self._idle():
+                h = self._read_exact(resp, 11)
+                tag_type = h[0] & 0x1F
+                size = int.from_bytes(h[1:4], "big")
+                ts = int.from_bytes(h[4:7], "big") | (h[7] << 24)
+                body = self._read_exact(resp, size)
+                self._read_exact(resp, 4)
+                if time.time() - last_keepalive > FLV_KEEPALIVE:
+                    send_video_command("startCapture")
+                    last_keepalive = time.time()
+                self._on_tag(tag_type, body, ts)
+        finally:
+            resp.close()
+
+    def _on_tag(self, tag_type, body, ts):
+        with self.cond:
+            if tag_type == 18:
+                if self.meta is None:
+                    self.meta = _flv_tag(18, body, 0)
+                return
+            is_video = tag_type == 9 and len(body) >= 2
+            if is_video and (body[0] & 0x0F) == 7 and body[1] == 0:
+                self.video_seq = _flv_tag(9, body, 0)
+                for c in self.clients:
+                    if not c.waiting_keyframe and c.video_seq != self.video_seq:
+                        c.push(self.video_seq)
+                        c.video_seq = self.video_seq
+                self.cond.notify_all()
+                return
+            if tag_type == 8 and len(body) >= 2 and (body[0] >> 4) == 10 and body[1] == 0:
+                self.audio_seq = _flv_tag(8, body, 0)
+                return
+            if tag_type not in (8, 9):
+                return
+            # Timestamps keep rising across reconnects and camera restarts.
+            if self.new_segment or self.offset is None or ts + self.offset < self.last_ts - 1000:
+                # One frame after the last one sent.
+                self.offset = (self.last_ts + self.frame_gap if self.last_ts >= 0 else 0) - ts
+                self.new_segment = False
+            out_ts = max(0, ts + self.offset)
+            if is_video and 0 < out_ts - self.last_ts <= 1000:
+                self.frame_gap = out_ts - self.last_ts
+            self.last_ts = max(self.last_ts, out_ts)
+            tag = _flv_tag(tag_type, body, out_ts)
+            keyframe = is_video and (body[0] >> 4) == 1
+            for c in self.clients:
+                if c.waiting_keyframe:
+                    if not keyframe or self.video_seq is None:
+                        continue
+                    c.waiting_keyframe = False
+                    for seq, attr in ((self.video_seq, "video_seq"), (self.audio_seq, "audio_seq")):
+                        if seq is not None and getattr(c, attr) != seq:
+                            c.push(seq)
+                            setattr(c, attr, seq)
+                c.push(tag)
+            self.cond.notify_all()
+
+
+def native_camera_url():
+    url = telemetry.get("raw_camera_url") or ""
+    return url if url.startswith("http") else f"http://{PRINTER_IP}:18088/flv"
+
+
+camera_relay = FlvRelay(native_camera_url)
+
+
 def perform_control(data):
     """Run one /control action. Returns the JSON answer."""
     result = {"status": "ok", "ip": PRINTER_IP}
@@ -2180,7 +2428,9 @@ def perform_control(data):
         send_video_command("startCapture")
 
     elif action == "stop_capture" or action == "video_stop":
-        send_video_command("stopCapture")
+        # While the shared stream runs, it stops the camera itself once its last viewer is gone.
+        if camera_relay.thread is None:
+            send_video_command("stopCapture")
 
     elif action == "speed":
         mode = int(data.get("mode", 2))
@@ -2599,6 +2849,102 @@ def perform_control(data):
 
 
 class BridgeServer(BaseHTTPRequestHandler):
+    def _send_stream_headers(self, content_type):
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+    def _send_camera_error(self, message):
+        self.send_response(502)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(message.encode("utf-8", errors="replace"))
+
+    def serve_camera(self):
+        query_params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        param_url = query_params.get("url", [""])[0]
+        custom_url = telemetry.get("custom_camera_url") or ""
+        upstream_url = param_url or custom_url
+        if upstream_url and not upstream_url.startswith("http"):
+            upstream_url = ""
+
+        if not upstream_url:
+            # The printer's own camera, shared by every viewer.
+            try:
+                client = camera_relay.attach()
+            except ValueError as e:
+                if self._serve_direct_camera(None, fallback_only=True):
+                    return
+                self._send_camera_error(f"Failed to start the printer camera: {e}")
+                return
+            try:
+                self._send_stream_headers("video/x-flv")
+                while True:
+                    data = camera_relay.read(client)
+                    if data is None:
+                        break
+                    self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError, socket.error):
+                pass
+            except Exception as e:
+                print(f"[Bridge] Camera proxy exception: {e}")
+            finally:
+                camera_relay.detach(client)
+            return
+
+        if not self._serve_direct_camera(upstream_url):
+            self._send_camera_error("Failed to connect to the camera stream at " + upstream_url)
+
+    def _serve_direct_camera(self, url, fallback_only=False):
+        """Relay a custom camera (MJPEG and the like) to this viewer alone. With fallback_only,
+        try the MJPEG ports a camera add-on on the printer may serve. Returns False when none answers."""
+        urls = [url] if url else []
+        if fallback_only:
+            urls = [f"http://{PRINTER_IP}:{port}/?action=stream" for port in (8080, 8000)]
+        resp = None
+        for candidate in urls:
+            for _ in range(1 if fallback_only else 3):
+                try:
+                    parsed = urllib.parse.urlparse(candidate)
+                    conn_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+                    conn = conn_cls(parsed.hostname, parsed.port, timeout=FLV_CONNECT_TIMEOUT)
+                    conn.connect()
+                    conn.sock.settimeout(FLV_READ_TIMEOUT)
+                    conn.request("GET", (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else ""),
+                                 headers={"User-Agent": "AnycubicSlicerNext/2.0.0.2"})
+                    r = conn.getresponse()
+                    if r.status == 200:
+                        resp = r
+                        break
+                    conn.close()
+                except Exception:
+                    time.sleep(0.5)
+            if resp:
+                break
+        if resp is None:
+            return False
+        try:
+            self._send_stream_headers(resp.headers.get("Content-Type", "video/x-flv"))
+            with resp:
+                while True:
+                    chunk = resp.read1(65536) if hasattr(resp, "read1") else resp.read(16384)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, socket.error):
+            pass
+        except Exception as e:
+            print(f"[Bridge] Camera proxy exception: {e}")
+        return True
+
     def authorized(self):
         token = self.headers.get("X-OrcaCubic-Token", "")
         if not token:
@@ -2644,90 +2990,7 @@ class BridgeServer(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok", "ip": PRINTER_IP}).encode("utf-8"))
         elif self.path.startswith("/camera"):
-            parsed_url = urllib.parse.urlparse(self.path)
-            query_params = urllib.parse.parse_qs(parsed_url.query)
-            param_url = query_params.get("url", [""])[0]
-
-            upstream_url = (
-                param_url or
-                telemetry.get("custom_camera_url") or
-                telemetry.get("raw_camera_url") or
-                f"http://{PRINTER_IP}:18088/flv"
-            )
-            if not upstream_url.startswith("http"):
-                upstream_url = f"http://{PRINTER_IP}:18088/flv"
-
-            is_native = "18088" in upstream_url
-            if is_native:
-                send_video_command("startCapture")
-
-            connected_resp = None
-            # Retry up to 8 times with 0.5s interval (4s total) so the printer has time to launch camera daemon
-            retries = 8 if is_native else 2
-            for _ in range(retries):
-                try:
-                    req = urllib.request.Request(upstream_url, headers={"User-Agent": "AnycubicSlicerNext/2.0.0.2"})
-                    resp = urllib.request.urlopen(req, timeout=1.5)
-                    if resp.status == 200:
-                        connected_resp = resp
-                        break
-                except Exception:
-                    time.sleep(0.5)
-
-            # If native 18088 failed, check if mjpg-streamer or acproxycam is running on ports 8080 or 8000
-            if not connected_resp and is_native and not param_url and not telemetry.get("custom_camera_url"):
-                for fallback_port in (8080, 8000):
-                    try:
-                        fb_url = f"http://{PRINTER_IP}:{fallback_port}/?action=stream"
-                        req = urllib.request.Request(fb_url, headers={"User-Agent": "AnycubicSlicerNext/2.0.0.2"})
-                        resp = urllib.request.urlopen(req, timeout=1.0)
-                        if resp.status == 200:
-                            connected_resp = resp
-                            upstream_url = fb_url
-                            break
-                    except Exception:
-                        pass
-
-            if not connected_resp:
-                self.send_response(502)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Content-Type", "text/plain")
-                self.end_headers()
-                self.wfile.write(b"Failed to connect to printer camera stream at " + upstream_url.encode())
-                return
-
-            content_type = "video/x-flv"
-            if connected_resp and hasattr(connected_resp, "headers"):
-                content_type = connected_resp.headers.get("Content-Type", "video/x-flv")
-
-            try:
-                self.send_response(200)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "*")
-                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-                self.send_header("Pragma", "no-cache")
-                self.send_header("Expires", "0")
-                self.send_header("Connection", "close")
-                self.end_headers()
-
-                last_keepalive = time.time()
-                with connected_resp:
-                    while True:
-                        chunk = connected_resp.read(16384)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        now = time.time()
-                        if now - last_keepalive > 20:
-                            if is_native:
-                                send_video_command("startCapture")
-                            last_keepalive = now
-            except (BrokenPipeError, ConnectionResetError, socket.error):
-                pass
-            except Exception as e:
-                print(f"[Bridge] Camera proxy exception: {e}")
+            self.serve_camera()
         elif not self.require_authorized():
             return
         elif self.path.startswith("/mcp/info"):

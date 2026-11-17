@@ -2231,60 +2231,40 @@
         // Camera is opt-in. Loading/reloading the Device tab must never start it.
         let userStoppedCamera = true;
 
-        async function toggleCameraStream() {
-            if (isCameraStreaming) {
-                await stopCameraStream();
-            } else {
-                await startCameraStream();
-            }
-        }
+        // The stream reconnects by itself until the user stops it: after an error, when the
+        // stream ends, and when no frame has been decoded for CAM_STALL_MS.
+        const CAM_STALL_MS = 10000;
+        const CAM_MAX_LATENCY_S = 1.5;
+        let camReconnectTimer = null;
+        let camWatchdogTimer = null;
+        let camRetries = 0;
+        let camLastFrames = 0;
+        let camLastProgress = 0;
 
-        async function startCameraStream() {
-            userStoppedCamera = false;
+        function setCameraUi(state, message) {
             const btn = document.getElementById("btn-cam-stream");
-            if (btn) btn.innerText = "⏳ Connecting...";
             const tag = document.getElementById("camera-status-tag");
-            if (tag) tag.innerText = "Connecting";
             const placeholderSpan = document.querySelector("#cam-placeholder span");
-            if (placeholderSpan) placeholderSpan.innerText = "Connecting to camera stream...";
-
-            try {
-                await fetch("http://127.0.0.1:18988/control", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ action: "start_capture" })
-                });
-            } catch(e) {
-                console.error("start_capture error:", e);
-            }
-
-            const savedPreset = localStorage.getItem("orca_ac_cam_preset") || "auto";
-            const savedCustom = localStorage.getItem("orca_ac_custom_cam_url") || "";
-            let streamUrl = activeCameraUrl || "http://127.0.0.1:18988/camera";
-            if ((savedPreset === "custom" || savedPreset === "mjpeg_8080") && savedCustom) {
-                streamUrl = savedCustom;
-            }
-
-            setTimeout(() => {
-                if (!userStoppedCamera) {
-                    initCameraStream(streamUrl);
-                }
-            }, 600);
-        }
-
-        async function stopCameraStream() {
-            userStoppedCamera = true;
-            isCameraStreaming = false;
-            const btn = document.getElementById("btn-cam-stream");
+            const live = state === "live";
             if (btn) {
-                btn.innerText = "▶ Start Stream";
-                btn.classList.remove("btn-danger");
+                btn.innerText = state === "stopped" ? "▶ Start Stream" : "⏹ Stop Stream";
+                btn.classList.toggle("btn-danger", state !== "stopped");
             }
-            const tag = document.getElementById("camera-status-tag");
-            if (tag) tag.innerText = "Stopped";
-            const placeholderSpan = document.querySelector("#cam-placeholder span");
-            if (placeholderSpan) placeholderSpan.innerText = "Camera stream stopped";
+            if (tag) tag.innerText = { live: "Live", connecting: "Connecting", reconnecting: "Reconnecting", stopped: "Stopped" }[state] || state;
+            if (placeholderSpan && message) placeholderSpan.innerText = message;
+            if (!live) document.getElementById("cam-placeholder").style.display = "flex";
+        }
 
+        function markCameraLive(element) {
+            camRetries = 0;
+            camLastProgress = Date.now();
+            isCameraStreaming = true;
+            document.getElementById("cam-placeholder").style.display = "none";
+            element.style.display = "block";
+            setCameraUi("live");
+        }
+
+        function destroyCameraPlayers() {
             if (flvPlayer) {
                 try {
                     flvPlayer.pause();
@@ -2295,15 +2275,84 @@
                 flvPlayer = null;
             }
             const videoElement = document.getElementById("cam-video");
-            if (videoElement) {
-                videoElement.style.display = "none";
-            }
+            if (videoElement) videoElement.style.display = "none";
             const imgElement = document.getElementById("cam-img");
             if (imgElement) {
+                imgElement.onload = null;
+                imgElement.onerror = null;
                 imgElement.src = "";
                 imgElement.style.display = "none";
             }
-            document.getElementById("cam-placeholder").style.display = "flex";
+        }
+
+        function clearCameraTimers() {
+            clearTimeout(camReconnectTimer);
+            camReconnectTimer = null;
+            clearInterval(camWatchdogTimer);
+            camWatchdogTimer = null;
+        }
+
+        function scheduleCameraReconnect(reason) {
+            if (userStoppedCamera || camReconnectTimer) return;
+            console.warn("Camera reconnect:", reason);
+            isCameraStreaming = false;
+            destroyCameraPlayers();
+            camRetries += 1;
+            const delay = Math.min(10000, 1000 * Math.pow(2, Math.min(camRetries - 1, 4)));
+            setCameraUi("reconnecting", `Camera connection lost. Reconnecting (attempt ${camRetries})...`);
+            camReconnectTimer = setTimeout(() => {
+                camReconnectTimer = null;
+                initCameraStream(activeCameraUrl);
+            }, delay);
+        }
+
+        function watchCamera() {
+            clearInterval(camWatchdogTimer);
+            camWatchdogTimer = setInterval(() => {
+                if (userStoppedCamera) return;
+                if (camLastProgress && Date.now() - camLastProgress > CAM_STALL_MS) {
+                    scheduleCameraReconnect("no new frame");
+                    return;
+                }
+                // A live view should not fall behind: skip to the newest buffered frame.
+                const video = document.getElementById("cam-video");
+                if (flvPlayer && video && video.buffered.length) {
+                    const end = video.buffered.end(video.buffered.length - 1);
+                    if (end - video.currentTime > CAM_MAX_LATENCY_S) video.currentTime = end - 0.3;
+                }
+            }, 2000);
+        }
+
+        async function toggleCameraStream() {
+            if (isCameraStreaming || !userStoppedCamera) {
+                await stopCameraStream();
+            } else {
+                await startCameraStream();
+            }
+        }
+
+        async function startCameraStream() {
+            userStoppedCamera = false;
+            camRetries = 0;
+            clearCameraTimers();
+            setCameraUi("connecting", "Connecting to camera stream...");
+
+            const savedPreset = localStorage.getItem("orca_ac_cam_preset") || "auto";
+            const savedCustom = localStorage.getItem("orca_ac_custom_cam_url") || "";
+            let streamUrl = activeCameraUrl || "http://127.0.0.1:18988/camera";
+            if ((savedPreset === "custom" || savedPreset === "mjpeg_8080") && savedCustom) {
+                streamUrl = savedCustom;
+            }
+            // The bridge starts the printer's camera and waits for it when the player connects.
+            initCameraStream(streamUrl);
+        }
+
+        async function stopCameraStream() {
+            userStoppedCamera = true;
+            isCameraStreaming = false;
+            clearCameraTimers();
+            destroyCameraPlayers();
+            setCameraUi("stopped", "Camera stream stopped");
 
             try {
                 await fetch("http://127.0.0.1:18988/control", {
@@ -2326,6 +2375,10 @@
             if (userStoppedCamera) return;
             const targetUrl = url || activeCameraUrl || "http://127.0.0.1:18988/camera";
             activeCameraUrl = targetUrl;
+            destroyCameraPlayers();
+            camLastFrames = 0;
+            camLastProgress = 0;
+            watchCamera();
             if (isMjpegUrl(targetUrl)) {
                 initMjpegVideo(targetUrl);
             } else {
@@ -2335,50 +2388,15 @@
 
         function initMjpegVideo(url) {
             if (userStoppedCamera) return;
-            if (flvPlayer) {
-                try {
-                    flvPlayer.pause();
-                    flvPlayer.unload();
-                    flvPlayer.detachMediaElement();
-                    flvPlayer.destroy();
-                } catch(e) {}
-                flvPlayer = null;
-            }
-            const videoElement = document.getElementById("cam-video");
             const imgElement = document.getElementById("cam-img");
-            if (videoElement) videoElement.style.display = "none";
             if (!imgElement) return;
-
+            // An MJPEG <img> gives no per-frame event after the first one, so only errors are watched.
             imgElement.onload = () => {
-                document.getElementById("cam-placeholder").style.display = "none";
-                imgElement.style.display = "block";
-                isCameraStreaming = true;
-                const btn = document.getElementById("btn-cam-stream");
-                if (btn) {
-                    btn.innerText = "⏹ Stop Stream";
-                    btn.classList.add("btn-danger");
-                }
-                const tag = document.getElementById("camera-status-tag");
-                if (tag) tag.innerText = "Live";
+                markCameraLive(imgElement);
+                camLastProgress = 0;
             };
-
-            imgElement.onerror = () => {
-                console.warn("MJPEG load error:", url);
-                isCameraStreaming = false;
-                const btn = document.getElementById("btn-cam-stream");
-                if (btn) {
-                    btn.innerText = "▶ Start Stream";
-                    btn.classList.remove("btn-danger");
-                }
-                const tag = document.getElementById("camera-status-tag");
-                if (tag) tag.innerText = "Stopped";
-                const placeholderSpan = document.querySelector("#cam-placeholder span");
-                if (placeholderSpan) placeholderSpan.innerText = "MJPEG stream offline. Check URL or reconnect.";
-                document.getElementById("cam-placeholder").style.display = "flex";
-                imgElement.style.display = "none";
-            };
-
-            imgElement.src = url;
+            imgElement.onerror = () => scheduleCameraReconnect("MJPEG stream offline");
+            imgElement.src = url + (url.includes("?") ? "&" : "?") + "_=" + Date.now();
         }
 
         function initFlvVideo(url) {
@@ -2386,76 +2404,48 @@
             if (!url) url = "http://127.0.0.1:18988/camera";
             activeCameraUrl = url;
             const videoElement = document.getElementById("cam-video");
-            const imgElement = document.getElementById("cam-img");
-            if (imgElement) {
-                imgElement.src = "";
-                imgElement.style.display = "none";
-            }
             if (!videoElement) return;
 
-            if (typeof flvjs !== "undefined" && flvjs.isSupported()) {
-                if (flvPlayer) {
-                    try {
-                        flvPlayer.pause();
-                        flvPlayer.unload();
-                        flvPlayer.detachMediaElement();
-                        flvPlayer.destroy();
-                    } catch(e) {}
-                    flvPlayer = null;
-                }
-                try {
-                    flvPlayer = flvjs.createPlayer({
-                        type: "flv",
-                        isLive: true,
-                        url: url,
-                        cors: true,
-                        hasAudio: false
-                    }, {
-                        enableWorker: false,
-                        enableStashBuffer: false,
-                        stashInitialSize: 128,
-                        lazyLoad: false,
-                        autoCleanupSourceBuffer: true,
-                        autoCleanupMaxBackwardDuration: 12,
-                        autoCleanupMinBackwardDuration: 6
-                    });
-                    flvPlayer.attachMediaElement(videoElement);
-                    flvPlayer.load();
-                    flvPlayer.play().then(() => {
-                        document.getElementById("cam-placeholder").style.display = "none";
-                        videoElement.style.display = "block";
-                        isCameraStreaming = true;
-                        const btn = document.getElementById("btn-cam-stream");
-                        if (btn) {
-                            btn.innerText = "⏹ Stop Stream";
-                            btn.classList.add("btn-danger");
-                        }
-                        const tag = document.getElementById("camera-status-tag");
-                        if (tag) tag.innerText = "Live";
-                    }).catch(e => {
-                        console.log("Play catch:", e);
-                    });
-
-                    flvPlayer.on(flvjs.Events.ERROR, (errType, errDetail, errInfo) => {
-                        console.warn("FLV Error:", errType, errDetail, errInfo);
-                        isCameraStreaming = false;
-                        const btn = document.getElementById("btn-cam-stream");
-                        if (btn) {
-                            btn.innerText = "▶ Start Stream";
-                            btn.classList.remove("btn-danger");
-                        }
-                        const tag = document.getElementById("camera-status-tag");
-                        if (tag) tag.innerText = "Stopped";
-                        const placeholderSpan = document.querySelector("#cam-placeholder span");
-                        if (placeholderSpan) placeholderSpan.innerText = "Stream offline. Click Reconnect to retry.";
-                        document.getElementById("cam-placeholder").style.display = "flex";
-                        if (videoElement) videoElement.style.display = "none";
-                    });
-                } catch(e) {
-                    console.error("Failed to init flv player:", e);
-                }
-            } else {
+            if (typeof flvjs === "undefined" || !flvjs.isSupported()) {
                 console.warn("flvjs not supported");
+                setCameraUi("stopped", "This view cannot play the camera stream.");
+                return;
+            }
+            try {
+                flvPlayer = flvjs.createPlayer({
+                    type: "flv",
+                    isLive: true,
+                    url: url,
+                    cors: true,
+                    hasAudio: false
+                }, {
+                    enableWorker: false,
+                    enableStashBuffer: false,
+                    stashInitialSize: 128,
+                    lazyLoad: false,
+                    autoCleanupSourceBuffer: true,
+                    autoCleanupMaxBackwardDuration: 12,
+                    autoCleanupMinBackwardDuration: 6
+                });
+                flvPlayer.attachMediaElement(videoElement);
+                // Live once frames are decoded, not when play() resolves: that happens before any data.
+                flvPlayer.on(flvjs.Events.STATISTICS_INFO, info => {
+                    if (info && info.decodedFrames > camLastFrames) {
+                        if (!isCameraStreaming) markCameraLive(videoElement);
+                        camLastFrames = info.decodedFrames;
+                        camLastProgress = Date.now();
+                    }
+                });
+                flvPlayer.on(flvjs.Events.ERROR, (errType, errDetail) => scheduleCameraReconnect(`${errType} ${errDetail}`));
+                flvPlayer.on(flvjs.Events.LOADING_COMPLETE, () => scheduleCameraReconnect("stream ended"));
+                flvPlayer.load();
+                // Nothing at all within the stall time counts as a failed attempt too.
+                camLastProgress = Date.now();
+                const play = flvPlayer.play();
+                if (play && play.catch) play.catch(e => console.log("Play catch:", e));
+            } catch(e) {
+                console.error("Failed to init flv player:", e);
+                scheduleCameraReconnect("player error");
             }
         }
 
@@ -3608,9 +3598,6 @@
                             activeCameraUrl = data.camera_url;
                         } else if (savedCustom) {
                             activeCameraUrl = savedCustom;
-                        }
-                        if (!flvPlayer && !isCameraStreaming && !userStoppedCamera) {
-                            initCameraStream(activeCameraUrl);
                         }
                     }
                     if (data.active_slot !== undefined && Number(data.active_slot) >= 0) {

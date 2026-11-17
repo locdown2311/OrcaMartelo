@@ -1,0 +1,39 @@
+# Anycubic printer camera
+
+The Device tab, the MCP camera snapshot and anything else that shows the printer's camera read it through the LAN bridge (`resources/scripts/anycubic_lan_daemon.py`) at `http://127.0.0.1:18988/camera`.
+
+## The printer's own camera
+
+The printer serves its camera as H.264 in FLV at `http://<printer>:18088/flv`, but only after an MQTT `startCapture`. Two things about it shape the design:
+
+- It can take many seconds to start.
+- It serves few viewers at a time. A second connection, or a reconnect while the previous connection is still open, is refused.
+
+`FlvRelay` therefore keeps one connection to the printer and shares it with every viewer.
+
+- **Starting.** The first viewer starts the stream. The relay sends `startCapture` and retries the connection for up to `FLV_START_TIMEOUT` before the viewer gets an error. It repeats `startCapture` every `FLV_KEEPALIVE` seconds while streaming, since the printer otherwise stops the camera.
+- **New viewers.** The relay parses the FLV tags. A new viewer receives the stream header and the metadata tag first. Then, at the next keyframe, it receives the cached AVC (and AAC) sequence headers followed by that keyframe and the frames after it. It never starts on a frame that depends on one it did not see.
+- **Drops and stalls.** When the printer closes the stream, or sends nothing for `FLV_READ_TIMEOUT`, the relay reconnects and viewers wait for the next keyframe. The relay rewrites timestamps so they keep rising by one frame interval across the gap, and players see one continuous stream rather than a restart they would stall on.
+- **Closing.** After the last viewer leaves, the relay keeps the connection for `FLV_IDLE_CLOSE` seconds, so a reconnecting player or a snapshot finds it warm. Then it closes and sends `stopCapture`. The Device tab's own stop request does nothing while the relay runs.
+- **Slow viewers.** A viewer more than `FLV_CLIENT_MAX_BYTES` behind is dropped and reconnects. It does not hold the others back.
+
+Connections use a short connect timeout and a separate read timeout. One timeout for both used to end healthy streams at the first pause in the data.
+
+When the printer's camera does not start, the bridge tries the MJPEG ports a camera add-on may serve (8080, 8000) for that viewer.
+
+## Custom cameras
+
+A custom URL from the Device tab's camera settings (typically MJPEG) is relayed to each viewer separately, with the same timeouts. MJPEG servers handle many clients.
+
+## The Device tab player
+
+The player in `resources/web/anycubic/workbench.html` uses flv.js for FLV and an `<img>` for MJPEG. Once the user starts it, it reconnects by itself until the user stops it:
+
+- after a player error or the end of the stream;
+- when no new frame has been decoded for `CAM_STALL_MS`.
+
+Retries back off from 1 to 10 seconds. The player shows Live only once frames are decoded. It skips ahead when it falls more than `CAM_MAX_LATENCY_S` behind the newest buffered frame.
+
+## The bridge process
+
+The camera, the notifications and MCP all depend on the bridge process. The slicer starts it when an Anycubic printer is selected, and a watchdog in `AnycubicLink.cpp` checks every five seconds that it still runs. If the process has ended and no other OrcaMartelo window serves the same printer, the watchdog starts it again.

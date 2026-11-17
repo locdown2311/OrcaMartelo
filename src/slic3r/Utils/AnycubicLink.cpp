@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <sstream>
 #include <thread>
@@ -52,6 +54,15 @@ std::mutex g_anycubic_bridge_mutex;
 std::unique_ptr<boost::process::child> g_anycubic_bridge_process;
 std::string g_anycubic_bridge_host;
 std::string g_anycubic_bridge_token;
+
+// Restarts the bridge when its process ends while a printer is configured: the
+// camera, notifications and MCP all go through it, and nothing else starts it
+// again until the printer preset changes.
+constexpr auto          ANYCUBIC_BRIDGE_WATCH_INTERVAL = std::chrono::seconds(5);
+std::mutex              g_anycubic_watchdog_mutex;
+std::condition_variable g_anycubic_watchdog_cv;
+std::thread             g_anycubic_watchdog;
+bool                    g_anycubic_watchdog_stop = false;
 
 fs::path anycubic_bridge_token_path()
 {
@@ -183,6 +194,60 @@ bool ensure_anycubic_bridge(const std::string& host)
         g_anycubic_bridge_token.clear();
         return false;
     }
+}
+
+void revive_anycubic_bridge()
+{
+    std::string host;
+    {
+        std::lock_guard<std::mutex> lock(g_anycubic_bridge_mutex);
+        if (g_anycubic_bridge_host.empty())
+            return;
+        if (g_anycubic_bridge_process) {
+            if (g_anycubic_bridge_process->running())
+                return;
+            g_anycubic_bridge_process->wait(); // Reap it before starting another.
+            g_anycubic_bridge_process.reset();
+        }
+        host = g_anycubic_bridge_host;
+    }
+    // A bridge of another OrcaMartelo window for the same printer serves this one too.
+    if (local_anycubic_bridge_matches(host))
+        return;
+    BOOST_LOG_TRIVIAL(warning) << "[AnycubicLink] The LAN bridge stopped; starting it again";
+    ensure_anycubic_bridge(host);
+}
+
+void start_anycubic_bridge_watchdog()
+{
+    std::lock_guard<std::mutex> lock(g_anycubic_watchdog_mutex);
+    if (g_anycubic_watchdog.joinable())
+        return;
+    g_anycubic_watchdog_stop = false;
+    g_anycubic_watchdog      = std::thread([]() {
+        std::unique_lock<std::mutex> lock(g_anycubic_watchdog_mutex);
+        while (!g_anycubic_watchdog_cv.wait_for(lock, ANYCUBIC_BRIDGE_WATCH_INTERVAL, [] { return g_anycubic_watchdog_stop; })) {
+            lock.unlock();
+            try {
+                revive_anycubic_bridge();
+            } catch (const std::exception &error) {
+                BOOST_LOG_TRIVIAL(error) << "[AnycubicLink] Could not restart the LAN bridge: " << error.what();
+            }
+            lock.lock();
+        }
+    });
+}
+
+void stop_anycubic_bridge_watchdog()
+{
+    {
+        std::lock_guard<std::mutex> lock(g_anycubic_watchdog_mutex);
+        g_anycubic_watchdog_stop = true;
+    }
+    g_anycubic_watchdog_cv.notify_all();
+    // Joined without the bridge lock: the watchdog may be waiting for it in ensure_anycubic_bridge().
+    if (g_anycubic_watchdog.joinable() && g_anycubic_watchdog.get_id() != std::this_thread::get_id())
+        g_anycubic_watchdog.join();
 }
 
 } // namespace
@@ -1397,11 +1462,13 @@ void reconcile_anycubic_lan_bridge(DynamicPrintConfig* config)
         shutdown_anycubic_lan_bridge();
         return;
     }
+    start_anycubic_bridge_watchdog();
     ensure_anycubic_bridge(Http::get_host_from_url(safe_config_str(config, "print_host")));
 }
 
 bool activate_anycubic_lan_bridge(const std::string& host)
 {
+    start_anycubic_bridge_watchdog();
     return ensure_anycubic_bridge(Http::get_host_from_url(host));
 }
 
@@ -1421,6 +1488,7 @@ std::string anycubic_lan_bridge_token()
 
 void shutdown_anycubic_lan_bridge()
 {
+    stop_anycubic_bridge_watchdog();
     std::lock_guard<std::mutex> lock(g_anycubic_bridge_mutex);
     if (g_anycubic_bridge_process && g_anycubic_bridge_process->running()) {
         try {
