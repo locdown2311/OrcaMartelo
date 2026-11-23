@@ -64,8 +64,9 @@ def parse_flv(data):
 class FakeCamera:
     """The printer's FLV endpoint: streams a file paced by its timestamps, serving one viewer at a time."""
 
-    def __init__(self, flv, speed=4.0, cut_after_tags=None, refuse=False):
+    def __init__(self, flv, speed=4.0, cut_after_tags=None, refuse=False, status=200):
         self.flv = flv
+        self.status = status
         self.speed = speed
         self.cut_after_tags = cut_after_tags
         self.refuse = refuse
@@ -86,7 +87,7 @@ class FakeCamera:
                     self.end_headers()
                     return
                 try:
-                    self.send_response(200)
+                    self.send_response(camera.status)
                     self.send_header("Content-Type", "video/x-flv")
                     self.end_headers()
                     camera.stream(self.wfile)
@@ -175,6 +176,10 @@ class RelayTests(unittest.TestCase):
         stamps = [t[1] for t in frames]
         self.assertEqual(stamps, sorted(stamps), "timestamps never go back")
         return frames
+
+    def test_a_camera_answering_partial_content_still_streams(self):
+        cam, relay = self.camera(status=206)
+        self.assert_playable(self.watch(relay, 0.6))
 
     def test_viewers_share_one_connection_and_each_starts_on_a_keyframe(self):
         cam, relay = self.camera()

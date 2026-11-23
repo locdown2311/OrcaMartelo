@@ -2459,7 +2459,7 @@ class FlvRelay:
         conn.request("GET", (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else ""),
                      headers={"User-Agent": "AnycubicSlicerNext/2.0.0.2"})
         resp = conn.getresponse()
-        if resp.status != 200:
+        if not 200 <= resp.status < 300:  # The Kobra X serves its live stream as 206 Partial Content.
             conn.close()
             raise OSError(f"the camera answered HTTP {resp.status}")
         return resp
@@ -3225,7 +3225,7 @@ class BridgeServer(BaseHTTPRequestHandler):
                     conn.request("GET", (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else ""),
                                  headers={"User-Agent": "AnycubicSlicerNext/2.0.0.2"})
                     r = conn.getresponse()
-                    if r.status == 200:
+                    if 200 <= r.status < 300:
                         resp = r
                         break
                     conn.close()
