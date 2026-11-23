@@ -345,6 +345,12 @@ class MappingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "filament 1 is PETG but slot 2 holds PLA"):
             daemon.resolve_mapping(self.filaments, self.slots, [{"filament": 1, "slot": 2}])
 
+    def test_a_hardness_grade_matches_its_material(self):
+        self.assertEqual(daemon.normalize_material("TPU 95A"), daemon.normalize_material("TPU"))
+        self.assertEqual(daemon.normalize_material("Anycubic PEBA 95A"), "PEBA")
+        self.assertEqual(daemon.normalize_material("PA12"), "PA12")
+        self.assertEqual(daemon.normalize_material("PLA"), "PLA")
+
     def test_unknown_filaments_and_slots_are_refused(self):
         with self.assertRaisesRegex(ValueError, "no filament 2"):
             daemon.resolve_mapping(self.filaments, self.slots, [{"filament": 2, "slot": 1}])

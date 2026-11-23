@@ -1,6 +1,7 @@
 #include "AnycubicLink.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <fstream>
@@ -283,6 +284,11 @@ std::string normalize_anycubic_material(std::string material)
         }
     }
     material.erase(std::remove_if(material.begin(), material.end(), [](unsigned char ch) { return !std::isalnum(ch); }), material.end());
+    // A Shore hardness ("TPU 95A") names a grade, not a material: the profiles call it "TPU".
+    const size_t n = material.size();
+    if (n >= 4 && (material[n - 1] == 'A' || material[n - 1] == 'D') && std::isdigit((unsigned char) material[n - 2]) &&
+        std::isdigit((unsigned char) material[n - 3]) && !std::isdigit((unsigned char) material[n - 4]))
+        material.erase(n - 3);
     return material;
 }
 

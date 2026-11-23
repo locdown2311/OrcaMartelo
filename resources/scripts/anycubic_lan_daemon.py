@@ -2028,7 +2028,9 @@ def normalize_material(material):
         if m.startswith(prefix):
             m = m[len(prefix):].strip()
             break
-    return "".join(ch for ch in m if ch.isalnum())
+    m = "".join(ch for ch in m if ch.isalnum())
+    # A Shore hardness ("TPU 95A") names a grade, not a material: the profiles call it "TPU".
+    return re.sub(r"(?<=\D)\d{2}[AD]$", "", m)
 
 
 def _rgb(color):

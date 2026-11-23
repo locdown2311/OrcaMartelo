@@ -1329,6 +1329,7 @@
                                 <option value="PETG">PETG</option>
                                 <option value="ABS">ABS</option>
                                 <option value="TPU">TPU</option>
+                                <option value="TPU 95A">TPU 95A</option>
                                 <option value="ASA">ASA</option>
                                 <option value="PC">PC</option>
                                 <option value="PA">PA (Nylon)</option>
@@ -3875,7 +3876,10 @@
         function openSlotEditModal(slotIdx) {
             currentEditingSlot=slotIdx;const f=filaments[slotIdx]||{};
             document.getElementById("modal-slot-title").innerText="Material Settings";
-            document.getElementById("modal-slot-type").value=f.type||"PLA";
+            const typeSelect=document.getElementById("modal-slot-type"),slotType=f.type||"PLA";
+            // Keep a type the printer reports but the list lacks, so saving does not send an empty one.
+            if(![...typeSelect.options].some(o=>o.value===slotType))typeSelect.add(new Option(slotType,slotType));
+            typeSelect.value=slotType;
             const savedBrand = localStorage.getItem("orcacubic_brand_" + slotIdx);
             let brandVal = savedBrand || f.brand || "Anycubic";
             updateBrandSelectOptions(brandVal);
