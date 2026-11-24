@@ -1420,6 +1420,7 @@
         <div class="modal-card" style="width:min(490px,92vw);">
             <div class="modal-header"><h3>Camera Stream Settings</h3><button class="modal-close" onclick="closeCamSettingsModal()">✕</button></div>
             <div class="modal-body">
+                <div id="cam-settings-printer" style="font-size:12px;color:#94a3b8;margin-bottom:8px;" hidden></div>
                 <div class="modal-field">
                     <label for="cam-preset-select">Stream Mode / Source</label>
                     <select id="cam-preset-select" class="modal-select" onchange="onCamPresetChange(this.value)">
@@ -1803,6 +1804,18 @@
             }
             monitored = monitored || configuredPrinters.find(printer => printer.active) || configuredPrinters[0];
             monitoredPresetName = monitored ? monitored.preset_name : "";
+            if (monitoredPresetName && monitoredPresetName !== cameraPresetName) {
+                cameraPresetName = monitoredPresetName;
+                // Settings saved before they were per printer belong to the printer shown first.
+                for (const key of CAM_SETTING_KEYS) {
+                    const legacy = localStorage.getItem(key);
+                    if (legacy !== null && localStorage.getItem(key + ":" + monitoredPresetName) === null)
+                        localStorage.setItem(key + ":" + monitoredPresetName, legacy);
+                    localStorage.removeItem(key);
+                }
+                activeCameraUrl = cameraUrlForSettings();
+                pushCameraUrl();
+            }
             if (!configuredPrinters.length) {
                 list.innerHTML = '<div class="printer-list-empty">Add a configured Anycubic printer preset to see it here.</div>';
                 updateMakeActiveButton();
@@ -2209,10 +2222,31 @@
         let jogStep = 10;
         let currentPrinterState = "idle";
         let flvPlayer = null;
+        // Camera settings are kept per printer, by preset name.
+        const CAM_SETTING_KEYS = ["orca_ac_cam_preset", "orca_ac_custom_cam_url"];
+        let cameraPresetName = null;
+        function camSetting(name) {
+            return localStorage.getItem(monitoredPresetName ? name + ":" + monitoredPresetName : name);
+        }
+        function setCamSetting(name, value) {
+            localStorage.setItem(monitoredPresetName ? name + ":" + monitoredPresetName : name, value);
+        }
+        // The custom stream the bridge should use for the monitored printer: snapshots read it there.
+        function customCameraUrl() {
+            const preset = camSetting("orca_ac_cam_preset") || "auto";
+            return preset === "custom" || preset === "mjpeg_8080" ? (camSetting("orca_ac_custom_cam_url") || "") : "";
+        }
+        function pushCameraUrl() {
+            return fetch("http://127.0.0.1:18988/control", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "set_camera_url", url: customCameraUrl() })
+            }).catch(e => console.warn("set_camera_url backend notify:", e));
+        }
         // The stream URL for the camera mode chosen in the camera settings.
         function cameraUrlForSettings(bridgeUrl) {
-            const preset = localStorage.getItem("orca_ac_cam_preset") || "auto";
-            const custom = localStorage.getItem("orca_ac_custom_cam_url") || "";
+            const preset = camSetting("orca_ac_cam_preset") || "auto";
+            const custom = camSetting("orca_ac_custom_cam_url") || "";
             if ((preset === "custom" || preset === "mjpeg_8080") && custom) return custom;
             if (preset === "direct") return "http://127.0.0.1:18988/camera?direct=1";
             return bridgeUrl || "http://127.0.0.1:18988/camera";
@@ -2327,7 +2361,7 @@
             } catch (e) {
                 why = "The printer bridge is not running. OrcaMartelo starts it again within a few seconds.";
             }
-            if (st && st.mjpeg_url && !camMjpegFallback && (localStorage.getItem("orca_ac_cam_preset") || "auto") === "auto"
+            if (st && st.mjpeg_url && !camMjpegFallback && (camSetting("orca_ac_cam_preset") || "auto") === "auto"
                 && !userStoppedCamera && !isCameraStreaming) {
                 camMjpegFallback = st.mjpeg_url;
                 clearTimeout(camReconnectTimer);
@@ -2373,15 +2407,8 @@
             clearCameraTimers();
             setCameraUi("connecting", "Connecting to camera stream...");
 
-            // The bridge may have restarted without the custom URL; snapshots read it there.
-            const savedPreset = localStorage.getItem("orca_ac_cam_preset") || "auto";
-            if (savedPreset === "custom" || savedPreset === "mjpeg_8080") {
-                fetch("http://127.0.0.1:18988/control", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ action: "set_camera_url", url: localStorage.getItem("orca_ac_custom_cam_url") || "" })
-                }).catch(() => {});
-            }
+            // The bridge may have restarted, or still hold another printer's URL.
+            pushCameraUrl();
             // The bridge starts the printer's camera and waits for it when the player connects.
             initCameraStream(cameraUrlForSettings());
         }
@@ -2522,8 +2549,14 @@
             modal.style.display = "flex";
             const input = document.getElementById("cam-custom-url-input");
             const select = document.getElementById("cam-preset-select");
-            const savedUrl = localStorage.getItem("orca_ac_custom_cam_url") || "";
-            const savedPreset = localStorage.getItem("orca_ac_cam_preset") || "auto";
+            const savedUrl = camSetting("orca_ac_custom_cam_url") || "";
+            const savedPreset = camSetting("orca_ac_cam_preset") || "auto";
+            const printer = configuredPrinters.find(p => p.preset_name === monitoredPresetName);
+            const forPrinter = document.getElementById("cam-settings-printer");
+            if (forPrinter) {
+                forPrinter.innerText = printer ? "Saved for " + (printer.name || printer.preset_name) : "";
+                forPrinter.hidden = !printer;
+            }
             if (select) select.value = savedPreset;
             if (input) input.value = savedUrl;
             onCamPresetChange(savedPreset);
@@ -2564,8 +2597,8 @@
             } else if (preset === "mjpeg_8080" && !customUrl) {
                 customUrl = "http://" + (printerIP || "127.0.0.1") + ":8080/?action=stream";
             }
-            localStorage.setItem("orca_ac_cam_preset", preset);
-            localStorage.setItem("orca_ac_custom_cam_url", customUrl);
+            setCamSetting("orca_ac_cam_preset", preset);
+            setCamSetting("orca_ac_custom_cam_url", customUrl);
 
             if (status) {
                 status.innerText = "Saving settings...";
@@ -2573,15 +2606,7 @@
                 status.style.color = "#00d2ff";
             }
 
-            try {
-                await fetch("http://127.0.0.1:18988/control", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ action: "set_camera_url", url: customUrl })
-                });
-            } catch(e) {
-                console.warn("set_camera_url backend notify:", e);
-            }
+            await pushCameraUrl();
 
             activeCameraUrl = cameraUrlForSettings();
 
@@ -3630,6 +3655,7 @@
                         cnButton.firstChild.nodeValue = cn ? "CN " + cn + " " : "CN — ";
                     }
 
+                    if (typeof data.custom_camera_url === "string" && data.custom_camera_url !== customCameraUrl()) pushCameraUrl();
                     if (data.camera_url && data.camera_url.startsWith("http")) {
                         activeCameraUrl = cameraUrlForSettings(data.camera_url);
                     }

@@ -31,6 +31,8 @@ Some printers serve an MJPEG camera beside or instead of the native one, such as
 
 A custom URL from the Device tab's camera settings (typically MJPEG) is relayed to each viewer separately, with the same timeouts. MJPEG servers handle many clients.
 
+The camera settings (mode and custom URL) are saved per printer, keyed by its preset name in the Device tab's printer list. Monitoring another printer applies its settings and sends its custom URL to the bridge, which keeps only the current one and forgets it when it restarts; the player sends it again when `/status` shows the bridge lost it, so MCP snapshots read the right camera. A printer with no saved settings uses Auto.
+
 ## The Device tab player
 
 The player in `resources/web/anycubic/workbench.html` uses flv.js for FLV and an `<img>` for MJPEG. Once the user starts it, it reconnects by itself until the user stops it:
