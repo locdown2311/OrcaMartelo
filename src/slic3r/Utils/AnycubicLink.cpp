@@ -2193,8 +2193,8 @@ bool AnycubicLink::upload(PrintHostUpload upload_data, ProgressFn progress_fn, E
 
     const bool is_start_print = (upload_data.post_action == PrintHostPostUploadAction::StartPrint);
     bool pre_engage = is_start_print && (upload_data.extended("pre_engage_filament") != "0");
-    bool skip_first_toolchange = is_start_print && (upload_data.extended("skip_first_toolchange") != "0"
-                              || upload_data.extended("replace_first_toolchange") != "0");
+    // Only when the send dialog asks: it knows whether the slot the printer loads is the starting one.
+    bool skip_first_toolchange = is_start_print && upload_data.extended("skip_first_toolchange") == "1";
     std::string custom_script = upload_data.extended("skip_first_toolchange_script");
     if (custom_script.empty()) {
         custom_script = "M83\nG28 X\nG1 E40 F300\nM106 S229\nM400 P2000\nG1 X20 F15000\nG28 X\n";

@@ -656,6 +656,14 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
         }
     }
 
+    // Skipping the first tool change leaves the print on the slot the printer loaded, that of paint_index 0;
+    // it is skipped only when that is the slot of the starting filament, or the print would start with another.
+    const auto paint0 = std::find_if(mapping.begin(), mapping.end(), [](const json& entry) {
+        return entry.value("paint_index", -1) == 0;
+    });
+    const bool skip_first_toolchange = m_skip_first_toolchange && paint0 != mapping.end() &&
+                                       paint0->value("ams_index", -1) == initial_slot;
+
     return {
         {"ams_mapping", mapping.dump()},
         {"use_ams", use_ams ? "1" : "0"},
@@ -664,7 +672,7 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
         {"flow_calibration", m_flow_calibration ? "1" : "0"},
         {"timelapse", m_timelapse ? "1" : "0"},
         {"pre_engage_filament", m_pre_engage_filament ? "1" : "0"},
-        {"skip_first_toolchange", m_skip_first_toolchange ? "1" : "0"},
+        {"skip_first_toolchange", skip_first_toolchange ? "1" : "0"},
         {"skip_first_toolchange_script", m_skip_first_toolchange_script},
         {"save_dev_copy", m_save_dev_copy ? "1" : "0"},
         {"initial_slot", std::to_string(initial_slot)}
