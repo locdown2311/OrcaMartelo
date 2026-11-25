@@ -342,6 +342,9 @@ private:
     std::vector<Slic3r::AnycubicToolFilament> m_project_filaments;
     std::vector<BitmapComboBox*> m_slot_combos;
     int m_first_filament {-1};
+    // The Kobra X loads the slot of paint_index 0 before it levels, and needs the print's first tool change:
+    // skipping it makes it level and clean the nozzle again.
+    bool m_kobra_x {false};
     // Sending through Rinkhals' Moonraker: only the color mapping applies, as a tool-to-gate map;
     // leveling and calibrations follow the Rinkhals Moonraker app settings.
     bool m_rinkhals_moonraker {false};

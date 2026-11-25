@@ -142,7 +142,8 @@ void AnycubicPrintHostSendDialog::init()
     m_flow_calibration = load_bool(CONFIG_KEY_FLOW, false);
     m_timelapse = load_bool(CONFIG_KEY_TIMELAPSE, false);
     m_pre_engage_filament = load_bool(CONFIG_KEY_PRE_ENGAGE, true);
-    m_skip_first_toolchange = load_bool(CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE, true) && m_pre_engage_filament;
+    m_kobra_x = wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_string("printer_model") == "Anycubic Kobra X";
+    m_skip_first_toolchange = load_bool(CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE, true) && m_pre_engage_filament && !m_kobra_x;
     // Current built-in default script for Skip First Tool Change.
     m_skip_first_toolchange_script = "M83\nG28 X\nG1 E40 F300\nM106 S229\nM400 P2000\nG1 X20 F15000\nG28 X";
     // Earlier built-in defaults; a saved value equal to one of these means the user
@@ -347,7 +348,7 @@ void AnycubicPrintHostSendDialog::init()
                    }
                });
 
-    {
+    if (!m_kobra_x) {
         auto* row = new wxBoxSizer(wxHORIZONTAL);
         m_cb_skip_toolchange = new ::CheckBox(this);
         m_cb_skip_toolchange->SetValue(m_skip_first_toolchange);
@@ -617,17 +618,13 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
     if (initial.contains("ams_index") && initial["ams_index"].is_number_integer())
         initial_slot = initial["ams_index"].get<int>();
 
-    // The Kobra X loads the slot of paint_index 0 before it levels, whatever the print starts with.
-    const bool loads_paint0_first =
-        wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_string("printer_model") == "Anycubic Kobra X";
-
     // Anycubic firmware (gklib) expects a complete 4-slot mapping table.
     // For single-tool or partial multi-tool prints, fill out remaining slots
     // so the array always has 4 entries.
     if (use_ams && !mapping.empty() && mapping.size() < 4) {
         // When the plate does not use the first filament, paint_index 0 names the slot of the starting
         // filament, not a spare slot the Kobra X would load, purge and change away from.
-        if (loads_paint0_first && !used_paint_indices.count(0) && !initial.is_null()) {
+        if (m_kobra_x && !used_paint_indices.count(0) && !initial.is_null()) {
             json start = initial;
             start["paint_index"] = 0;
             mapping.push_back(start);
@@ -660,14 +657,6 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
         }
     }
 
-    // On the Kobra X, skipping the first tool change leaves the print on the slot of paint_index 0; it is
-    // skipped only when that is the slot of the starting filament, or the print would start with another.
-    const auto paint0 = std::find_if(mapping.begin(), mapping.end(), [](const json& entry) {
-        return entry.value("paint_index", -1) == 0;
-    });
-    const bool skip_first_toolchange = m_skip_first_toolchange &&
-        (!loads_paint0_first || (paint0 != mapping.end() && paint0->value("ams_index", -1) == initial_slot));
-
     return {
         {"ams_mapping", mapping.dump()},
         {"use_ams", use_ams ? "1" : "0"},
@@ -676,7 +665,7 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
         {"flow_calibration", m_flow_calibration ? "1" : "0"},
         {"timelapse", m_timelapse ? "1" : "0"},
         {"pre_engage_filament", m_pre_engage_filament ? "1" : "0"},
-        {"skip_first_toolchange", skip_first_toolchange ? "1" : "0"},
+        {"skip_first_toolchange", m_skip_first_toolchange ? "1" : "0"},
         {"skip_first_toolchange_script", m_skip_first_toolchange_script},
         {"save_dev_copy", m_save_dev_copy ? "1" : "0"},
         {"initial_slot", std::to_string(initial_slot)}
@@ -704,7 +693,8 @@ void AnycubicPrintHostSendDialog::EndModal(int ret)
         config->set("recent", CONFIG_KEY_FLOW, bool(m_flow_calibration));
         config->set("recent", CONFIG_KEY_TIMELAPSE, bool(m_timelapse));
         config->set("recent", CONFIG_KEY_PRE_ENGAGE, bool(m_pre_engage_filament));
-        config->set("recent", CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE, bool(m_skip_first_toolchange));
+        if (!m_kobra_x)
+            config->set("recent", CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE, bool(m_skip_first_toolchange));
         config->set("recent", CONFIG_KEY_SKIP_FIRST_TOOL_CHANGE_SCRIPT, m_skip_first_toolchange_script);
 #ifdef ORCACUBIC_DEV_BUILD
         config->set("recent", CONFIG_KEY_SAVE_DEV_COPY, bool(m_save_dev_copy));
