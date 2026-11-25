@@ -20,6 +20,7 @@
 #include "ExtraRenderers.hpp"
 #include "wxExtensions.hpp"
 #include "libslic3r/AppConfig.hpp"
+#include "libslic3r/PresetBundle.hpp"
 #include "slic3r/GUI/Widgets/StaticLine.hpp"
 #include <wx/statbmp.h>
 #include "nanosvg/nanosvg.h"
@@ -616,14 +617,17 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
     if (initial.contains("ams_index") && initial["ams_index"].is_number_integer())
         initial_slot = initial["ams_index"].get<int>();
 
+    // The Kobra X loads the slot of paint_index 0 before it levels, whatever the print starts with.
+    const bool loads_paint0_first =
+        wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_string("printer_model") == "Anycubic Kobra X";
+
     // Anycubic firmware (gklib) expects a complete 4-slot mapping table.
     // For single-tool or partial multi-tool prints, fill out remaining slots
     // so the array always has 4 entries.
     if (use_ams && !mapping.empty() && mapping.size() < 4) {
-        // The printer loads the slot of paint_index 0 before it levels, whatever the print starts with.
-        // When the plate does not use the first filament, that is the slot of the starting filament,
-        // not a spare slot it would load, purge and change away from.
-        if (!used_paint_indices.count(0) && !initial.is_null()) {
+        // When the plate does not use the first filament, paint_index 0 names the slot of the starting
+        // filament, not a spare slot the Kobra X would load, purge and change away from.
+        if (loads_paint0_first && !used_paint_indices.count(0) && !initial.is_null()) {
             json start = initial;
             start["paint_index"] = 0;
             mapping.push_back(start);
@@ -656,13 +660,13 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
         }
     }
 
-    // Skipping the first tool change leaves the print on the slot the printer loaded, that of paint_index 0;
-    // it is skipped only when that is the slot of the starting filament, or the print would start with another.
+    // On the Kobra X, skipping the first tool change leaves the print on the slot of paint_index 0; it is
+    // skipped only when that is the slot of the starting filament, or the print would start with another.
     const auto paint0 = std::find_if(mapping.begin(), mapping.end(), [](const json& entry) {
         return entry.value("paint_index", -1) == 0;
     });
-    const bool skip_first_toolchange = m_skip_first_toolchange && paint0 != mapping.end() &&
-                                       paint0->value("ams_index", -1) == initial_slot;
+    const bool skip_first_toolchange = m_skip_first_toolchange &&
+        (!loads_paint0_first || (paint0 != mapping.end() && paint0->value("ams_index", -1) == initial_slot));
 
     return {
         {"ams_mapping", mapping.dump()},
