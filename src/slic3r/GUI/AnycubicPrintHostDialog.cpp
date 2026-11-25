@@ -607,11 +607,29 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
         });
     }
 
+    // The slot of the filament the print starts with: Pre-engage Filament engages it.
+    int initial_slot = 0;
+    const auto first = std::find_if(mapping.begin(), mapping.end(), [this](const json& entry) {
+        return entry.value("paint_index", -1) == m_first_filament;
+    });
+    const json initial = first != mapping.end() ? *first : !mapping.empty() ? mapping[0] : json();
+    if (initial.contains("ams_index") && initial["ams_index"].is_number_integer())
+        initial_slot = initial["ams_index"].get<int>();
+
     // Anycubic firmware (gklib) expects a complete 4-slot mapping table.
     // For single-tool or partial multi-tool prints, fill out remaining slots
-    // so the array always has 4 entries and the primary tool at paint_index 0
-    // points explicitly to the user's chosen physical slot.
+    // so the array always has 4 entries.
     if (use_ams && !mapping.empty() && mapping.size() < 4) {
+        // The printer loads the slot of paint_index 0 before it levels, whatever the print starts with.
+        // When the plate does not use the first filament, that is the slot of the starting filament,
+        // not a spare slot it would load, purge and change away from.
+        if (!used_paint_indices.count(0) && !initial.is_null()) {
+            json start = initial;
+            start["paint_index"] = 0;
+            mapping.push_back(start);
+            used_paint_indices.insert(0);
+        }
+
         int next_paint_idx = 0;
         while (used_paint_indices.count(next_paint_idx))
             ++next_paint_idx;
@@ -637,16 +655,6 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
                 ++next_paint_idx;
         }
     }
-
-    // The slot of the filament the print starts with; the printer levels and purges with the engaged one.
-    // The mapped filaments come first in the mapping, before the slots that only complete it.
-    int initial_slot = 0;
-    const auto first = std::find_if(mapping.begin(), mapping.end(), [this](const json& entry) {
-        return entry.value("paint_index", -1) == m_first_filament;
-    });
-    const json* initial = first != mapping.end() ? &*first : !mapping.empty() ? &mapping[0] : nullptr;
-    if (initial != nullptr && initial->contains("ams_index") && (*initial)["ams_index"].is_number_integer())
-        initial_slot = (*initial)["ams_index"].get<int>();
 
     return {
         {"ams_mapping", mapping.dump()},
