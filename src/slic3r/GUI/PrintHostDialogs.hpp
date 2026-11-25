@@ -329,6 +329,8 @@ public:
     // proposed it; the user can still change it. Entries without such a loaded slot keep the
     // automatic choice.
     void preselect_slots(const std::vector<int>& slot_ids);
+    // The filament (0-based) the print starts with: Pre-engage Filament engages its slot.
+    void set_first_filament(int filament) { m_first_filament = filament; }
 
 private:
     void auto_assign_mappings();
@@ -339,6 +341,7 @@ private:
     std::vector<Slic3r::AnycubicMaterialSlot> m_slots;
     std::vector<Slic3r::AnycubicToolFilament> m_project_filaments;
     std::vector<BitmapComboBox*> m_slot_combos;
+    int m_first_filament {-1};
     // Sending through Rinkhals' Moonraker: only the color mapping applies, as a tool-to-gate map;
     // leveling and calibrations follow the Rinkhals Moonraker app settings.
     bool m_rinkhals_moonraker {false};

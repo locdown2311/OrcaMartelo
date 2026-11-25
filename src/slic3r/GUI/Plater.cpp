@@ -36,6 +36,7 @@
 #include "libslic3r/LocalesUtils.hpp"
 #include "libslic3r/FlushVolCalc.hpp"
 #include "libslic3r/Point.hpp"
+#include "libslic3r/ExtrusionEntity.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/Technologies.hpp"
 #include "libslic3r/BoundingBox.hpp"
@@ -21713,6 +21714,16 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, McpSend
         }
 
         pDlg->init();
+        if (auto* anycubic_dlg = dynamic_cast<AnycubicPrintHostSendDialog*>(pDlg.get()); anycubic_dlg != nullptr) {
+            // The filament of the first extrusion after the start G-code is the one the print starts with,
+            // which need not be the lowest numbered one.
+            if (PartPlate* plate = get_partplate_list().get_plate(resolved_plate_idx); plate != nullptr && plate->get_slice_result() != nullptr)
+                for (const GCodeProcessorResult::MoveVertex& move : plate->get_slice_result()->moves)
+                    if (move.type == EMoveType::Extrude && move.extrusion_role != erCustom) {
+                        anycubic_dlg->set_first_filament(move.extruder_id);
+                        break;
+                    }
+        }
         if (mcp != nullptr) {
             if (auto* anycubic_dlg = dynamic_cast<AnycubicPrintHostSendDialog*>(pDlg.get()); anycubic_dlg != nullptr)
                 anycubic_dlg->preselect_slots(mcp->preselect);

@@ -638,10 +638,15 @@ std::map<std::string, std::string> AnycubicPrintHostSendDialog::extendedInfo() c
         }
     }
 
+    // The slot of the filament the print starts with; the printer levels and purges with the engaged one.
+    // The mapped filaments come first in the mapping, before the slots that only complete it.
     int initial_slot = 0;
-    if (!mapping.empty() && mapping[0].contains("ams_index") && mapping[0]["ams_index"].is_number_integer()) {
-        initial_slot = mapping[0]["ams_index"].get<int>();
-    }
+    const auto first = std::find_if(mapping.begin(), mapping.end(), [this](const json& entry) {
+        return entry.value("paint_index", -1) == m_first_filament;
+    });
+    const json* initial = first != mapping.end() ? &*first : !mapping.empty() ? &mapping[0] : nullptr;
+    if (initial != nullptr && initial->contains("ams_index") && (*initial)["ams_index"].is_number_integer())
+        initial_slot = (*initial)["ams_index"].get<int>();
 
     return {
         {"ams_mapping", mapping.dump()},
