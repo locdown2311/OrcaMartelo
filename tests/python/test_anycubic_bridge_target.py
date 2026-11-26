@@ -466,6 +466,19 @@ class MaterialSystemTests(unittest.TestCase):
         self.assertEqual(daemon.telemetry["material_boxes"][0]["id"], 0)
         self.assertEqual(daemon.telemetry["filaments"][0]["slot"], 0)
 
+    def test_a_slot_with_a_transparent_color_is_reported_transparent(self):
+        daemon.apply_multi_color_box_report({
+            "multi_color_box": [{
+                "id": 0,
+                "slots": [
+                    {"index": 0, "type": "PETG", "color": [255, 255, 255], "color_group": [[255, 255, 255, 0]], "edit_status": 1},
+                    {"index": 1, "type": "PLA", "color": [1, 2, 3, 255], "color_group": [[1, 2, 3, 255]], "edit_status": 1},
+                    {"index": 2, "type": "PLA", "color": "#11223300", "edit_status": 1},
+                ],
+            }]
+        })
+        self.assertEqual([s["transparent"] for s in daemon.telemetry["filaments"]], [True, False, True])
+
     def test_multiple_ace_units_keep_box_and_global_slot_identity(self):
         daemon.apply_multi_color_box_report({
             "max_box_num": 4,

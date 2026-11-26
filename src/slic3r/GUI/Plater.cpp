@@ -6486,6 +6486,9 @@ void Sidebar::sync_anycubic_filaments_from_json(const std::string& filaments_jso
                 raw_col = item["color_group_hex"][0].get<std::string>();
         }
         std::string hex_col = clean_anycubic_hex_color(raw_col);
+        // A transparent slot syncs as a transparent filament, the color a transparent AMS tray syncs as.
+        if (item.contains("transparent") && item["transparent"].is_boolean() && item["transparent"].get<bool>())
+            hex_col = "#00000000";
 
         if (color_opt && i < color_opt->values.size())
             color_opt->values[i] = hex_col;

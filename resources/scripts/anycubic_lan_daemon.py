@@ -272,6 +272,18 @@ def _normalize_rgb(value, fallback=(175, 175, 175)):
     return [max(0, min(255, _as_int(value[i], fallback[i]))) for i in range(3)]
 
 
+def _alpha(value):
+    """The opacity of an [r, g, b, a] list or a #RRGGBBAA string; opaque when it has none."""
+    if isinstance(value, (list, tuple)) and len(value) >= 4:
+        return max(0, min(255, _as_int(value[3], 255)))
+    if isinstance(value, str) and value.startswith("#") and len(value) >= 9:
+        try:
+            return int(value[7:9], 16)
+        except ValueError:
+            return 255
+    return 255
+
+
 def _slot_has_material(slot):
     if not isinstance(slot, dict):
         return False
@@ -288,6 +300,9 @@ def _slot_has_material(slot):
 def _normalize_slot(slot, box_id, source, loaded_slot=-1, slot_offset=0, active_slot=-1):
     local_index = max(0, _as_int(slot.get("index", slot.get("box_slot")), 0))
     raw_color = slot.get("color", [175, 175, 175])
+    group = slot.get("color_group") or []
+    # A slot set to a transparent filament reports a color that is not opaque.
+    transparent = _alpha(raw_color) < 255 or bool(group) and _alpha(group[0]) < 255
     if isinstance(raw_color, str) and raw_color.startswith("#") and len(raw_color) >= 7:
         raw_color = [int(raw_color[1:3], 16), int(raw_color[3:5], 16), int(raw_color[5:7], 16)]
     color = _normalize_rgb(raw_color, (175, 175, 175))
@@ -326,6 +341,7 @@ def _normalize_slot(slot, box_id, source, loaded_slot=-1, slot_offset=0, active_
         "icon_type": icon_type,
         "finish_type": "luminous" if icon_type == 3 else ("gradient" if icon_type in (1, 2) else "solid"),
         "color_group_hex": color_group or [rgb_to_hex(*color)],
+        "transparent": transparent,
     }
 
 
