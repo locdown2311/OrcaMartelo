@@ -673,7 +673,7 @@ jobs:
         run: scripts\check_exception_throw_info.ps1 -BuildDir $env:BUILD_DIR
 
       - name: Create or Update GitHub Release
-        if: runner.os == 'Windows' && !vars.SELF_HOSTED && (github.ref == 'refs/heads/v2.5.0-custom' || github.ref == 'refs/heads/v2.5.0-beta-custom' || github.ref == 'refs/heads/main')
+        if: runner.os == 'Windows' && !vars.SELF_HOSTED && (github.ref == 'refs/heads/v2.5.0-custom' || github.ref == 'refs/heads/v2.5.0-beta-custom' || github.ref == 'refs/heads/v2.5.2-custom' || github.ref == 'refs/heads/main')
         uses: softprops/action-gh-release@v2
         continue-on-error: true
         with:
